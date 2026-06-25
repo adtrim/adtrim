@@ -6,6 +6,10 @@ to the repo (large binaries, license boundary auditability).
 
 ## One-time install
 
+**Easiest:** double-click `fetch-binaries.cmd` - it downloads, checksum-verifies,
+and installs both ffmpeg and libmpv into this tree automatically. The manual
+steps below are the fallback / reference.
+
 1. Download the **gyan.dev** Windows build, "full" variant (must include
    `libx264`, which configures the FFmpeg bundle as a whole as GPL 2+):
    https://www.gyan.dev/ffmpeg/builds/  →  `ffmpeg-release-full.7z`
@@ -30,12 +34,11 @@ gate fails on the review-expiry (it nags every `MaxAgeDays` in
 1. **Check the advisories:**
    - FFmpeg - https://ffmpeg.org/security.html
    - libmpv - the shinchiro build's embedded FFmpeg (compare its build date).
-2. **If a fix exists, replace the binaries:**
-   - FFmpeg: download the new `ffmpeg-release-full.7z`, replace `ffmpeg.exe` +
-     `ffprobe.exe` in `binaries/ffmpeg/win-x64/` (the single source for both
-     dev and release builds).
-   - libmpv: download a current shinchiro `mpv-dev-x86_64-*.7z`, replace
-     `binaries/mpv/win-x64/libmpv-2.dll`.
+2. **Update the binaries:** double-click `fetch-binaries.cmd` (or run
+   `fetch-binaries.ps1`). It downloads the latest gyan.dev release-full ffmpeg
+   and the latest shinchiro libmpv, verifies their checksums, drops them into
+   `binaries/ffmpeg/win-x64/` and `binaries/mpv/win-x64/`, and runs the version
+   gate so you know whether the ffmpeg it pulled clears the floor.
 3. **Update the pin in one place** - `check-ffmpeg-version.ps1`:
    `MinVersion` (if the floor moved) and `ReviewedDate` (always → today).
    Mirror the version number in step 1 above.
