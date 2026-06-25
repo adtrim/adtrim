@@ -2,11 +2,14 @@
 # project's binaries/ tree - the single source publish.cmd and dev builds read.
 # Double-click fetch-binaries.cmd to run it.
 #
-# ffmpeg: latest gyan.dev release "full" build (includes libx264 for export),
-#   verified against gyan's published SHA-256.
+# ffmpeg: BtbN's release-branch "gpl" build (GitHub CI, fast, includes libx264),
+#   verified against BtbN's published checksums.sha256. Falls back to gyan.dev's
+#   release-full build (verified against gyan's SHA-256) if BtbN is unreachable.
 # libmpv: latest shinchiro build from SourceForge, verified against the RSS MD5.
-# Both archives are .7z; 7-Zip extracts them (the standalone 7zr.exe is fetched
-# automatically if 7-Zip isn't installed).
+#
+# BtbN ships .zip (extracted with the built-in Expand-Archive); gyan and libmpv
+# ship .7z, so 7-Zip is used for those (the standalone 7zr.exe is fetched if
+# 7-Zip isn't installed).
 #
 # After installing it runs the build gate (check-ffmpeg-version.ps1) so you know
 # whether the ffmpeg it pulled clears the version floor.
@@ -32,8 +35,8 @@ $tmp = Join-Path ([IO.Path]::GetTempPath()) ('adtrim-deps-' + [IO.Path]::GetRand
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
 function Get-Text($url) {
-    # gyan serves .ver/.sha256 as octet-stream, so .Content can be a byte[].
-    $c = (Invoke-WebRequest $url -UseBasicParsing).Content
+    # Some hosts serve text as octet-stream, so .Content can come back a byte[].
+    $c = (Invoke-WebRequest $url -UseBasicParsing -UserAgent 'AdTrim-fetch').Content
     if ($c -is [byte[]]) { [Text.Encoding]::UTF8.GetString($c) } else { [string]$c }
 }
 
@@ -59,9 +62,48 @@ function Expand-SevenZip($sevenZip, $archive, $dest) {
     if ($LASTEXITCODE -ne 0) { throw "7-Zip extraction failed for $archive" }
 }
 
-function Update-Ffmpeg($sevenZip) {
-    Write-Host ""
-    Write-Host "== FFmpeg (gyan.dev release-full) =="
+function Copy-FfmpegFrom($extractRoot, $label) {
+    $ff = Get-ChildItem $extractRoot -Recurse -Filter 'ffmpeg.exe'  | Select-Object -First 1
+    $fp = Get-ChildItem $extractRoot -Recurse -Filter 'ffprobe.exe' | Select-Object -First 1
+    if (-not $ff -or -not $fp) { throw "ffmpeg.exe / ffprobe.exe not found in the $label archive" }
+    New-Item -ItemType Directory -Force -Path $ffmpegDir | Out-Null
+    Copy-Item $ff.FullName (Join-Path $ffmpegDir 'ffmpeg.exe')  -Force
+    Copy-Item $fp.FullName (Join-Path $ffmpegDir 'ffprobe.exe') -Force
+    Write-Host "  installed from $label -> $ffmpegDir"
+}
+
+function Install-FfmpegFromBtbN {
+    Write-Host "  trying BtbN (GitHub CI build)..."
+    $rel = Invoke-RestMethod 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest' -UseBasicParsing -UserAgent 'AdTrim-fetch'
+    # Newest release-branch, static, gpl, win64 build. Excludes master ('N-...'
+    # nightlies, which the gate rejects) and the -shared variants.
+    $candidates = foreach ($a in $rel.assets) {
+        if ($a.name -match '^ffmpeg-n(\d+)\.(\d+)-latest-win64-gpl-\d+\.\d+\.zip$') {
+            [pscustomobject]@{ Name = $a.name; Url = $a.browser_download_url; Ver = [version]"$($Matches[1]).$($Matches[2])" }
+        }
+    }
+    $asset = $candidates | Sort-Object Ver -Descending | Select-Object -First 1
+    if (-not $asset) { throw 'no release-branch gpl win64 build in the BtbN release' }
+    Write-Host "  build: $($asset.Name)"
+    $sumsAsset = $rel.assets | Where-Object { $_.name -eq 'checksums.sha256' } | Select-Object -First 1
+    if (-not $sumsAsset) { throw 'BtbN checksums.sha256 not found' }
+    $sumsText = Get-Text $sumsAsset.browser_download_url
+    $line = ($sumsText -split "`n") | Where-Object { $_ -match [regex]::Escape($asset.Name) } | Select-Object -First 1
+    $expected = ([regex]::Match([string]$line, '[0-9a-fA-F]{64}')).Value.ToLower()
+    if (-not $expected) { throw "no checksum for $($asset.Name)" }
+    $archive = Join-Path $tmp 'ffmpeg.zip'
+    Save-Url $asset.Url $archive
+    if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLower() -ne $expected) {
+        throw 'BtbN SHA-256 mismatch - download corrupt or tampered'
+    }
+    Write-Host "  SHA-256 verified"
+    $out = Join-Path $tmp 'ffmpeg-btbn'
+    Expand-Archive -Path $archive -DestinationPath $out -Force
+    Copy-FfmpegFrom $out 'BtbN'
+}
+
+function Install-FfmpegFromGyan($sevenZip) {
+    Write-Host "  trying gyan.dev (release-full)..."
     $base = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z'
     $ver = try { (Get-Text "$base.ver").Trim() } catch { '(unknown)' }
     Write-Host "  latest gyan release: $ver"
@@ -70,18 +112,25 @@ function Update-Ffmpeg($sevenZip) {
     $expected = ([regex]::Match((Get-Text "$base.sha256"), '[0-9a-fA-F]{64}')).Value.ToLower()
     if (-not $expected) { throw 'could not read gyan SHA-256' }
     if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLower() -ne $expected) {
-        throw 'FFmpeg SHA-256 mismatch - download corrupt or tampered'
+        throw 'gyan SHA-256 mismatch - download corrupt or tampered'
     }
     Write-Host "  SHA-256 verified"
-    $out = Join-Path $tmp 'ffmpeg'
+    $out = Join-Path $tmp 'ffmpeg-gyan'
     Expand-SevenZip $sevenZip $archive $out
-    $ff = Get-ChildItem $out -Recurse -Filter 'ffmpeg.exe'  | Select-Object -First 1
-    $fp = Get-ChildItem $out -Recurse -Filter 'ffprobe.exe' | Select-Object -First 1
-    if (-not $ff -or -not $fp) { throw 'ffmpeg.exe / ffprobe.exe not found in the archive' }
-    New-Item -ItemType Directory -Force -Path $ffmpegDir | Out-Null
-    Copy-Item $ff.FullName (Join-Path $ffmpegDir 'ffmpeg.exe')  -Force
-    Copy-Item $fp.FullName (Join-Path $ffmpegDir 'ffprobe.exe') -Force
-    Write-Host "  installed ffmpeg $ver -> $ffmpegDir"
+    Copy-FfmpegFrom $out 'gyan'
+}
+
+function Update-Ffmpeg($sevenZip) {
+    Write-Host ""
+    Write-Host "== FFmpeg =="
+    try {
+        Install-FfmpegFromBtbN
+    }
+    catch {
+        Write-Host "  BtbN unavailable: $($_.Exception.Message)"
+        Write-Host "  falling back to gyan.dev"
+        Install-FfmpegFromGyan $sevenZip
+    }
 }
 
 function Update-Libmpv($sevenZip) {
@@ -136,7 +185,6 @@ try {
     } else {
         Write-Host "NOTE: the ffmpeg just installed does NOT clear the build gate (see above)."
         Write-Host "publish.cmd will refuse to build until a passing release is available."
-        Write-Host "Re-run this script once a release that meets the floor is published."
     }
 }
 finally {

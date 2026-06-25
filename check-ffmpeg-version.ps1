@@ -42,16 +42,19 @@ foreach ($exe in @('ffmpeg.exe', 'ffprobe.exe')) {
     }
 
     # Expected: "ffmpeg version <token> Copyright ..." where <token> is e.g.
-    # "8.1.2-full_build-www.gyan.dev" (release) or "N-123034-g47e8..." (nightly).
+    # "8.1.2-full_build-www.gyan.dev" or BtbN's "n8.1.2-20260624" (releases) vs
+    # "N-123034-g47e8..." / "2026-05-13-git-..." (nightlies).
     if ($firstLine -notmatch '^\S+\s+version\s+(\S+)') {
         Write-Host "ERROR: could not parse a version from '$exe': '$firstLine'"
         exit 1
     }
     $token = $Matches[1]
 
-    # A release token starts with X.Y[.Z]. A nightly starts with 'N-' and has
-    # no release version, so reject it outright (it may predate security fixes).
-    if ($token -notmatch '^(\d+)\.(\d+)(?:\.(\d+))?') {
+    # A release token is X.Y[.Z], optionally with a leading 'n' (FFmpeg release
+    # tags are named like n8.1.2, which is how BtbN labels its builds). Nightlies
+    # carry no dotted release version ('N-123034-g...', '2026-05-13-git-...') and
+    # are rejected - they may predate security fixes.
+    if ($token -notmatch '^n?(\d+)\.(\d+)(?:\.(\d+))?') {
         Write-Host "ERROR: $exe is a non-release build ('$token'). Bundle an official release >= $MinVersion. See binaries/README.md."
         exit 1
     }

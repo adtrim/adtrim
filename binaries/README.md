@@ -35,8 +35,9 @@ gate fails on the review-expiry (it nags every `MaxAgeDays` in
    - FFmpeg - https://ffmpeg.org/security.html
    - libmpv - the shinchiro build's embedded FFmpeg (compare its build date).
 2. **Update the binaries:** double-click `fetch-binaries.cmd` (or run
-   `fetch-binaries.ps1`). It downloads the latest gyan.dev release-full ffmpeg
-   and the latest shinchiro libmpv, verifies their checksums, drops them into
+   `fetch-binaries.ps1`). It pulls ffmpeg (BtbN's release-branch gpl build, with
+   gyan.dev release-full as automatic fallback) and the latest shinchiro libmpv,
+   verifies each against the builder's published checksum, drops them into
    `binaries/ffmpeg/win-x64/` and `binaries/mpv/win-x64/`, and runs the version
    gate so you know whether the ffmpeg it pulled clears the floor.
 3. **Update the pin in one place** - `check-ffmpeg-version.ps1`:
