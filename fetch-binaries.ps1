@@ -7,15 +7,20 @@
 #   release-full build (verified against gyan's SHA-256) if BtbN is unreachable.
 # libmpv: latest shinchiro build from SourceForge, verified against the RSS MD5.
 #
+# By default it stays on the major version already installed - a routine run
+# picks up patch/minor security fixes (e.g. 8.1.2 -> 8.1.3) but never silently
+# jumps 8.x -> 9.x. Major bumps change CLI/filter behavior and need testing, so
+# crossing one is opt-in: pass -AllowMajorUpgrade.
+#
 # BtbN ships .zip (extracted with the built-in Expand-Archive); gyan and libmpv
 # ship .7z, so 7-Zip is used for those (the standalone 7zr.exe is fetched if
-# 7-Zip isn't installed).
-#
-# After installing it runs the build gate (check-ffmpeg-version.ps1) so you know
-# whether the ffmpeg it pulled clears the version floor.
+# 7-Zip isn't installed). After installing it runs the build gate.
 
 [CmdletBinding()]
-param([string]$Root)
+param(
+    [string]$Root,
+    [switch]$AllowMajorUpgrade
+)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'   # large downloads are far faster without the progress bar on PS 5.1
@@ -72,18 +77,45 @@ function Copy-FfmpegFrom($extractRoot, $label) {
     Write-Host "  installed from $label -> $ffmpegDir"
 }
 
-function Install-FfmpegFromBtbN {
+# Major version currently sitting in binaries/ (null if none installed yet).
+function Get-InstalledFfmpegMajor {
+    $exe = Join-Path $ffmpegDir 'ffmpeg.exe'
+    if (-not (Test-Path $exe)) { return $null }
+    try {
+        $line = (& $exe -version | Select-Object -First 1)
+        if ($line -match '\bversion\s+n?(\d+)\.') { return [int]$Matches[1] }
+    } catch { }
+    return $null
+}
+
+# Block a silent major-version jump. The marker 'MAJORBLOCK:' lets the caller
+# tell this apart from a download failure (which should fall back, not abort).
+function Assert-MajorOk($incomingMajor, $currentMajor) {
+    if (-not $AllowMajorUpgrade -and $currentMajor -and $incomingMajor -gt $currentMajor) {
+        throw "MAJORBLOCK: this would move ffmpeg from major $currentMajor to $incomingMajor. " +
+              "Major bumps can change CLI/filter behavior - test AdTrim (export, refine, playback) " +
+              "against real recordings first, then re-run with -AllowMajorUpgrade."
+    }
+}
+
+function Install-FfmpegFromBtbN($currentMajor) {
     Write-Host "  trying BtbN (GitHub CI build)..."
     $rel = Invoke-RestMethod 'https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest' -UseBasicParsing -UserAgent 'AdTrim-fetch'
-    # Newest release-branch, static, gpl, win64 build. Excludes master ('N-...'
+    # Release-branch, static, gpl, win64 builds. Excludes master ('N-...'
     # nightlies, which the gate rejects) and the -shared variants.
     $candidates = foreach ($a in $rel.assets) {
         if ($a.name -match '^ffmpeg-n(\d+)\.(\d+)-latest-win64-gpl-\d+\.\d+\.zip$') {
             [pscustomobject]@{ Name = $a.name; Url = $a.browser_download_url; Ver = [version]"$($Matches[1]).$($Matches[2])" }
         }
     }
+    if (-not $candidates) { throw 'no release-branch gpl win64 build in the BtbN release' }
+    # Stay on the installed major unless an upgrade was explicitly requested.
+    if (-not $AllowMajorUpgrade -and $currentMajor) {
+        $sameMajor = $candidates | Where-Object { $_.Ver.Major -eq $currentMajor }
+        if ($sameMajor) { $candidates = $sameMajor }
+    }
     $asset = $candidates | Sort-Object Ver -Descending | Select-Object -First 1
-    if (-not $asset) { throw 'no release-branch gpl win64 build in the BtbN release' }
+    Assert-MajorOk $asset.Ver.Major $currentMajor
     Write-Host "  build: $($asset.Name)"
     $sumsAsset = $rel.assets | Where-Object { $_.name -eq 'checksums.sha256' } | Select-Object -First 1
     if (-not $sumsAsset) { throw 'BtbN checksums.sha256 not found' }
@@ -102,11 +134,13 @@ function Install-FfmpegFromBtbN {
     Copy-FfmpegFrom $out 'BtbN'
 }
 
-function Install-FfmpegFromGyan($sevenZip) {
+function Install-FfmpegFromGyan($sevenZip, $currentMajor) {
     Write-Host "  trying gyan.dev (release-full)..."
     $base = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z'
     $ver = try { (Get-Text "$base.ver").Trim() } catch { '(unknown)' }
     Write-Host "  latest gyan release: $ver"
+    $m = [regex]::Match($ver, '^n?(\d+)\.')
+    if ($m.Success) { Assert-MajorOk ([int]$m.Groups[1].Value) $currentMajor }
     $archive = Join-Path $tmp 'ffmpeg.7z'
     Save-Url $base $archive
     $expected = ([regex]::Match((Get-Text "$base.sha256"), '[0-9a-fA-F]{64}')).Value.ToLower()
@@ -123,14 +157,20 @@ function Install-FfmpegFromGyan($sevenZip) {
 function Update-Ffmpeg($sevenZip) {
     Write-Host ""
     Write-Host "== FFmpeg =="
+    $currentMajor = Get-InstalledFfmpegMajor
+    if ($currentMajor -and -not $AllowMajorUpgrade) {
+        Write-Host "  staying on major $currentMajor (pass -AllowMajorUpgrade to cross majors)"
+    }
     try {
-        Install-FfmpegFromBtbN
+        Install-FfmpegFromBtbN $currentMajor
+        return
     }
     catch {
+        if ($_.Exception.Message -like 'MAJORBLOCK:*') { throw }
         Write-Host "  BtbN unavailable: $($_.Exception.Message)"
         Write-Host "  falling back to gyan.dev"
-        Install-FfmpegFromGyan $sevenZip
     }
+    Install-FfmpegFromGyan $sevenZip $currentMajor
 }
 
 function Update-Libmpv($sevenZip) {
@@ -186,6 +226,15 @@ try {
         Write-Host "NOTE: the ffmpeg just installed does NOT clear the build gate (see above)."
         Write-Host "publish.cmd will refuse to build until a passing release is available."
     }
+}
+catch {
+    if ($_.Exception.Message -like 'MAJORBLOCK:*') {
+        Write-Host ""
+        Write-Host ("STOPPED: " + ($_.Exception.Message -replace '^MAJORBLOCK:\s*', ''))
+        Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        exit 2
+    }
+    throw
 }
 finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue

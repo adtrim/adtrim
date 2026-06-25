@@ -48,6 +48,11 @@ gate fails on the review-expiry (it nags every `MaxAgeDays` in
 5. **Cut the release:** bump `AppVersion.Numeric`, run `publish.cmd && installer.cmd`,
    publish the GitHub release with the new `AdTrim-Setup-v<version>.exe`.
 
+A routine run stays on your current ffmpeg major (patch/minor only). **Crossing a
+major** (e.g. 8.x to 9.x) can change CLI/filter behavior, so it's a deliberate,
+tested step, not a double-click: run `fetch-binaries.ps1 -AllowMajorUpgrade`, then
+re-test export, refine, and playback against real recordings before shipping.
+
 ## Dev-time fallback
 
 `Services/FfmpegRunner` looks for binaries in this order:
