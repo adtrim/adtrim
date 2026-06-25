@@ -1,0 +1,33 @@
+name: Trigger site rebuild on release tag
+
+# Fires when a GitHub Release is *published* (not when a tag is pushed).
+# This guarantees the release page with the installer asset already exists
+# by the time the site's download URLs start advertising the new version -
+# no broken-link window while you upload the EXE.
+#
+# Sends a repository_dispatch event to adtrim/adtrim.github.io carrying
+# the release tag name, which that repo's deploy workflow uses to template
+# the new version string into index.html before publishing.
+#
+# Auth: uses the SITE_DEPLOY_PAT secret (a fine-grained PAT scoped only
+# to adtrim/adtrim.github.io with Contents: write). The built-in
+# GITHUB_TOKEN can't trigger workflows in OTHER repos by design.
+#
+# Implication: pushing a tag alone no longer updates the site. To ship a
+# release you must Publish a Release on github.com (web UI: Releases →
+# Draft new release, or CLI: gh release create <tag> <installer> --generate-notes).
+on:
+  release:
+    types: [published]
+
+jobs:
+  trigger-site:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch to adtrim/adtrim.github.io
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.SITE_DEPLOY_PAT }}
+          repository: adtrim/adtrim.github.io
+          event-type: program-released
+          client-payload: '{"version": "${{ github.event.release.tag_name }}"}'

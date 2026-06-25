@@ -1,0 +1,89 @@
+# .NET build output
+bin/
+obj/
+out/
+publish/
+
+# Visual Studio / Rider
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.idea/
+*.swp
+
+# Build artifacts
+*.pdb
+*.idb
+*.exp
+*.lib
+*.dll.config
+*.pdb.config
+
+# Test output
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+coverage/
+.coverlet/
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Rider / ReSharper
+_ReSharper.Caches/
+_ReSharper.*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.tmp
+
+# WiX intermediate files
+*.wixobj
+*.wixpdb
+
+# Installer output (built locally by installer.cmd / installer.nsi).
+# Glob covers both legacy /AdTrim-Setup.exe and current
+# /AdTrim-Setup-v1.0.NNNN.exe naming.
+/AdTrim-Setup*.exe
+
+# Bundled FFmpeg binaries (large; download separately or commit deliberately)
+# If the project wants to commit them, remove or comment out these two lines.
+binaries/ffmpeg/win-x64/ffmpeg.exe
+binaries/ffmpeg/win-x64/ffprobe.exe
+
+# Bundled mpv (libmpv-2.dll is ~113 MB - exceeds typical Git host per-file limits)
+binaries/mpv/win-x64/libmpv-2.dll
+
+# Project sidecars from real recordings (contain absolute D:\ paths)
+*.adt.json
+
+# Test fixture media - never commit real recordings
+*.mp4
+*.ts
+*.mkv
+*.m4v
+!fixtures/**/.gitkeep
+
+# Local export output / temp segment files
+export_output/
+tmp/
+*.export.tmp/
+
+# OS / editor cruft
+.DS_Store
+*.bak
+*.orig

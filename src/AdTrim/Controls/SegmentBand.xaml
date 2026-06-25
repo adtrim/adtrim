@@ -1,0 +1,45 @@
+<UserControl x:Class="AdTrim.Controls.SegmentBand"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Name="Self"
+             SnapsToDevicePixels="True"
+             UseLayoutRounding="True">
+
+  <!-- The band hovers over the thumbnail strip. Style varies by State. -->
+  <Border x:Name="Bd"
+          CornerRadius="4"
+          Background="Transparent"
+          BorderBrush="{StaticResource Border.Subtle}"
+          BorderThickness="1">
+    <Grid>
+      <!-- Stripe overlay (only for excluded). Box stretches to fill. -->
+      <Rectangle x:Name="Stripe"
+                 Fill="{StaticResource Stripe.Crosshatch}"
+                 Visibility="Collapsed"
+                 RadiusX="3" RadiusY="3"/>
+
+      <!-- Label chip in the upper-left -->
+      <Border x:Name="LabelChip"
+              HorizontalAlignment="Left" VerticalAlignment="Top"
+              Margin="6,4,0,0"
+              CornerRadius="3"
+              Padding="6,2"
+              Background="#73000000">
+        <StackPanel x:Name="LabelStack" Orientation="Horizontal">
+          <Rectangle x:Name="LabelDot"
+                     Width="6" Height="6"
+                     Margin="0,0,4,0"
+                     VerticalAlignment="Center"
+                     RadiusX="1" RadiusY="1"
+                     Fill="{StaticResource State.Warning}"
+                     Visibility="Collapsed"/>
+          <TextBlock x:Name="LabelTb"
+                     FontFamily="{StaticResource Font.Mono}"
+                     FontSize="10"
+                     FontWeight="Medium"
+                     Foreground="{StaticResource Text.Primary}"/>
+        </StackPanel>
+      </Border>
+    </Grid>
+  </Border>
+</UserControl>

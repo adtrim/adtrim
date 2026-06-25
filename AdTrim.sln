@@ -1,0 +1,34 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AdTrim", "src\AdTrim\AdTrim.csproj", "{2E5A4DC1-49F1-4F94-8C8E-3F2B8B9BA001}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AdTrim.RefineCli", "src\AdTrim.RefineCli\AdTrim.RefineCli.csproj", "{C7C42C8E-1B70-4D2C-9F8E-3F2B8B9BA002}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AdTrim.ExportCli", "src\AdTrim.ExportCli\AdTrim.ExportCli.csproj", "{D8D53D9F-2C81-4E3D-A09F-3F2B8B9BA004}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AdTrim.Tests", "tests\AdTrim.Tests\AdTrim.Tests.csproj", "{0FA52B17-DA59-4F2D-9E91-3F2B8B9BA003}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{2E5A4DC1-49F1-4F94-8C8E-3F2B8B9BA001}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2E5A4DC1-49F1-4F94-8C8E-3F2B8B9BA001}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2E5A4DC1-49F1-4F94-8C8E-3F2B8B9BA001}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2E5A4DC1-49F1-4F94-8C8E-3F2B8B9BA001}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C7C42C8E-1B70-4D2C-9F8E-3F2B8B9BA002}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C7C42C8E-1B70-4D2C-9F8E-3F2B8B9BA002}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C7C42C8E-1B70-4D2C-9F8E-3F2B8B9BA002}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C7C42C8E-1B70-4D2C-9F8E-3F2B8B9BA002}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D8D53D9F-2C81-4E3D-A09F-3F2B8B9BA004}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D8D53D9F-2C81-4E3D-A09F-3F2B8B9BA004}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D8D53D9F-2C81-4E3D-A09F-3F2B8B9BA004}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D8D53D9F-2C81-4E3D-A09F-3F2B8B9BA004}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0FA52B17-DA59-4F2D-9E91-3F2B8B9BA003}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0FA52B17-DA59-4F2D-9E91-3F2B8B9BA003}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0FA52B17-DA59-4F2D-9E91-3F2B8B9BA003}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0FA52B17-DA59-4F2D-9E91-3F2B8B9BA003}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

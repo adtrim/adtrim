@@ -1,0 +1,59 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>AdTrim.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pinned (May 2026): xUnit 2.9.3 + AwesomeAssertions.
+         xUnit v2 deliberately (not v3) for training-data depth.
+         AwesomeAssertions is the Apache-2.0 fork of FluentAssertions v7
+         (avoids Xceed license risk). -->
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="AwesomeAssertions" Version="9.4.0" />
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
+  </ItemGroup>
+
+  <!-- We link source files instead of project-referencing the WPF project,
+       because referencing a net10.0-windows project from net10.0 isn't
+       supported. When a Core (non-WPF) class library is split out later,
+       this becomes a normal ProjectReference. -->
+  <ItemGroup>
+    <Compile Include="..\..\src\AdTrim\AppVersion.cs"         Link="AppVersion.cs"/>
+    <Compile Include="..\..\src\AdTrim\Models\Confidence.cs"  Link="Models\Confidence.cs"/>
+    <Compile Include="..\..\src\AdTrim\Models\MediaInfo.cs"   Link="Models\MediaInfo.cs"/>
+    <Compile Include="..\..\src\AdTrim\Models\AdTrimProject.cs"  Link="Models\AdTrimProject.cs"/>
+    <Compile Include="..\..\src\AdTrim\Models\Split.cs"       Link="Models\Split.cs"/>
+    <Compile Include="..\..\src\AdTrim\Models\Segment.cs"     Link="Models\Segment.cs"/>
+    <Compile Include="..\..\src\AdTrim\Models\StatusModel.cs" Link="Models\StatusModel.cs"/>
+    <Compile Include="..\..\src\AdTrim\Models\TimelineThumbnail.cs" Link="Models\TimelineThumbnail.cs"/>
+    <Compile Include="..\..\src\AdTrim\Models\RefineResult.cs" Link="Models\RefineResult.cs"/>
+    <Compile Include="..\..\src\AdTrim\Models\ExportPlan.cs"  Link="Models\ExportPlan.cs"/>
+    <Compile Include="..\..\src\AdTrim\Commands\CommandStack.cs" Link="Commands\CommandStack.cs"/>
+    <Compile Include="..\..\src\AdTrim\Commands\EditCommands.cs" Link="Commands\EditCommands.cs"/>
+    <Compile Include="..\..\src\AdTrim\Commands\RefineCommands.cs" Link="Commands\RefineCommands.cs"/>
+    <Compile Include="..\..\src\AdTrim\ViewModels\MainViewModel.cs" Link="ViewModels\MainViewModel.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\FfmpegRunner.cs"          Link="Services\FfmpegRunner.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\MediaProbeService.cs"     Link="Services\MediaProbeService.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\ChapterImportService.cs"  Link="Services\ChapterImportService.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\FrameCacheService.cs"     Link="Services\FrameCacheService.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\WaveformService.cs"       Link="Services\WaveformService.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\ThumbnailService.cs"      Link="Services\ThumbnailService.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\FrameSnap.cs"             Link="Services\FrameSnap.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\RefineService.cs"         Link="Services\RefineService.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\ProjectStore.cs"          Link="Services\ProjectStore.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\ExportNaming.cs"          Link="Services\ExportNaming.cs"/>
+    <Compile Include="..\..\src\AdTrim\Encoders\IEncoderStrategy.cs"      Link="Encoders\IEncoderStrategy.cs"/>
+    <Compile Include="..\..\src\AdTrim\Encoders\LibX264EncoderStrategy.cs" Link="Encoders\LibX264EncoderStrategy.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\ExportService.cs"         Link="Services\ExportService.cs"/>
+  </ItemGroup>
+
+</Project>

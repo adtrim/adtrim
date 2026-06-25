@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>AdTrim.ExportCli</RootNamespace>
+  </PropertyGroup>
+
+  <!-- Same source-linking trick as RefineCli. When AdTrim.Core
+       lib lands, this becomes a normal ProjectReference. -->
+  <ItemGroup>
+    <Compile Include="..\AdTrim\AppVersion.cs"          Link="AppVersion.cs"/>
+    <Compile Include="..\AdTrim\Models\Confidence.cs"   Link="Models\Confidence.cs"/>
+    <Compile Include="..\AdTrim\Models\MediaInfo.cs"    Link="Models\MediaInfo.cs"/>
+    <Compile Include="..\AdTrim\Models\AdTrimProject.cs"   Link="Models\AdTrimProject.cs"/>
+    <Compile Include="..\AdTrim\Models\Split.cs"        Link="Models\Split.cs"/>
+    <Compile Include="..\AdTrim\Models\Segment.cs"      Link="Models\Segment.cs"/>
+    <Compile Include="..\AdTrim\Models\ExportPlan.cs"   Link="Models\ExportPlan.cs"/>
+    <Compile Include="..\AdTrim\Services\FfmpegRunner.cs"           Link="Services\FfmpegRunner.cs"/>
+    <Compile Include="..\AdTrim\Services\MediaProbeService.cs"      Link="Services\MediaProbeService.cs"/>
+    <Compile Include="..\AdTrim\Services\ChapterImportService.cs"   Link="Services\ChapterImportService.cs"/>
+    <Compile Include="..\AdTrim\Services\ExportService.cs"          Link="Services\ExportService.cs"/>
+    <Compile Include="..\AdTrim\Encoders\IEncoderStrategy.cs"       Link="Encoders\IEncoderStrategy.cs"/>
+    <Compile Include="..\AdTrim\Encoders\LibX264EncoderStrategy.cs" Link="Encoders\LibX264EncoderStrategy.cs"/>
+  </ItemGroup>
+
+</Project>

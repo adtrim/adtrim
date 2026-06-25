@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>AdTrim.RefineCli</RootNamespace>
+  </PropertyGroup>
+
+  <!-- We only need the model + service types - but the existing csproj is
+       a WPF exe. Cheapest split: re-link the source files we need.
+       (When the project gets a Core library, this goes away.) -->
+  <ItemGroup>
+    <Compile Include="..\AdTrim\Models\Confidence.cs"  Link="Models\Confidence.cs"/>
+    <Compile Include="..\AdTrim\Models\MediaInfo.cs"   Link="Models\MediaInfo.cs"/>
+    <Compile Include="..\AdTrim\Models\AdTrimProject.cs"  Link="Models\AdTrimProject.cs"/>
+    <Compile Include="..\AdTrim\Models\Split.cs"       Link="Models\Split.cs"/>
+    <Compile Include="..\AdTrim\Models\Segment.cs"     Link="Models\Segment.cs"/>
+    <Compile Include="..\AdTrim\Models\RefineResult.cs" Link="Models\RefineResult.cs"/>
+    <Compile Include="..\AdTrim\Services\FfmpegRunner.cs"          Link="Services\FfmpegRunner.cs"/>
+    <Compile Include="..\AdTrim\Services\MediaProbeService.cs"     Link="Services\MediaProbeService.cs"/>
+    <Compile Include="..\AdTrim\Services\ChapterImportService.cs"  Link="Services\ChapterImportService.cs"/>
+    <Compile Include="..\AdTrim\Services\FrameSnap.cs"             Link="Services\FrameSnap.cs"/>
+    <Compile Include="..\AdTrim\Services\RefineService.cs"         Link="Services\RefineService.cs"/>
+  </ItemGroup>
+
+</Project>

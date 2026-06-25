@@ -1,0 +1,67 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AdTrimDisplayVersion>1.0.41</AdTrimDisplayVersion>
+    <AdTrimAssemblyVersion>1.0.41.0</AdTrimAssemblyVersion>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>AdTrim</RootNamespace>
+    <AssemblyName>AdTrim</AssemblyName>
+    <Version>1.0.41</Version>
+    <AssemblyVersion>1.0.41.0</AssemblyVersion>
+    <FileVersion>$(AdTrimAssemblyVersion)</FileVersion>
+    <ProductVersion>$(AdTrimDisplayVersion)</ProductVersion>
+    <InformationalVersion>v$(AdTrimDisplayVersion)</InformationalVersion>
+    <Company>AdTrim</Company>
+    <Authors>AdTrim</Authors>
+    <Product>AdTrim</Product>
+    <Description>Frame-accurate, non-destructive editor for trimming ad breaks out of recorded TV.</Description>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Multi-resolution icon (16/24/32/48/64/128/256). Generated from
+         icon-512.png at the repo root by a one-off PowerShell pass; re-run
+         that pass if icon-512.png changes. -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <!-- Bundled ffmpeg/ffprobe live under <BaseDir>/binaries/ffmpeg/win-x64/ at runtime. -->
+    <BinariesDir>$(MSBuildThisFileDirectory)..\..\binaries</BinariesDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- LibVLCSharp was removed when we migrated the preview to libmpv.
+         Reintroducing it would pull tens of
+         MB of unused VLC binaries into the publish output. -->
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+  </ItemGroup>
+
+  <!-- Embed the 512×512 app logo as a WPF Resource so XAML can reference it
+       via "pack://application:,,,/icon-512.png" - used for Window.Icon (title
+       bar / Alt-Tab / taskbar) and the EmptyStateView logo tile. The .ico
+       above handles the EXE / Explorer icon; this PNG is the in-app surface. -->
+  <ItemGroup>
+    <Resource Include="..\..\icon-512.png">
+      <Link>icon-512.png</Link>
+    </Resource>
+  </ItemGroup>
+
+  <!-- Copy the entire bundled-binaries tree (FFmpeg/ffprobe) into the output directory.
+       The tree is intentionally created empty in the repo; a one-time install step
+       drops the actual gyan.dev "full" Windows build into binaries/ffmpeg/win-x64/.
+       See binaries/README.md. -->
+  <ItemGroup Condition="Exists('$(BinariesDir)')">
+    <Content Include="$(BinariesDir)\**\*.*">
+      <Link>binaries\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)..\..\installer\licenses')">
+    <Content Include="$(MSBuildThisFileDirectory)..\..\installer\licenses\**\*.*">
+      <Link>licenses\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>
