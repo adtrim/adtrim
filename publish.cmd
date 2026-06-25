@@ -40,6 +40,13 @@ if not defined ADTRIM_FFMPEG_DIR set "FFMPEG_DIR=C:\Program Files\ffmpeg\bin"
 if not exist "%FFMPEG_DIR%\ffmpeg.exe"  goto :missing_ffmpeg
 if not exist "%FFMPEG_DIR%\ffprobe.exe" goto :missing_ffprobe
 
+REM Version gate: existence isn't enough. Refuse to bundle a stale or
+REM git-master FFmpeg (this is how CVE-2026-8461 reached a buildable state).
+REM The floor lives in check-ffmpeg-version.ps1 (single source of truth).
+echo Checking FFmpeg version...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0check-ffmpeg-version.ps1" -FfmpegDir "%FFMPEG_DIR%"
+if errorlevel 1 goto :bad_ffmpeg_version
+
 REM Wipe any leftovers from previous publish runs. `dotnet publish` writes
 REM the new build's files but does NOT remove files that aren't part of
 REM the current build -- so after a project rename (e.g. ComSkipEditor to
@@ -109,6 +116,12 @@ exit /b 1
 :missing_ffprobe
 echo ERROR: ffprobe.exe not found at "%FFMPEG_DIR%\ffprobe.exe"
 echo Set ADTRIM_FFMPEG_DIR to a folder containing ffmpeg.exe + ffprobe.exe.
+exit /b 1
+
+:bad_ffmpeg_version
+echo.
+echo ERROR: bundled FFmpeg failed the version gate. See messages above.
+echo Update the binaries in "%FFMPEG_DIR%" - see binaries\README.md.
 exit /b 1
 
 :publish_failed
