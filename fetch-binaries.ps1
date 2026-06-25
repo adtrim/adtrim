@@ -12,11 +12,19 @@
 # whether the ffmpeg it pulled clears the version floor.
 
 [CmdletBinding()]
-param([string]$Root = $PSScriptRoot)
+param([string]$Root)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'   # large downloads are far faster without the progress bar on PS 5.1
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+
+# Resolve the project root (this script's folder). $PSScriptRoot can be empty
+# depending on how the script is launched, so fall back to the invocation path.
+if (-not $Root) {
+    if ($PSScriptRoot) { $Root = $PSScriptRoot }
+    elseif ($MyInvocation.MyCommand.Path) { $Root = Split-Path -Parent $MyInvocation.MyCommand.Path }
+    else { $Root = (Get-Location).Path }
+}
 
 $ffmpegDir = Join-Path $Root 'binaries\ffmpeg\win-x64'
 $mpvDir    = Join-Path $Root 'binaries\mpv\win-x64'
@@ -31,7 +39,7 @@ function Get-Text($url) {
 
 function Save-Url($url, $outFile) {
     Write-Host "  GET $url"
-    Invoke-WebRequest $url -OutFile $outFile -UseBasicParsing
+    Invoke-WebRequest $url -OutFile $outFile -UseBasicParsing -UserAgent 'Mozilla/5.0'
 }
 
 function Get-SevenZip {
@@ -87,8 +95,10 @@ function Update-Libmpv($sevenZip) {
         Select-Object -First 1
     if (-not $item) { throw 'no mpv-dev-x86_64 build found in the SourceForge feed' }
     $name = $item.SelectSingleNode('title').InnerText -replace '.*/', ''
-    $url  = $item.SelectSingleNode('link').InnerText
     Write-Host "  latest build: $name"
+    # SourceForge's /download link returns a mirror-selection interstitial; the
+    # master mirror serves the raw file directly.
+    $url = "https://master.dl.sourceforge.net/project/mpv-player-windows/libmpv/$($name)?viasf=1"
     $archive = Join-Path $tmp 'libmpv.7z'
     Save-Url $url $archive
     $hashNode = $item.SelectSingleNode(".//media:hash[@algo='md5']", $ns)
