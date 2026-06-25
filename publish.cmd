@@ -28,14 +28,13 @@ setlocal
 set "PROJECT=%~dp0src\AdTrim\AdTrim.csproj"
 set "OUTDIR=%~dp0src\AdTrim\bin\Release\net10.0-windows\win-x64\publish"
 
-REM Resolve ffmpeg / ffprobe location for the post-publish copy step. Same
-REM env var dev-launch.cmd uses. The runtime resolver in FfmpegRunner only
-REM looks under AppContext.BaseDirectory\binaries\ffmpeg\win-x64\ for the
-REM published EXE, so we must drop them there explicitly - the csproj's
-REM Content rule only copies what's in the SOURCE binaries\ tree, and the
-REM user's dev install doesn't live there.
-set "FFMPEG_DIR=%ADTRIM_FFMPEG_DIR%"
-if not defined ADTRIM_FFMPEG_DIR set "FFMPEG_DIR=C:\Program Files\ffmpeg\bin"
+REM ffmpeg/ffprobe are bundled from the project's own binaries tree - the
+REM single source for both dev and release builds. The csproj Content rule
+REM copies binaries\ into the build output (the same path the runtime
+REM resolver reads), so publish.cmd only validates the tree here; it does
+REM not copy from a system install. Drop the gyan.dev 8.1.2+ "full" build
+REM into binaries\ffmpeg\win-x64\ (see binaries\README.md).
+set "FFMPEG_DIR=%~dp0binaries\ffmpeg\win-x64"
 
 if not exist "%FFMPEG_DIR%\ffmpeg.exe"  goto :missing_ffmpeg
 if not exist "%FFMPEG_DIR%\ffprobe.exe" goto :missing_ffprobe
@@ -74,22 +73,14 @@ dotnet publish "%PROJECT%" ^
 
 if errorlevel 1 goto :publish_failed
 
-REM Drop ffmpeg + ffprobe into the published binaries\ tree so the EXE is
-REM actually self-sufficient (the resolver requires them at the path below).
-REM Also copy any sidecar .dll files - "shared" FFmpeg builds (e.g. the
-REM user's current C:\Program Files\ffmpeg install) put avcodec / avformat /
-REM avutil / etc. next to ffmpeg.exe, and the EXE crashes on startup without
-REM them. "Static" gyan.dev builds have no .dll files; the conditional copy
-REM is a no-op in that case.
-set "FFMPEG_OUT=%OUTDIR%\binaries\ffmpeg\win-x64"
-if not exist "%FFMPEG_OUT%" mkdir "%FFMPEG_OUT%"
-copy /Y "%FFMPEG_DIR%\ffmpeg.exe"  "%FFMPEG_OUT%\ffmpeg.exe"  >nul
-if errorlevel 1 goto :copy_failed
-copy /Y "%FFMPEG_DIR%\ffprobe.exe" "%FFMPEG_OUT%\ffprobe.exe" >nul
-if errorlevel 1 goto :copy_failed
-if exist "%FFMPEG_DIR%\*.dll" (
-  copy /Y "%FFMPEG_DIR%\*.dll" "%FFMPEG_OUT%\" >nul
-  if errorlevel 1 goto :copy_failed
+REM ffmpeg + ffprobe land in the output via the csproj Content rule (the same
+REM mechanism that bundles libmpv). The version gate above already validated
+REM the source tree, so sanity-check they made it across; a miss means an
+REM empty source tree.
+if not exist "%OUTDIR%\binaries\ffmpeg\win-x64\ffmpeg.exe" (
+  echo WARNING: ffmpeg.exe is missing from the publish output.
+  echo          binaries\ffmpeg\win-x64\ffmpeg.exe wasn't found in the source tree.
+  echo          See binaries\README.md for the one-time install.
 )
 
 REM Sanity-check libmpv landed too - copied automatically via the csproj
@@ -127,9 +118,4 @@ exit /b 1
 :publish_failed
 echo.
 echo ERROR: dotnet publish failed. See output above.
-exit /b 1
-
-:copy_failed
-echo.
-echo ERROR: failed to copy ffmpeg/ffprobe into "%FFMPEG_OUT%".
 exit /b 1

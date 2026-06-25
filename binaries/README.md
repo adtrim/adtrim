@@ -32,9 +32,8 @@ gate fails on the review-expiry (it nags every `MaxAgeDays` in
    - libmpv - the shinchiro build's embedded FFmpeg (compare its build date).
 2. **If a fix exists, replace the binaries:**
    - FFmpeg: download the new `ffmpeg-release-full.7z`, replace `ffmpeg.exe` +
-     `ffprobe.exe` in **`C:\Program Files\ffmpeg\bin`** (that's what `publish.cmd`
-     bundles by default - not this `binaries/` tree) *and* in
-     `binaries/ffmpeg/win-x64/` (used by dev F5 builds).
+     `ffprobe.exe` in `binaries/ffmpeg/win-x64/` (the single source for both
+     dev and release builds).
    - libmpv: download a current shinchiro `mpv-dev-x86_64-*.7z`, replace
      `binaries/mpv/win-x64/libmpv-2.dll`.
 3. **Update the pin in one place** - `check-ffmpeg-version.ps1`:
