@@ -45,27 +45,50 @@ The installer is unsigned (no code-signing certificate yet), so Windows SmartScr
 
 ## Build from source
 
-You'll need the .NET 10 SDK and the two third-party Windows binaries the app depends on at runtime.
+### Prerequisites (one-time)
+
+- **.NET 10 SDK** - `dotnet --version` should report `10.x`.
+- **NSIS** (only needed to build the installer) - install from https://nsis.sourceforge.io/Download, or point `%ADTRIM_NSIS_DIR%` at the folder containing `makensis.exe`.
+- **The bundled runtime binaries** (`ffmpeg.exe`, `ffprobe.exe`, `libmpv-2.dll`) - these are gitignored and not in the repo. Fetch them:
 
 ```pwsh
 git clone https://github.com/adtrim/adtrim.git
 cd adtrim
+.\fetch-binaries.cmd
 ```
 
-Drop the runtime binaries into the gitignored `binaries/` tree (see [binaries/README.md](binaries/README.md) for the full one-time setup):
+`fetch-binaries.cmd` downloads, checksum-verifies, and drops the binaries into `binaries/` (see [binaries/README.md](binaries/README.md) for what it pulls and the manual fallback).
 
-- `binaries/ffmpeg/win-x64/ffmpeg.exe`
-- `binaries/ffmpeg/win-x64/ffprobe.exe`
-- `binaries/mpv/win-x64/libmpv-2.dll`
-
-Then build and run:
+### Run from source (dev)
 
 ```pwsh
 dotnet build src/AdTrim/AdTrim.csproj
 dotnet run --project src/AdTrim/AdTrim.csproj
 ```
 
-To build the installer (NSIS-based), run `publish.cmd` followed by `installer.cmd` from the repo root. The output is `AdTrim-Setup.exe` next to the scripts.
+### Build the installer EXE
+
+From the repo root:
+
+```pwsh
+.\publish.cmd      # self-contained single-file build -> src\AdTrim\bin\Release\net10.0-windows\win-x64\publish\
+.\installer.cmd    # wraps that in the NSIS installer
+```
+
+(or `.\publish.cmd && .\installer.cmd` to chain them). The result is:
+
+```
+AdTrim-Setup-v<version>.exe        (in the repo root)
+```
+
+`<version>` comes from `AppVersion.Numeric` in [src/AdTrim/AppVersion.cs](src/AdTrim/AppVersion.cs). **When cutting a new release, bump that constant first** - it drives the in-app version and the installer filename; keep the `<Version>` / `<AdTrimDisplayVersion>` / `<AdTrimAssemblyVersion>` properties in [src/AdTrim/AdTrim.csproj](src/AdTrim/AdTrim.csproj) in sync.
+
+### Troubleshooting
+
+- **`makensis.exe not found`** - NSIS isn't installed or isn't on the auto-detected path. Install it, or set `%ADTRIM_NSIS_DIR%` to the folder with `makensis.exe`.
+- **Gate fails: "non-release build" or "below 8.1.2"** - the bundled ffmpeg is stale, a nightly, or below the security floor. Run `.\fetch-binaries.cmd` to refresh it.
+- **Gate fails: "last security-reviewed ... days ago"** - the version gate nags for a security re-review every ~90 days, so an old checkout *will* hit this. Re-check the advisories the message links, then set `ReviewedDate` in [check-ffmpeg-version.ps1](check-ffmpeg-version.ps1) to today (or run `.\fetch-binaries.cmd` if a fix is actually due).
+- **`publish folder not found`** - run `.\publish.cmd` before `.\installer.cmd`.
 
 ---
 
