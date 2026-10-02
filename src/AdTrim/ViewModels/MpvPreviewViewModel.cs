@@ -435,7 +435,9 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
     public void Dispose()
     {
         _eventLoopCts?.Cancel();
-        try { _eventLoop?.Join(1000); } catch { }
+        // The event pump must stop before its native handle is destroyed.
+        _eventLoop?.Join();
+        _eventLoop = null;
         _eventLoopCts?.Dispose();
         _eventLoopCts = null;
         if (_ctx != IntPtr.Zero)

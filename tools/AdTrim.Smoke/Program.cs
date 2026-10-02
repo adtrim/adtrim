@@ -32,8 +32,7 @@ internal static class Program
         // The harness owns its windows; do not join the installed app's single-instance lifecycle.
         app.Startup -= (StartupEventHandler)Delegate.CreateDelegate(typeof(StartupEventHandler), app,
             typeof(App).GetMethod("OnStartup", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)!);
-        App.PendingOpenPath = source;
-        var window = new MainWindow { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
+        var window = new MainWindow(source) { ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
         int result = 1;
         window.Show();
         window.Dispatcher.BeginInvoke(new Action(async () =>
@@ -79,7 +78,8 @@ internal static class Program
                 earlyTimeline.DataContext = null;
                 var vm = (MainViewModel)window.DataContext;
                 for (int i = 0; i < 250 && (!vm.IsFileLoaded || vm.IsBusy); i++) await Task.Delay(20);
-                Require(App.PendingOpenPath is null && vm.IsFileLoaded && !vm.IsBusy, "Launch-file startup completes");
+                Require(window.Ready.IsCompletedSuccessfully && vm.IsFileLoaded && !vm.IsBusy, "Launch-file startup completes");
+                await CheckMultipleWindows(app, window, source, directory);
                 Require(vm.IsFileLoaded && vm.Markers.Count == 4, "Fixture and sidecar loaded");
                 var loadedSource = vm.SourcePath;
                 vm.SourcePath = null;
@@ -456,6 +456,53 @@ internal static class Program
         Dispatcher.Run();
         return result;
     }
+    private static async Task CheckMultipleWindows(App app, MainWindow original, string source, string directory)
+    {
+        var secondSource = Path.Combine(directory, "second.mp4");
+        File.Copy(source, secondSource, true);
+        using var pipeCancellation = new CancellationTokenSource();
+        var server = (Task)typeof(App).GetMethod("RunPipeServerAsync", BindingFlags.NonPublic | BindingFlags.Static)!
+            .Invoke(null, new object[] { pipeCancellation.Token })!;
+        await Task.Run(() => typeof(App).GetMethod("TrySendPathToExistingInstance", BindingFlags.NonPublic | BindingFlags.Static)!
+            .Invoke(null, new object[] { "" }));
+        for (int i = 0; i < 100 && app.Windows.OfType<MainWindow>().Count() < 2; i++) await Task.Delay(20);
+        var empty = app.Windows.OfType<MainWindow>().Single(w => w != original);
+        pipeCancellation.Cancel();
+        await server;
+        Require(empty is not null, "Launching AdTrim without a path requests a new window through the app handoff");
+        empty.Opacity = 0;
+        empty.ShowInTaskbar = false;
+        await empty.Ready;
+        Require(empty.CanReceiveRecording, "New window is empty and ready");
+        var second = await app.OpenRecordingAsync(secondSource);
+        Require(second == empty, "External file open reuses an empty window");
+        var duplicate = await app.OpenRecordingAsync(secondSource.ToUpperInvariant());
+        Require(duplicate == second, "Duplicate file open activates its existing window");
+        await second.OpenFileAsync(source);
+        Require(((MainViewModel)second.DataContext).SourcePath == secondSource, "Open inside a window cannot create a second editor for an owned file");
+        var secondVm = (MainViewModel)second.DataContext;
+        secondVm.CommandStack.Execute(new AddSplitCommand(secondVm, 2_000_000, SplitSource.Manual));
+        Require(((MainViewModel)original.DataContext).Markers.Count == 4, "Editing the second recording leaves the first timeline unchanged");
+        await (Task)Invoke(second, "SavePreferencesAsync", secondVm)!;
+        await (Task)Invoke(original, "SavePreferencesAsync", (MainViewModel)original.DataContext)!;
+        var preferences = await UserPreferences.LoadAsync();
+        Require(preferences.Positions.ContainsKey(source) && preferences.Positions.ContainsKey(secondSource), "Window saves merge playback positions instead of overwriting them");
+        second.Close();
+        for (int i = 0; i < 100 && second.IsVisible; i++) await Task.Delay(20);
+        Require(!second.IsVisible && original.IsVisible, "Closing a recording window leaves other windows alive");
+        Require(app.FindRecordingWindow(secondSource) is null, "Closed recordings release window ownership");
+        for (int cycle = 0; cycle < 5; cycle++)
+        {
+            var reopened = await app.OpenRecordingAsync(secondSource);
+            reopened.Opacity = 0;
+            reopened.ShowInTaskbar = false;
+            reopened.Close();
+            for (int i = 0; i < 100 && reopened.IsVisible; i++) await Task.Delay(20);
+            Require(!reopened.IsVisible && original.IsVisible, "Repeated recording-window close releases playback resources: " + cycle);
+        }
+
+    }
+
     private static void CheckNearbyReviewButtons()
     {
         var vm = new MainViewModel { DurationUs = 120_000_000 };

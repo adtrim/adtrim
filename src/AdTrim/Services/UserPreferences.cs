@@ -5,6 +5,8 @@ namespace AdTrim.Services;
 
 public sealed record UserPreferences
 {
+    private static readonly SemaphoreSlim SaveGate = new(1, 1);
+
     public bool ShowWaveform { get; init; }
     public bool ShowThumbnails { get; init; }
     public string ExportAcceleration { get; init; } = "automatic";
@@ -25,7 +27,38 @@ public sealed record UserPreferences
         catch (IOException) { return new(); }
         catch (UnauthorizedAccessException) { return new(); }
     }
+    public async Task SaveChangesAsync(UserPreferences previous, string? source)
+    {
+        await SaveGate.WaitAsync();
+        try
+        {
+            var latest = await LoadAsync();
+            var positions = new Dictionary<string, long>(latest.Positions ?? new(), StringComparer.OrdinalIgnoreCase);
+            if (source is not null && Positions.TryGetValue(source, out var position))
+            {
+                positions.Remove(source);
+                positions[source] = position;
+            }
+            while (positions.Count > 20) positions.Remove(positions.Keys.First());
+            await (this with
+            {
+                ShowWaveform = ShowWaveform != previous.ShowWaveform ? ShowWaveform : latest.ShowWaveform,
+                ShowThumbnails = ShowThumbnails != previous.ShowThumbnails ? ShowThumbnails : latest.ShowThumbnails,
+                ExportAcceleration = ExportAcceleration != previous.ExportAcceleration ? ExportAcceleration : latest.ExportAcceleration,
+                Positions = positions,
+            }).WriteAsync();
+        }
+        finally { SaveGate.Release(); }
+    }
+
     public async Task SaveAsync()
+    {
+        await SaveGate.WaitAsync();
+        try { await WriteAsync(); }
+        finally { SaveGate.Release(); }
+    }
+
+    private async Task WriteAsync()
     {
         Directory.CreateDirectory(DataDirectory);
         var path = Path.Combine(DataDirectory, "preferences.json");

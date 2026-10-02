@@ -10,9 +10,11 @@ namespace AdTrim;
 public partial class MainWindow
 {
     private UserPreferences _preferences = new();
+    private UserPreferences _savedPreferences = new();
     private async Task LoadPreferencesAsync(MainViewModel vm)
     {
         _preferences = await UserPreferences.LoadAsync();
+        _savedPreferences = _preferences;
         vm.ShowWaveform = _preferences.ShowWaveform;
         vm.ShowThumbnails = _preferences.ShowThumbnails;
         var desired = new Rect(double.IsFinite(_preferences.Left) ? _preferences.Left : 0,
@@ -36,7 +38,12 @@ public partial class MainWindow
         while (positions.Count > 20) positions.Remove(positions.Keys.First());
         _preferences = _preferences with { ShowWaveform = vm.ShowWaveform, ShowThumbnails = vm.ShowThumbnails,
             Left = Left, Top = Top, Width = Width, Height = Height, Positions = positions };
-        try { await _preferences.SaveAsync(); }
+        try
+        {
+            var snapshot = _preferences;
+            await snapshot.SaveChangesAsync(_savedPreferences, vm.SourcePath);
+            _savedPreferences = snapshot;
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         { vm.StatusOverride = "Preferences could not be saved. Project edits are saved separately."; }
     }

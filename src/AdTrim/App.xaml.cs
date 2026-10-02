@@ -9,14 +9,39 @@ namespace AdTrim;
 
 public partial class App : Application
 {
-    private const string MutexName  = "Global\\AdTrim.SingleInstance.v1";
-    private const string PipeName   = "AdTrim.OpenFile.v1";
+    private static readonly string InstanceKey = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+        Encoding.UTF8.GetBytes(Services.UserPreferences.DataDirectory.ToUpperInvariant())))[..20];
+    private static string MutexName => "Local\\AdTrim.Windows." + InstanceKey;
+    private static string PipeName => "AdTrim.Windows." + InstanceKey;
 
     private Mutex? _singleInstanceMutex;
     private CancellationTokenSource? _pipeServerCts;
 
-    /// <summary>Path passed via launch args, picked up by MainWindow.OnLoaded.</summary>
-    public static string? PendingOpenPath { get; set; }
+    public MainWindow NewWindow(string? path = null)
+    {
+        var window = new MainWindow(path);
+        window.Show();
+        return window;
+    }
+
+    public async Task<MainWindow> OpenRecordingAsync(string path)
+    {
+        path = Path.GetFullPath(path);
+        var existing = FindRecordingWindow(path);
+        if (existing is not null) { existing.BringForward(); return existing; }
+        var empty = Windows.OfType<MainWindow>().FirstOrDefault(w => w.CanReceiveRecording);
+        if (empty is null)
+        {
+            empty = NewWindow(path);
+            await empty.Ready;
+        }
+        else await empty.OpenFileAsync(path);
+        empty.BringForward();
+        return empty;
+    }
+
+    public MainWindow? FindRecordingWindow(string path, MainWindow? except = null)
+        => Windows.OfType<MainWindow>().FirstOrDefault(w => w != except && w.OwnsRecording(path));
 
     public App()
     {
@@ -73,20 +98,18 @@ public partial class App : Application
         _singleInstanceMutex = new Mutex(initiallyOwned: true, name: MutexName, out var createdNew);
         if (!createdNew)
         {
-            if (!string.IsNullOrEmpty(path)) TrySendPathToExistingInstance(path);
+            TrySendPathToExistingInstance(path ?? "");
             Shutdown();
             return;
         }
 
-        if (!string.IsNullOrEmpty(path)) PendingOpenPath = path;
 
         // Start the pipe server so future launches can hand off to us.
         _pipeServerCts = new CancellationTokenSource();
         _ = Task.Run(() => RunPipeServerAsync(_pipeServerCts.Token));
 
         // Open MainWindow - StartupUri is replaced because we want to control bootstrap order.
-        var win = new MainWindow();
-        win.Show();
+        var win = NewWindow(path);
         _ = Task.Run(() => RecoverExportsAsync(win, _pipeServerCts.Token));
     }
 
@@ -132,15 +155,17 @@ public partial class App : Application
     {
         try
         {
-            using var client = new NamedPipeClientStream(".", PipeName, PipeDirection.Out);
+            using var client = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut);
             client.Connect(timeout: 2000);
-            var bytes = Encoding.UTF8.GetBytes(path);
-            client.Write(bytes, 0, bytes.Length);
-            client.Flush();
+            using var writer = new StreamWriter(client, Encoding.UTF8, leaveOpen: true) { AutoFlush = true };
+            writer.WriteLine(path);
+            using var reader = new StreamReader(client, Encoding.UTF8, leaveOpen: true);
+            var acknowledgement = reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            if (acknowledgement != "OK") throw new IOException("The running app did not accept the request.");
         }
         catch
         {
-            // Existing instance died mid-handoff - accept silent drop in V1.
+            MessageBox.Show("AdTrim could not open a window. Please try again.", "Could not open AdTrim", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -151,24 +176,23 @@ public partial class App : Application
             try
             {
                 using var server = new NamedPipeServerStream(
-                    PipeName, PipeDirection.In, maxNumberOfServerInstances: 1,
+                    PipeName, PipeDirection.InOut, maxNumberOfServerInstances: 1,
                     PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
                 await server.WaitForConnectionAsync(ct).ConfigureAwait(false);
 
-                using var reader = new StreamReader(server, Encoding.UTF8);
-                var path = (await reader.ReadToEndAsync(ct).ConfigureAwait(false))?.Trim();
-                if (string.IsNullOrEmpty(path)) continue;
+                using var reader = new StreamReader(server, Encoding.UTF8, leaveOpen: true);
+                var path = await reader.ReadLineAsync(ct).ConfigureAwait(false);
+                if (path is null) continue;
 
                 _ = Current.Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    if (Current.MainWindow is MainWindow w)
-                    {
-                        if (w.WindowState == WindowState.Minimized)
-                            w.WindowState = WindowState.Normal;
-                        w.Activate();
-                        _ = w.OpenFileAsync(path);
-                    }
+                    var app = (App)Current;
+                    if (string.IsNullOrEmpty(path)) app.NewWindow();
+                    else _ = app.OpenRecordingAsync(path);
+
                 }));
+                using var writer = new StreamWriter(server, Encoding.UTF8, leaveOpen: true) { AutoFlush = true };
+                await writer.WriteLineAsync("OK");
             }
             catch (OperationCanceledException) { return; }
             catch { /* per-iteration failure: log later, keep listening */ }

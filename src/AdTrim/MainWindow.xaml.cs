@@ -53,8 +53,24 @@ public partial class MainWindow : Window
 
     private readonly DispatcherTimer _autosaveTimer;
 
-    public MainWindow()
+    private readonly TaskCompletionSource _ready = new();
+    public Task Ready => _ready.Task;
+    private string? _openingPath;
+    private readonly string? _startupPath;
+    public bool CanReceiveRecording => _ready.Task.IsCompletedSuccessfully && !_switching && _openingPath is null
+        && _activeExportDialog is null && DataContext is MainViewModel { IsFileLoaded: false, IsBusy: false };
+    public bool OwnsRecording(string path) => new[] { _openingPath, (DataContext as MainViewModel)?.SourcePath }
+        .Any(p => p is not null && ExportSafety.SameFile(p, path));
+    public void BringForward()
     {
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+    }
+    public MainWindow() : this(null) { }
+    public MainWindow(string? startupPath)
+    {
+        _startupPath = startupPath;
+        _openingPath = startupPath;
         InitializeComponent();
         // Runtime starts empty - the WPF designer uses the design-time
         // `<vm:MainViewModel/>` in XAML for live-preview only.
@@ -251,11 +267,8 @@ public partial class MainWindow : Window
         }
 
         if (DataContext is MainViewModel initialVm) await LoadPreferencesAsync(initialVm);
-        if (App.PendingOpenPath is { } path && File.Exists(path))
-        {
-            App.PendingOpenPath = null;
-            _ = OpenFileAsync(path);
-        }
+        if (_startupPath is { } path) await OpenFileAsync(path);
+        _ready.TrySetResult();
     }
 
     private void OnPreviewPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -588,6 +601,18 @@ public partial class MainWindow : Window
     }
 
     public async Task OpenFileAsync(string path)
+    {
+        if (!File.Exists(path)) { _openingPath = null; return; }
+        path = Path.GetFullPath(path);
+        if (Application.Current is App app && app.FindRecordingWindow(path, this) is { } existing)
+        { existing.BringForward(); _openingPath = null; return; }
+        if (_switching) return;
+        _openingPath = path;
+        try { await LoadRecordingAsync(path); }
+        finally { _openingPath = null; }
+    }
+
+    private async Task LoadRecordingAsync(string path)
     {
         if (!File.Exists(path)) return;
         if (DataContext is not MainViewModel vm) return;
@@ -937,6 +962,8 @@ public partial class MainWindow : Window
     {
         if (_allowClose)
         {
+            _autosaveTimer.Stop();
+            _autosaveTimer.Tick -= OnAutosaveTick;
             // mpv must release its video output before WPF destroys the host HWNDs.
             _previewAfter.PropertyChanged -= OnPreviewPropertyChanged;
             _previewBefore.PropertyChanged -= OnPreviewPropertyChanged;
@@ -1007,6 +1034,9 @@ public partial class MainWindow : Window
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control)
+        { OnNewWindow(this, new RoutedEventArgs()); e.Handled = true; return; }
+
         if (DataContext is not MainViewModel vm) return;
 
         var ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
@@ -1358,6 +1388,8 @@ public partial class MainWindow : Window
     // -------------------------------------------------------------------
     // Menu / drag-drop / window controls
     // -------------------------------------------------------------------
+
+    private void OnNewWindow(object sender, RoutedEventArgs e) => ((App)Application.Current).NewWindow();
 
     private void OnOpenFile(object sender, RoutedEventArgs e)
     {

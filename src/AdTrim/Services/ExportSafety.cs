@@ -8,15 +8,20 @@ public static class ExportSafety
 {
     public static void EnsureDifferentFiles(string source, string destination)
     {
+        if (SameFile(source, destination))
+            throw new ExportException("The output cannot replace the source recording, including through another path.");
+    }
+
+    public static bool SameFile(string source, string destination)
+    {
         if (string.Equals(Path.GetFullPath(source), Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase))
-            throw new ExportException("The output cannot replace the source recording.");
-        if (!File.Exists(destination) || !OperatingSystem.IsWindows()) return;
+            return true;
+        if (!File.Exists(source) || !File.Exists(destination) || !OperatingSystem.IsWindows()) return false;
         using var a = File.OpenHandle(source, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         using var b = File.OpenHandle(destination, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         if (!GetFileInformationByHandle(a, out var ai) || !GetFileInformationByHandle(b, out var bi))
-            throw new ExportException("Could not verify source and destination file identities.");
-        if (ai.Volume == bi.Volume && ai.IndexHigh == bi.IndexHigh && ai.IndexLow == bi.IndexLow)
-            throw new ExportException("The output refers to the source recording through another path.");
+            throw new ExportException("Could not verify file identities.");
+        return ai.Volume == bi.Volume && ai.IndexHigh == bi.IndexHigh && ai.IndexLow == bi.IndexLow;
     }
 
     [StructLayout(LayoutKind.Sequential)]

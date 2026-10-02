@@ -119,6 +119,7 @@
 
         <Menu Grid.Column="0" VerticalAlignment="Stretch" Padding="4,0">
           <MenuItem Header="_File" Style="{StaticResource MenuBarItem}">
+            <MenuItem Header="New window" InputGestureText="Ctrl+N" Style="{StaticResource DropdownMenuItem}" Click="OnNewWindow"/>
             <MenuItem Header="Open…"             InputGestureText="Ctrl+O"        Style="{StaticResource DropdownMenuItem}" Click="OnOpenFile"/>
             <MenuItem Header="Open Recent"       InputGestureText="▸"             Style="{StaticResource DropdownMenuItem}" IsEnabled="False"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
