@@ -26,6 +26,62 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
     private IntPtr _wid;                      // child HWND mpv renders into
     private string? _currentPath;
     private bool _initialized;
+    private volatile bool _loading;
+    private int _audioStream = -1;
+    private readonly object _seekLock = new();
+    private bool _stepBackAfterSeek;
+    private volatile bool _seeking;
+    public bool IsSeeking => _seeking;
+    public long? PreviousFrameTargetUs { get; private set; }
+
+    private void BeginSeek()
+    {
+        _stepBackAfterSeek = false;
+        PreviousFrameTargetUs = null;
+        _seeking = true;
+    }
+
+    public void SeekPreviousFrame(long timeUs, long? knownPredecessorUs = null)
+    {
+        lock (_seekLock)
+        {
+            if (_ctx == IntPtr.Zero) return;
+            BeginSeek();
+            PreviousFrameTargetUs = timeUs;
+            _stepBackAfterSeek = knownPredecessorUs is null;
+            Command(_ctx, "seek", ((knownPredecessorUs ?? timeUs) / 1_000_000m).ToString("0.######", CultureInfo.InvariantCulture), "absolute+exact");
+        }
+    }
+    public bool IsLoading => _loading;
+    public event EventHandler<string>? PlaybackFailed;
+    public void SelectAudioStream(int streamIndex)
+    {
+        _audioStream = streamIndex;
+        ApplyAudioStream();
+    }
+    private void ApplyAudioStream()
+    {
+        if (_ctx == IntPtr.Zero) return;
+        if (_audioStream < 0) { mpv_set_property_string(_ctx, "aid", "no"); return; }
+        if (mpv_get_property(_ctx, "track-list/count", MpvFormat.Int64, out long count) < 0) return;
+        for (int i = 0; i < count; i++)
+        {
+            if (mpv_get_property(_ctx, $"track-list/{i}/ff-index", MpvFormat.Int64, out long index) == 0
+                && index == _audioStream
+                && mpv_get_property(_ctx, $"track-list/{i}/id", MpvFormat.Int64, out long id) == 0)
+            { mpv_set_property_string(_ctx, "aid", id.ToString(CultureInfo.InvariantCulture)); return; }
+        }
+    }
+    public void Stop()
+    {
+        lock (_seekLock)
+        {
+            _stepBackAfterSeek = false;
+            PreviousFrameTargetUs = null;
+            if (_ctx != IntPtr.Zero) Command(_ctx, "stop");
+            _loading = false;
+        }
+    }
     private CancellationTokenSource? _eventLoopCts;
     private Thread? _eventLoop;
 
@@ -121,6 +177,12 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
         mpv_set_option_string(_ctx, "force-window", "no");
         // Hide on-screen-controller (we have our own transport bar).
         mpv_set_option_string(_ctx, "osc", "no");
+        // Editing previews show source pictures without subtitle/CC overlays.
+        mpv_set_option_string(_ctx, "sid", "no");
+        mpv_set_option_string(_ctx, "secondary-sid", "no");
+        mpv_set_option_string(_ctx, "sub-auto", "no");
+        mpv_set_option_string(_ctx, "sub-visibility", "no");
+        mpv_set_option_string(_ctx, "secondary-sub-visibility", "no");
         // No log spam in stderr (libmpv would otherwise write a lot).
         mpv_set_option_string(_ctx, "msg-level", "all=no");
         // Default to fast seek. Toggle via SetFastSeek for frame-precise work.
@@ -134,6 +196,9 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
         mpv_set_option_string(_ctx, "mute", _muted ? "yes" : "no");
         // Hardware decoding when available (huge speedup for MPEG-2 1080i).
         mpv_set_option_string(_ctx, "hwdec", "auto-safe");
+        mpv_set_option_string(_ctx, "demuxer-max-bytes", "33554432");
+        mpv_set_option_string(_ctx, "demuxer-max-back-bytes", "8388608");
+        mpv_set_option_string(_ctx, "demuxer-readahead-secs", "2");
         // Audio device: leave default. Video output: WPF host = `gpu` is the
         // modern default and works in embedded windows.
         mpv_set_option_string(_ctx, "vo", "gpu");
@@ -186,12 +251,35 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
                         break;
                     }
 
+                    case MpvEventId.EndFile when ev.Data != IntPtr.Zero:
+                    {
+                        // mpv_event_end_file begins with reason and error.
+                        var reason = Marshal.ReadInt32(ev.Data);
+                        if (reason == 4) { _loading = false; PlaybackFailed?.Invoke(this, "Playback could not load this timeline."); }
+                        break;
+                    }
                     case MpvEventId.FileLoaded:
+                        ApplyAudioStream();
+                        break;
                     case MpvEventId.PlaybackRestart:
                     {
-                        // Sync IsPlaying defensively.
-                        if (mpv_get_property(_ctx, "pause", MpvFormat.Flag, out int paused) == 0)
-                            IsPlaying = paused == 0;
+                        lock (_seekLock)
+                        {
+                            _loading = false;
+                            if (_stepBackAfterSeek)
+                            {
+                                _stepBackAfterSeek = false;
+                                Command(_ctx, "frame-back-step");
+                                break;
+                            }
+                            _seeking = false;
+                            if (mpv_get_property(_ctx, "time-pos", MpvFormat.Double, out double position) == 0
+                                && double.IsFinite(position))
+                                PositionUs = (long)Math.Round(position * 1_000_000);
+                            if (mpv_get_property(_ctx, "pause", MpvFormat.Flag, out int paused) == 0)
+                                IsPlaying = paused == 0;
+                            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSeeking)));
+                        }
                         break;
                     }
                 }
@@ -208,7 +296,7 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
             case ObsTimePos when prop.Format == MpvFormat.Double:
             {
                 var sec = Marshal.PtrToStructure<double>(prop.Data);
-                if (double.IsFinite(sec))
+                if (!_loading && !_seeking && double.IsFinite(sec))
                     PositionUs = (long)Math.Round(sec * 1_000_000.0);
                 break;
             }
@@ -228,22 +316,35 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
-    public void Open(string path)
+    public void Open(string path, long startUs = 0, bool play = false, bool buffered = false)
     {
-        if (!_initialized) Initialize();
-        _currentPath = path;
-        // mpv's "loadfile" command - args are <path> [<flags>]. "replace"
-        // (the default) loads + plays-or-pauses according to the `pause`
-        // property, which we set to yes during Initialize.
-        var rc = Command(_ctx, "loadfile", path, "replace");
-        if (rc < 0) throw new InvalidOperationException($"mpv loadfile failed: {rc}");
+        lock (_seekLock)
+        {
+            BeginSeek();
+            if (!_initialized) Initialize();
+            _currentPath = path;
+            _loading = true;
+            mpv_set_property_string(_ctx, "pause", play ? "no" : "yes");
+            mpv_set_property_string(_ctx, "start", (startUs / 1_000_000m).ToString("0.######", CultureInfo.InvariantCulture));
+            mpv_set_property_string(_ctx, "cache", buffered ? "yes" : "auto");
+            // mpv's "loadfile" command - args are <path> [<flags>]. "replace"
+            // (the default) loads + plays-or-pauses according to the `pause`
+            // property, which we set to yes during Initialize.
+            var rc = Command(_ctx, "loadfile", path, "replace");
+            if (rc < 0) throw new InvalidOperationException($"mpv loadfile failed: {rc}");
+        }
     }
 
     public void Play()
     {
-        if (_ctx == IntPtr.Zero) return;
-        int unpause = 0;
-        mpv_set_property(_ctx, "pause", MpvFormat.Flag, ref unpause);
+        lock (_seekLock)
+        {
+            _stepBackAfterSeek = false;
+            PreviousFrameTargetUs = null;
+            if (_ctx == IntPtr.Zero) return;
+            int unpause = 0;
+            mpv_set_property(_ctx, "pause", MpvFormat.Flag, ref unpause);
+        }
     }
 
     public void Pause()
@@ -261,11 +362,15 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
 
     public void SeekUs(long timeUs)
     {
-        if (_ctx == IntPtr.Zero) return;
-        var sec = timeUs / 1_000_000.0;
-        // mpv "seek <time> absolute" - seeks to absolute position in seconds.
-        // Honors the current `hr-seek` setting (we configured it on init).
-        Command(_ctx, "seek", sec.ToString("0.######", CultureInfo.InvariantCulture), "absolute");
+        lock (_seekLock)
+        {
+            BeginSeek();
+            if (_ctx == IntPtr.Zero) return;
+            var sec = timeUs / 1_000_000.0;
+            // mpv "seek <time> absolute" - seeks to absolute position in seconds.
+            // Honors the current `hr-seek` setting (we configured it on init).
+            Command(_ctx, "seek", sec.ToString("0.######", CultureInfo.InvariantCulture), "absolute");
+        }
     }
 
     /// <summary>
@@ -278,9 +383,13 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
     /// </summary>
     public void SeekUsExact(long timeUs)
     {
-        if (_ctx == IntPtr.Zero) return;
-        var sec = timeUs / 1_000_000.0;
-        Command(_ctx, "seek", sec.ToString("0.######", CultureInfo.InvariantCulture), "absolute+exact");
+        lock (_seekLock)
+        {
+            BeginSeek();
+            if (_ctx == IntPtr.Zero) return;
+            var sec = timeUs / 1_000_000.0;
+            Command(_ctx, "seek", sec.ToString("0.######", CultureInfo.InvariantCulture), "absolute+exact");
+        }
     }
 
     /// <summary>
@@ -297,8 +406,14 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
     /// </summary>
     public void StepFrameForward()
     {
-        if (_ctx == IntPtr.Zero) return;
-        Command(_ctx, "frame-step");
+        lock (_seekLock)
+        {
+            _stepBackAfterSeek = false;
+            PreviousFrameTargetUs = null;
+            _seeking = false;
+            if (_ctx == IntPtr.Zero) return;
+            Command(_ctx, "frame-step");
+        }
     }
 
     /// <summary>
@@ -309,8 +424,12 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
     /// </summary>
     public void StepFrameBack()
     {
-        if (_ctx == IntPtr.Zero) return;
-        Command(_ctx, "frame-back-step");
+        lock (_seekLock)
+        {
+            BeginSeek();
+            if (_ctx == IntPtr.Zero) return;
+            Command(_ctx, "frame-back-step");
+        }
     }
 
     public void Dispose()

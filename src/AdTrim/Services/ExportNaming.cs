@@ -10,6 +10,19 @@ namespace AdTrim.Services;
 /// </summary>
 public static class ExportNaming
 {
+    private static readonly Regex EpisodeNameRx = new(
+        @"^(?<show>.+?)(?: \(\d{4}\))? - S(?<season>[0-9]{1,3})E(?<episode>[0-9]{1,3}) - (?<title>.+)$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    public static (string Title, string Subtitle) DisplayTitles(string? sourcePath)
+    {
+        var name = Path.GetFileNameWithoutExtension(sourcePath) ?? "Video";
+        var match = EpisodeNameRx.Match(name);
+        if (!match.Success) return (name, "");
+        return ($"{match.Groups["show"].Value} · Season {int.Parse(match.Groups["season"].Value)}, Episode {int.Parse(match.Groups["episode"].Value)}",
+            match.Groups["title"].Value);
+    }
+
     private static readonly Regex S00E00Rx = new(
         @"\b(S\d{2}E\d{2})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 

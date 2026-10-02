@@ -11,7 +11,7 @@ namespace AdTrim.Encoders;
 /// </summary>
 public sealed class LibX264EncoderStrategy : IEncoderStrategy
 {
-    public string DisplayName => "libx264 (V1)";
+    public string DisplayName => "Software (H.264)";
 
     // Coarse pre-roll before the fine accurate seek. Must exceed the source's
     // worst-case GOP length; MPEG-2 broadcast captures typically use ~0.5s
@@ -24,6 +24,13 @@ public sealed class LibX264EncoderStrategy : IEncoderStrategy
         ExportSegment segment,
         int primaryAudioStreamIndex,
         string outputPath)
+        => BuildArgs(sourcePath, segment, primaryAudioStreamIndex, outputPath,
+            Array.Empty<string>(), "bwdif=mode=send_frame:parity=auto:deint=all",
+            new[] { "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p" });
+
+    internal static IReadOnlyList<string> BuildArgs(string sourcePath, ExportSegment segment,
+        int primaryAudioStreamIndex, string outputPath, IReadOnlyList<string> deviceArgs,
+        string filter, IReadOnlyList<string> encoderArgs)
     {
         // Two-stage seek: coarse `-ss` *before* `-i` jumps cheaply to a
         // keyframe ~PreRollSec before the cut; fine `-ss` *after* `-i` then
@@ -48,7 +55,7 @@ public sealed class LibX264EncoderStrategy : IEncoderStrategy
         var fineStr   = fine  .ToString("0.000000", CultureInfo.InvariantCulture);
         var durStr    = dur   .ToString("0.000000", CultureInfo.InvariantCulture);
 
-        return new[]
+        var args = new List<string>
         {
             "-y", "-hide_banner", "-nostats",
             // Machine-readable progress on stdout (key=value records every
@@ -56,6 +63,9 @@ public sealed class LibX264EncoderStrategy : IEncoderStrategy
             // updates so the UI doesn't sit at "Encoding part X/Y" for
             // minutes with no movement. Costs nothing if no one listens.
             "-progress", "pipe:1",
+        };
+        args.AddRange(deviceArgs);
+        args.AddRange(new[] {
             "-ss", coarseStr,
             "-i", sourcePath,
             "-ss", fineStr,
@@ -63,13 +73,15 @@ public sealed class LibX264EncoderStrategy : IEncoderStrategy
             "-map", "0:v:0",
             "-map", $"0:{primaryAudioStreamIndex}",
             "-map_chapters", "-1",
-            "-vf", "bwdif=mode=send_frame:parity=auto:deint=all",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "20",
-            "-pix_fmt", "yuv420p",
+            "-vf", filter,
+        });
+        args.AddRange(encoderArgs);
+        args.AddRange(new[] {
             "-c:a", "copy",
             "-avoid_negative_ts", "make_zero",
             "-f", "mp4",
             outputPath,
-        };
+        });
+        return args;
     }
 }

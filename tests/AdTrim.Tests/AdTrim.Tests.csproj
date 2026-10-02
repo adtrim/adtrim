@@ -56,4 +56,18 @@
     <Compile Include="..\..\src\AdTrim\Services\ExportService.cs"         Link="Services\ExportService.cs"/>
   </ItemGroup>
 
+  <ItemGroup><Compile Include="..\..\src\AdTrim\Services\ExportSafety.cs" Link="Services\ExportSafety.cs" /></ItemGroup>
+  <ItemGroup><Compile Include="..\..\src\AdTrim\Models\KeptTimeline.cs" Link="Models\KeptTimeline.cs"/><Compile Include="..\..\src\AdTrim\Services\ProjectSession.cs" Link="Services\ProjectSession.cs"/></ItemGroup>
+<ItemGroup>
+    <Compile Include="..\..\src\AdTrim\Services\HardwareExportException.cs" Link="Services\HardwareExportException.cs" />
+    <Compile Include="..\..\src\AdTrim\Encoders\HardwareEncoderStrategy.cs" Link="Encoders\HardwareEncoderStrategy.cs" />
+    <Compile Include="..\..\src\AdTrim\Services\GraphicsAdapters.cs" Link="Services\GraphicsAdapters.cs" />
+    <Compile Include="..\..\src\AdTrim\Services\HardwareEncoderDetection.cs" Link="Services\HardwareEncoderDetection.cs" />
+</ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\AdTrim\Services\ExportWorkspace.cs" Link="Services\ExportWorkspace.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\ExportDiskGuard.cs" Link="Services\ExportDiskGuard.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\UserPreferences.cs" Link="Services\UserPreferences.cs"/>
+  </ItemGroup>
 </Project>

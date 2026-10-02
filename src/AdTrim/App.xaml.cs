@@ -87,6 +87,38 @@ public partial class App : Application
         // Open MainWindow - StartupUri is replaced because we want to control bootstrap order.
         var win = new MainWindow();
         win.Show();
+        _ = Task.Run(() => RecoverExportsAsync(win, _pipeServerCts.Token));
+    }
+
+    private async Task RecoverExportsAsync(MainWindow window, CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+            var remaining = await Services.ExportWorkspace.RecoverAsync(ct: ct);
+            if (remaining == 0 || ct.IsCancellationRequested) return;
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (window.DataContext is ViewModels.MainViewModel vm)
+                    vm.Banner = new Models.BannerInfo(Models.StatusKind.Warning,
+                        "Temporary export files remain.",
+                        "Some files could not be cleaned up. AdTrim will retry the next time it starts.",
+                        Array.Empty<Models.BannerAction>());
+            });
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            WriteCrashLog("Export cleanup", ex);
+            if (!ct.IsCancellationRequested && !Dispatcher.HasShutdownStarted)
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    if (window.DataContext is ViewModels.MainViewModel vm)
+                        vm.Banner = new Models.BannerInfo(Models.StatusKind.Warning,
+                            "Temporary export cleanup could not finish.",
+                            "AdTrim will retry the next time it starts.", Array.Empty<Models.BannerAction>());
+                });
+        }
     }
 
     private void OnExit(object sender, ExitEventArgs e)

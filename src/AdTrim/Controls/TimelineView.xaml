@@ -48,6 +48,9 @@
         <Canvas x:Name="WaveformCanvas"/>
       </Border>
 
+      <Canvas x:Name="ReviewHighlightCanvas" Grid.Row="0" Grid.RowSpan="6"
+              IsHitTestVisible="False" ClipToBounds="False"/>
+
       <!-- Playhead overlay (spans all rows, sits above everything) -->
       <Grid Grid.Row="0" Grid.RowSpan="6" IsHitTestVisible="False" ClipToBounds="False">
         <Canvas x:Name="PlayheadCanvas" ClipToBounds="False"/>

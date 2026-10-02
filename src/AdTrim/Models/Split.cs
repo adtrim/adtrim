@@ -12,8 +12,13 @@ public sealed class Split : INotifyPropertyChanged
     private SplitSource _source = SplitSource.Chapter;
     private bool _confirmed;
     private bool _isSelected;
-    private bool _showAudition;
     private string? _label;
+    private string? _chapterTitle;
+    public string? ChapterTitle
+    {
+        get => _chapterTitle;
+        set => Set(ref _chapterTitle, value);
+    }
 
     public string Id
     {
@@ -56,12 +61,6 @@ public sealed class Split : INotifyPropertyChanged
     {
         get => _isSelected;
         set => Set(ref _isSelected, value);
-    }
-
-    public bool ShowAudition
-    {
-        get => _showAudition;
-        set => Set(ref _showAudition, value);
     }
 
     /// <summary>Optional label - used for Start/End bookend markers.</summary>

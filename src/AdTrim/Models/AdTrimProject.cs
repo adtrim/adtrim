@@ -10,7 +10,8 @@ public sealed record PersistedSplit(
     SplitSource Source,
     long? OriginalTimeUs,
     Confidence? Confidence,
-    bool Confirmed);
+    bool Confirmed,
+    string? ChapterTitle = null);
 
 public enum SidecarLocation { NextToSource, AppdataFallback }
 
@@ -25,7 +26,8 @@ public sealed record AdTrimProject(
     MediaInfo Media,
     List<PersistedSplit> Splits,
     List<string> ExcludedSegmentIds,
-    SidecarLocation SidecarLocation)
+    SidecarLocation SidecarLocation,
+    string? StartChapterTitle = null)
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 }

@@ -3,7 +3,7 @@
 ; Builds a per-user, no-UAC installer that:
 ;   1. Copies the published EXE + binaries from
 ;      src\AdTrim\bin\Release\net10.0-windows\win-x64\publish\
-;      into the user-chosen install dir (defaults to %LOCALAPPDATA%\AdTrim).
+;      into the user-chosen install dir (defaults to %LOCALAPPDATA%\Programs\AdTrim).
 ;   2. Registers an "Edit with AdTrim" right-click verb on .mp4 files
 ;      under HKCU\Software\Classes\SystemFileAssociations\.mp4 - so the verb
 ;      appears alongside whatever default app you have for .mp4 without
@@ -35,8 +35,8 @@ RequestExecutionLevel user
 Unicode true
 
 Name "${APPNAME}"
-OutFile "AdTrim-Setup-v${APPVERSION}.exe"
-InstallDir "$LOCALAPPDATA\${APPNAME}"
+OutFile ".installers\AdTrim-Setup-v${APPVERSION}.exe"
+InstallDir "$LOCALAPPDATA\Programs\${APPNAME}"
 InstallDirRegKey HKCU "Software\${APPNAME}" "InstallDir"
 
 ; Per-file LZMA: ~30-60 sec compression, installer ~300 MB.
@@ -64,6 +64,10 @@ SetCompressor lzma
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "English"
+
+; InstallDirRegKey keeps existing installations in place, including the old
+; default. The explicit uninstall file list preserves user data there.
+; Never run the old uninstaller during an upgrade.
 
 Section "Install"
   SetOutPath "$INSTDIR"
@@ -105,15 +109,25 @@ Section "Install"
 
   ; --- Bundle the uninstaller ---
   WriteUninstaller "$INSTDIR\Uninstall.exe"
+  ; Replace the destructive legacy uninstaller without running it.
+  IfFileExists "$LOCALAPPDATA\${APPNAME}\Uninstall.exe" 0 +2
+    WriteUninstaller "$LOCALAPPDATA\${APPNAME}\Uninstall.exe"
 SectionEnd
 
 Section "Uninstall"
   ; Reverse the install in the opposite order: registry first (cheap and
   ; visible), then file tree (slow), then Start Menu folder.
+  ReadRegStr $0 HKCU "Software\${APPNAME}" "InstallDir"
+  StrCmp $0 $INSTDIR 0 skipRegistration
   DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\.mp4\shell\EditWithAdTrim"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
   DeleteRegKey HKCU "Software\${APPNAME}"
+  Delete "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk"
+  Delete "$SMPROGRAMS\${APPNAME}\Uninstall ${APPNAME}.lnk"
+  RMDir "$SMPROGRAMS\${APPNAME}"
 
-  RMDir /r "$INSTDIR"
-  RMDir /r "$SMPROGRAMS\${APPNAME}"
+  skipRegistration:
+  !include "src\AdTrim\obj\uninstall-files.nsh"
+  Delete "$INSTDIR\Uninstall.exe"
+  RMDir "$INSTDIR"
 SectionEnd

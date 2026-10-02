@@ -19,8 +19,7 @@ public sealed record CachedFrame(long TimeUs, string ImagePath);
 /// Cache strategy:
 ///   - Index keyed by (sourceHash, frameTimeUs) - not by splitId. Deleting
 ///     or moving a split doesn't orphan the cache; nearby seeks still benefit.
-///   - Pre-extracts a slightly wider window (±3 s) than audition shows
-///     (±2 s) so small marker drags stay within cached range.
+///   - Pre-extracts a ±3 s window so small marker drags stay within cached range.
 ///   - LRU eviction at a budget of <see cref="MaxBudgetBytes"/>.
 ///   - Identity = (size, mtime); reusing across renames is fine, contents
 ///     must match.

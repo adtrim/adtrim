@@ -15,7 +15,7 @@ public class ProjectStoreTests : IDisposable
 
     public ProjectStoreTests()
     {
-        _testDir = Path.Combine(Path.GetTempPath(), "CseTest-" + Guid.NewGuid().ToString("n").Substring(0, 8));
+        _testDir = Path.Combine(AppContext.BaseDirectory, "CseTest-" + Guid.NewGuid().ToString("n").Substring(0, 8));
         Directory.CreateDirectory(_testDir);
 
         _sourcePath = Path.Combine(_testDir, "source.mp4");
@@ -31,10 +31,63 @@ public class ProjectStoreTests : IDisposable
             PrimaryAudioIndex: 1);
     }
 
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"schema_version\":1}")]
+    [InlineData("null")]
+    public void IncompleteJson_IsReportedWithoutThrowing(string json)
+    {
+        var store = new ProjectStore(Path.Combine(_testDir, "fallback"));
+        File.WriteAllText(store.SidecarPathFor(_sourcePath), json);
+        Assert.Equal(SidecarLoadStatus.Corrupt, store.Load(_sourcePath, _media).Status);
+    }
+
+    [Fact]
+    public void UnsupportedProject_IsNotOverwritten()
+    {
+        var store = new ProjectStore(Path.Combine(_testDir, "fallback"));
+        var path = store.SidecarPathFor(_sourcePath);
+        const string future = "{\"schema_version\":999}";
+        File.WriteAllText(path, future);
+        Assert.Equal(SidecarLoadStatus.UnsupportedVersion, store.Load(_sourcePath, _media).Status);
+        var project = new AdTrimProject(2, _sourcePath, ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs),
+            _media, new(), new(), SidecarLocation.NextToSource);
+        var fallback = store.Save(project);
+        try { Assert.Equal(future, File.ReadAllText(path)); Assert.NotEqual(path, fallback); }
+        finally { File.Delete(fallback); }
+    }
+
+    [Fact]
+    public void NewerFallback_IsPreferredOverOlderPrimary()
+    {
+        var store = new ProjectStore(Path.Combine(_testDir, "fallback"));
+        var project = new AdTrimProject(2, _sourcePath, ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs),
+            _media, new(), new(), SidecarLocation.NextToSource);
+        var primary = store.Save(project);
+        var fallback = store.AppDataFallbackPathFor(_sourcePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(fallback)!);
+        File.Copy(primary, fallback, true);
+        File.SetLastWriteTimeUtc(primary, DateTime.UtcNow.AddMinutes(-1));
+        try { Assert.Contains("fallback", store.Load(_sourcePath, _media).Message); }
+        finally { File.Delete(fallback); }
+    }
+
+    [Fact]
+    public void VersionOne_LoadsAndChapterTitlesRoundtripInVersionTwo()
+    {
+        var store = new ProjectStore(Path.Combine(_testDir, "fallback"));
+        var project = new AdTrimProject(1, _sourcePath, ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs),
+            _media, new() { new("a", 1_000_000, SplitSource.Chapter, null, null, false, "Commercial 1") }, new(), SidecarLocation.NextToSource);
+        store.Save(project);
+        Assert.Equal("Commercial 1", store.Load(_sourcePath, _media).Project!.Splits[0].ChapterTitle);
+        store.Save(project with { SchemaVersion = 2 });
+        Assert.Equal(2, store.Load(_sourcePath, _media).Project!.SchemaVersion);
+    }
+
     [Fact]
     public void SaveThenLoad_Roundtrips()
     {
-        var store = new ProjectStore();
+        var store = new ProjectStore(Path.Combine(_testDir, "fallback"));
         var fp = ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs);
         var splits = new List<PersistedSplit>
         {
@@ -63,7 +116,7 @@ public class ProjectStoreTests : IDisposable
     [Fact]
     public void Load_DurationMismatch_IsFingerprintMismatch()
     {
-        var store = new ProjectStore();
+        var store = new ProjectStore(Path.Combine(_testDir, "fallback"));
         var fp = ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs);
         var proj = new AdTrimProject(
             AdTrimProject.CurrentSchemaVersion, _sourcePath, fp, _media,
@@ -79,7 +132,7 @@ public class ProjectStoreTests : IDisposable
     [Fact]
     public void Load_MtimeDrift_LoadsWithWarning()
     {
-        var store = new ProjectStore();
+        var store = new ProjectStore(Path.Combine(_testDir, "fallback"));
         var fp = ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs);
         var proj = new AdTrimProject(
             AdTrimProject.CurrentSchemaVersion, _sourcePath, fp, _media,
@@ -96,7 +149,7 @@ public class ProjectStoreTests : IDisposable
     [Fact]
     public void Load_NoSidecar_ReturnsMissing()
     {
-        var store = new ProjectStore();
+        var store = new ProjectStore(Path.Combine(_testDir, "fallback"));
         var result = store.Load(_sourcePath, _media);
         result.Status.Should().Be(SidecarLoadStatus.Missing);
     }
@@ -104,7 +157,7 @@ public class ProjectStoreTests : IDisposable
     [Fact]
     public void Save_AtomicWriteLeavesNoTmpFile()
     {
-        var store = new ProjectStore();
+        var store = new ProjectStore(Path.Combine(_testDir, "fallback"));
         var fp = ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs);
         var proj = new AdTrimProject(
             AdTrimProject.CurrentSchemaVersion, _sourcePath, fp, _media,
@@ -117,7 +170,7 @@ public class ProjectStoreTests : IDisposable
     [Fact]
     public void CandidateSidecarPathsFor_IncludesPrimaryAndFallback()
     {
-        var store = new ProjectStore();
+        var store = new ProjectStore(Path.Combine(_testDir, "fallback"));
         var paths = store.CandidateSidecarPathsFor(_sourcePath).ToList();
 
         paths.Should().HaveCount(2);

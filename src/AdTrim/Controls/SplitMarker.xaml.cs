@@ -44,16 +44,6 @@ public partial class SplitMarker : UserControl
         set => SetValue(IsSelectedProperty, value);
     }
 
-    public static readonly DependencyProperty ShowAuditionProperty = DependencyProperty.Register(
-        nameof(ShowAudition), typeof(bool), typeof(SplitMarker),
-        new PropertyMetadata(false));
-
-    public bool ShowAudition
-    {
-        get => (bool)GetValue(ShowAuditionProperty);
-        set => SetValue(ShowAuditionProperty, value);
-    }
-
     public static readonly DependencyProperty LabelProperty = DependencyProperty.Register(
         nameof(Label), typeof(string), typeof(SplitMarker),
         new PropertyMetadata(null));

@@ -26,7 +26,7 @@ REM and trimming silently breaks both at runtime.
 setlocal
 
 set "PROJECT=%~dp0src\AdTrim\AdTrim.csproj"
-set "OUTDIR=%~dp0src\AdTrim\bin\Release\net10.0-windows\win-x64\publish"
+set "ADTRIM_PUBLISH_DIR=%~dp0src\AdTrim\bin\Release\net10.0-windows\win-x64\publish"
 
 REM ffmpeg/ffprobe are bundled from the project's own binaries tree - the
 REM single source for both dev and release builds. The csproj Content rule
@@ -52,14 +52,14 @@ REM the current build -- so after a project rename (e.g. ComSkipEditor to
 REM AdTrim), the OLD assembly's 450 MB self-contained .exe lingers next
 REM to the new one and NSIS bundles both, inflating the installer. A full
 REM wipe is cheap relative to the publish itself and prevents the trap.
-if exist "%OUTDIR%" (
+if exist "%ADTRIM_PUBLISH_DIR%" (
   echo Cleaning previous publish output...
-  rmdir /s /q "%OUTDIR%"
+  rmdir /s /q "%ADTRIM_PUBLISH_DIR%"
 )
 
 echo Publishing AdTrim (self-contained, single-file, ReadyToRun)...
 echo Source:  %PROJECT%
-echo Output:  %OUTDIR%
+echo Output:  %ADTRIM_PUBLISH_DIR%
 echo FFmpeg:  %FFMPEG_DIR%
 echo.
 
@@ -77,25 +77,27 @@ REM ffmpeg + ffprobe land in the output via the csproj Content rule (the same
 REM mechanism that bundles libmpv). The version gate above already validated
 REM the source tree, so sanity-check they made it across; a miss means an
 REM empty source tree.
-if not exist "%OUTDIR%\binaries\ffmpeg\win-x64\ffmpeg.exe" (
-  echo WARNING: ffmpeg.exe is missing from the publish output.
+if not exist "%ADTRIM_PUBLISH_DIR%\binaries\ffmpeg\win-x64\ffmpeg.exe" (
+  echo ERROR: ffmpeg.exe is missing from the publish output.
   echo          binaries\ffmpeg\win-x64\ffmpeg.exe wasn't found in the source tree.
   echo          See binaries\README.md for the one-time install.
+  exit /b 1
 )
 
 REM Sanity-check libmpv landed too - copied automatically via the csproj
 REM Content rule from source\binaries\mpv\win-x64\. If it's missing,
 REM the EXE will crash at startup with a clearer error from LibMpv.EnsureLoaded.
-if not exist "%OUTDIR%\binaries\mpv\win-x64\libmpv-2.dll" (
-  echo WARNING: libmpv-2.dll is missing from the publish output.
+if not exist "%ADTRIM_PUBLISH_DIR%\binaries\mpv\win-x64\libmpv-2.dll" (
+  echo ERROR: libmpv-2.dll is missing from the publish output.
   echo          The source tree's binaries\mpv\win-x64\libmpv-2.dll wasn't found.
   echo          See binaries\README.md for the one-time install.
+  exit /b 1
 )
 
 echo.
 echo Publish complete.
 echo Copy this folder anywhere (e.g. C:\Tools\AdTrim\) and run AdTrim.exe:
-echo   %OUTDIR%
+echo   %ADTRIM_PUBLISH_DIR%
 echo.
 exit /b 0
 

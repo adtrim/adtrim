@@ -127,7 +127,7 @@ public sealed class ExportPartItem : INotifyPropertyChanged
 ///   Warning  : source mtime drifted but size + duration match ·
 ///              splits within 1s but non-zero apart.
 /// </summary>
-public sealed class ExportDialogViewModel : INotifyPropertyChanged
+public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
 {
     private readonly MainViewModel _project;
     private readonly MediaInfo? _media;
@@ -175,7 +175,8 @@ public sealed class ExportDialogViewModel : INotifyPropertyChanged
     /// <summary>If true, MainWindow deletes the <c>.adt.json</c> sidecar
     /// after a successful export. Off by default so users keep their split
     /// history; turning it on is a "I'm done with this file" affordance.</summary>
-    public bool DeleteSidecarAfterExport { get; set; }
+    private bool _deleteSidecarAfterExport;
+    public bool DeleteSidecarAfterExport { get => _deleteSidecarAfterExport; set => Set(ref _deleteSidecarAfterExport, value); }
 
     /// <summary>Inline-rendered validation results. Updated by Validate().</summary>
     public ObservableCollection<ExportValidation> ValidationIssues { get; } = new();
@@ -194,6 +195,7 @@ public sealed class ExportDialogViewModel : INotifyPropertyChanged
             Notify(nameof(IsCompleted));
             Notify(nameof(IsFailed));
             Notify(nameof(IsTerminal));
+            RefreshPresentation();
         }
     }
 
@@ -226,7 +228,7 @@ public sealed class ExportDialogViewModel : INotifyPropertyChanged
     public string ElapsedFormatted { get => _elapsedFormatted; private set => Set(ref _elapsedFormatted, value); }
 
     private string _remainingFormatted = "";
-    public string RemainingFormatted { get => _remainingFormatted; private set => Set(ref _remainingFormatted, value); }
+    public string RemainingFormatted { get => _remainingFormatted; private set { if (Set(ref _remainingFormatted, value)) Notify(nameof(TimeHeadline)); } }
 
     private string _errorMessage = "";
     public string ErrorMessage { get => _errorMessage; private set => Set(ref _errorMessage, value); }
@@ -265,6 +267,10 @@ public sealed class ExportDialogViewModel : INotifyPropertyChanged
     /// <summary>Switch to the progress view and seed the parts list from the plan.</summary>
     public void BeginExport(ExportPlan plan)
     {
+        CleanupWarning = "";
+        CanRetrySoftware = false;
+        FallbackNotice = "";
+        ActiveEncoder = SelectedAcceleration.Name;
         Parts.Clear();
         foreach (var s in plan.KeptSegments)
         {
@@ -294,6 +300,7 @@ public sealed class ExportDialogViewModel : INotifyPropertyChanged
         _runTimer.Restart();
         StartTickTimer();
         Mode = ExportDialogMode.Exporting;
+        RefreshPresentation();
     }
 
     private void StartTickTimer()
@@ -330,12 +337,19 @@ public sealed class ExportDialogViewModel : INotifyPropertyChanged
     /// <summary>Fold one <see cref="ExportProgress"/> tick into the parts list and headline.</summary>
     public void UpdateProgress(ExportProgress p)
     {
+        if (p.Phase == ExportPhase.Cleanup) { CleanupWarning = p.Message; return; }
         if (Mode != ExportDialogMode.Exporting) return;
+        if (p.EncoderName is not null) ActiveEncoder = p.EncoderName;
+        if (p.FallbackNotice is not null) FallbackNotice = p.FallbackNotice;
         ProgressPercent = Math.Clamp(p.OverallPercent, 0, 1);
 
         var concatIndex = Parts.Count - 1;
         switch (p.Phase)
         {
+            case ExportPhase.Restarting:
+                foreach (var part in Parts) { part.Status = ExportPartStatus.Queued; part.Percent = 0; }
+                ProgressLine = p.Message;
+                break;
             case ExportPhase.EncodingSegment:
                 // Mark prior parts done, current part in-progress.
                 for (int i = 0; i < concatIndex; i++)
@@ -378,6 +392,7 @@ public sealed class ExportDialogViewModel : INotifyPropertyChanged
 
         RefreshElapsed();
         RefreshRemaining();
+        RefreshPresentation();
     }
 
     /// <summary>
@@ -568,8 +583,6 @@ public sealed class ExportDialogViewModel : INotifyPropertyChanged
                     "A file with this name already exists. Confirm overwrite to proceed."));
         }
 
-        // Warning if writing back into the source's folder (not a hard block -
-        // user may want it). Source-overwrite itself IS hard-blocked.
         if (!string.IsNullOrEmpty(FullOutputPath)
             && string.Equals(Path.GetFullPath(FullOutputPath),
                              Path.GetFullPath(_project.SourcePath ?? ""),
@@ -594,9 +607,8 @@ public sealed class ExportDialogViewModel : INotifyPropertyChanged
             .Where(s => !s.IsExcluded)
             .OrderBy(s => s.StartUs)
             .ToList();
-        int partNo = 1;
-        var planSegments = kept.Select(s =>
-            new ExportSegment(partNo, s.StartUs, s.EndUs, $"Part {partNo++}"))
+        var planSegments = kept.Select((s, index) =>
+            new ExportSegment(index + 1, s.StartUs, s.EndUs, s.Label ?? $"Part {index + 1}"))
             .ToList();
 
         return new ExportPlan(
@@ -606,7 +618,9 @@ public sealed class ExportDialogViewModel : INotifyPropertyChanged
             PrimaryAudioStreamIndex: _media.PrimaryAudioIndex,
             KeptSegments: planSegments,
             FrameRate: _project.FrameRate,
-            PrimaryAudioCodec: _media.PrimaryAudio?.Codec ?? "");
+            PrimaryAudioCodec: _media.PrimaryAudio?.Codec ?? "",
+            Fingerprint: _project.SourceFingerprint,
+            Overwrite: OverwriteConfirmed);
     }
 
     /// <summary>Run validation and refresh ValidationIssues for inline rendering.</summary>

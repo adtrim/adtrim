@@ -43,9 +43,13 @@ public partial class ExportDialog : Window
     /// post-export banner and optional sidecar deletion.</summary>
     public event EventHandler? ExportFinished;
 
-    private ExportService? _exportService;
+    private FfmpegRunner? _runner;
+    private readonly CancellationTokenSource _detectionCts = new();
+    private string? _preferredAcceleration;
     private IProgress<ExportProgress>? _externalProgress;
     private CancellationTokenSource? _exportCts;
+    private bool _heightResized;
+    private bool _progressPositioned;
 
     public ExportDialog()
     {
@@ -55,6 +59,22 @@ public partial class ExportDialog : Window
         // run-in-background (same as the footer button, per the spec - the
         // export task should keep running); terminal → close.
         KeyDown += OnDialogKeyDown;
+        Loaded += async (_, _) =>
+        {
+            if (_vm is { IsConfiguring: false }) InitializeProgressSize();
+            CenterWindow();
+            _progressPositioned = _vm is { IsConfiguring: false };
+            await LoadOptionsAsync();
+        };
+        LocationChanged += (_, _) => UpdateProgressSizing();
+        SizeChanged += (_, _) =>
+        {
+            if (!IsLoaded || _vm is null || _vm.IsConfiguring) return;
+            var area = MonitorBounds.WorkArea(this);
+            Top = Math.Clamp(Top, area.Top, Math.Max(area.Top, area.Bottom - ActualHeight));
+        };
+        Closed += (_, _) => { _detectionCts.Cancel(); _detectionCts.Dispose(); };
+        Closing += (_, e) => { if (IsExportInFlight) { e.Cancel = true; Hide(); } };
     }
 
     private void OnDialogKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -67,11 +87,85 @@ public partial class ExportDialog : Window
         e.Handled = true;
     }
 
-    public void Bind(MainViewModel project, MediaInfo? media)
+    public void Bind(MainViewModel project, MediaInfo? media, string? preferredAcceleration = null)
     {
+        _preferredAcceleration = preferredAcceleration;
         _vm = new ExportDialogViewModel(project, media);
         DataContext = _vm;
+        _vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ExportDialogViewModel.IsConfiguring))
+            {
+                UpdateProgressSizing();
+                if (IsLoaded && !_vm.IsConfiguring && !_progressPositioned)
+                {
+                    _progressPositioned = true;
+                    InitializeProgressSize();
+                    CenterWindow();
+                }
+            }
+        };
         _vm.RefreshValidation();
+    }
+
+    private void UpdateProgressSizing()
+    {
+        if (!IsLoaded || _vm is null || _vm.IsConfiguring) return;
+        MaxHeight = MonitorBounds.WorkArea(this).Height * (_heightResized ? 1 : 0.75);
+
+    }
+
+    private void InitializeProgressSize()
+    {
+        var area = MonitorBounds.WorkArea(this);
+        MaxHeight = area.Height * 0.75;
+        SizeToContent = SizeToContent.Manual;
+        Width = Math.Min(1060, area.Width);
+        Height = Math.Min(751, MaxHeight);
+    }
+
+    private void CenterWindow()
+    {
+        UpdateLayout();
+        var area = MonitorBounds.WorkArea(this);
+        Left = area.Left + Math.Max(0, (area.Width - ActualWidth) / 2);
+        Top = area.Top + Math.Max(0, (area.Height - ActualHeight) / 2);
+    }
+
+    private void OnResizeWindow(object sender, System.Windows.Controls.Primitives.DragDeltaEventArgs e)
+    {
+        if (_vm is null || _vm.IsConfiguring || sender is not FrameworkElement { Tag: string edge }) return;
+        var area = MonitorBounds.WorkArea(this);
+        var left = Left;
+        var top = Top;
+        var right = left + ActualWidth;
+        var bottom = top + ActualHeight;
+        var minimumWidth = Math.Min(1060, area.Width);
+        if (edge.Contains("Left"))
+            left = Math.Clamp(left + e.HorizontalChange, area.Left, Math.Max(area.Left, right - minimumWidth));
+        if (edge.Contains("Right"))
+            right = Math.Clamp(right + e.HorizontalChange, Math.Min(area.Right, left + minimumWidth), area.Right);
+        Width = right - left;
+        Left = left;
+        UpdateLayout();
+
+        // Keep the summary and actions visible while the details scroll.
+        var minimumHeight = Math.Min(area.Height, ProgressSummary.ActualHeight + ProgressSummary.Margin.Top
+            + ProgressFooter.ActualHeight + 88
+            + (ProgressError.IsVisible ? ProgressError.ActualHeight + 12 : 0));
+        if (edge.Contains("Top") || edge.Contains("Bottom"))
+        {
+            _heightResized = true;
+            MaxHeight = area.Height;
+            SizeToContent = SizeToContent.Manual;
+            if (edge.Contains("Top"))
+                top = Math.Clamp(top + e.VerticalChange, area.Top, Math.Max(area.Top, bottom - minimumHeight));
+            else
+                bottom = Math.Clamp(bottom + e.VerticalChange, Math.Min(area.Bottom, top + minimumHeight), area.Bottom);
+            Height = bottom - top;
+            Top = top;
+        }
+        e.Handled = true;
     }
 
     /// <summary>
@@ -81,9 +175,9 @@ public partial class ExportDialog : Window
     /// MainWindow's status bar coherent for the "Run in background" case
     /// where the dialog closes mid-flight.
     /// </summary>
-    public void AttachExportRunner(ExportService service, IProgress<ExportProgress> externalProgress)
+    public void AttachExportRunner(FfmpegRunner runner, IProgress<ExportProgress> externalProgress)
     {
-        _exportService = service;
+        _runner = runner;
         _externalProgress = externalProgress;
     }
 
@@ -114,6 +208,7 @@ public partial class ExportDialog : Window
         // Modeless dialog - do not set DialogResult anywhere (it throws on
         // a non-modal window). See OnCancel for the same constraint.
         if (_vm is null) { Outcome = ExportDialogOutcome.Cancelled; Close(); return; }
+        if (!_vm.CanCheckHardware || IsExportInFlight) return;
 
         _vm.RefreshValidation();
         var blocking = _vm.ValidationIssues.Where(i => i.Kind == ExportValidationKind.Blocking).ToList();
@@ -134,7 +229,7 @@ public partial class ExportDialog : Window
         if (blocking.Count > 0) return;   // inline banner already showing
 
         AcceptedPlan = _vm.BuildPlan();
-        if (AcceptedPlan is null || _exportService is null)
+        if (AcceptedPlan is null || _runner is null)
         {
             // Should not happen - MainWindow attaches the runner before showing
             // the dialog. Fall back to legacy "close + caller runs export".
@@ -142,6 +237,13 @@ public partial class ExportDialog : Window
             Close();
             return;
         }
+
+        await StartExportAsync();
+    }
+
+    private async Task StartExportAsync()
+    {
+        if (_vm is null || _runner is null || AcceptedPlan is null || IsExportInFlight) return;
 
         // Switch to the progress view and kick off the export. The dialog
         // *stays open* while it runs; cancel / run-in-background buttons drive
@@ -158,7 +260,7 @@ public partial class ExportDialog : Window
         });
 
         IsExportInFlight = true;
-        ExportTask = _exportService.RunExportAsync(AcceptedPlan, dialogProgress, _exportCts.Token);
+        ExportTask = RunExportWithRecoveryAsync(dialogProgress, _exportCts.Token);
         try
         {
             await ExportTask;
@@ -173,17 +275,114 @@ public partial class ExportDialog : Window
         catch (Exception ex)
         {
             _vm.MarkFailed(ex.Message);
+            _vm.CanRetrySoftware = ex is HardwareExportException;
             Outcome = ExportDialogOutcome.Failed;
         }
         finally
         {
             IsExportInFlight = false;
+            _exportCts.Dispose();
+            _exportCts = null;
             // Re-show in case the user backgrounded mid-flight: terminal state
             // is more important than their previous hide gesture. They can
             // close from here. (No-op if already visible.)
             if (Visibility != Visibility.Visible) Show();
             ExportFinished?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    private async Task LoadOptionsAsync()
+    {
+        if (_vm is null || _runner is null) return;
+        try
+        {
+            await _vm.LoadOptionsAsync(new HardwareEncoderDetection(_runner, UserPreferences.DataDirectory),
+                _preferredAcceleration, _detectionCts.Token);
+            _preferredAcceleration = null;
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task RunExportWithRecoveryAsync(IProgress<ExportProgress> progress, CancellationToken ct)
+    {
+        var vm = _vm!;
+        var detector = new HardwareEncoderDetection(_runner!, UserPreferences.DataDirectory);
+        if (vm.SelectedAcceleration.Id == "automatic")
+        {
+            progress.Report(new(ExportPhase.Planning, 0, 0, 0, 0, "Evaluating export options..."));
+            await vm.CheckHardwareAsync(detector, null, false, ct);
+            if (vm.Evaluation is { Preferred: null, SoftwareMilliseconds: null })
+                throw new ExportException("No encoder passed evaluation. Use Evaluate options for details.");
+        }
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                await new ExportService(_runner!, vm.CreateEncoder()).RunExportAsync(AcceptedPlan!, progress, ct);
+                return;
+            }
+            catch (HardwareExportException ex)
+            {
+                ct.ThrowIfCancellationRequested();
+                progress.Report(new(ExportPhase.Restarting, 0, 0, 0, 0, "Encoder failed. Evaluating available options..."));
+                await vm.CheckHardwareAsync(detector, null, true, ct);
+                ct.ThrowIfCancellationRequested();
+                if (!IsVisible) Show();
+                var choice = new EncoderOptionsDialog(vm.Evaluation!, ex.Message) { Owner = this };
+                if (choice.ShowDialog() != true || choice.SelectedOption is null)
+                    throw new OperationCanceledException("Export restart cancelled.");
+                vm.SelectedAcceleration = vm.AccelerationOptions.FirstOrDefault(o => o.Id == choice.SelectedOption.Id) ?? choice.SelectedOption;
+                vm.BeginExport(AcceptedPlan!);
+            }
+        }
+    }
+
+    private async void OnRecheckHardware(object sender, RoutedEventArgs e)
+    {
+        if (_vm is null || _runner is null || !_vm.IsConfiguring || IsExportInFlight || !_vm.CanCheckHardware) return;
+        try
+        {
+            var ct = _detectionCts.Token;
+            ShowEvaluationResults();
+            await _vm.CheckHardwareAsync(new HardwareEncoderDetection(_runner, UserPreferences.DataDirectory),
+                null, true, ct);
+            ct.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException) { }
+    }
+    private void OnTitleBarMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == System.Windows.Input.MouseButton.Left) DragMove();
+    }
+    private void OnTitleClose(object sender, RoutedEventArgs e)
+    {
+        if (IsExportInFlight) OnRunInBackground(sender, e);
+        else Close();
+    }
+    private void OnShowEvaluation(object sender, RoutedEventArgs e)
+    {
+        if (_vm?.CanOpenResults == true) ShowEvaluationResults();
+    }
+    private void ShowEvaluationResults()
+    {
+        _vm!.ShowEvaluation = true;
+        var area = MonitorBounds.WorkArea(this);
+        Width = Math.Min(970, area.Width);
+        CenterWindow();
+    }
+    private void OnHideEvaluation(object sender, RoutedEventArgs e)
+    {
+        if (_vm is null) return;
+        _vm.ShowEvaluation = false;
+        Width = 640;
+        CenterWindow();
+    }
+    private async void OnRetrySoftware(object sender, RoutedEventArgs e)
+    {
+        if (_vm is null || !_vm.CanRetrySoftware) return;
+        _vm.SelectedAcceleration = _vm.AccelerationOptions.FirstOrDefault(o => o.Id == "software") ?? ExportAccelerationOption.Software;
+        await StartExportAsync();
     }
 
     private void OnCancelExport(object sender, RoutedEventArgs e)

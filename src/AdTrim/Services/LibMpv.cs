@@ -104,6 +104,10 @@ internal static class LibMpv
         MpvFormat format, out int data);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int mpv_get_property(IntPtr ctx,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string name, MpvFormat format, out long data);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     public static extern int mpv_observe_property(IntPtr ctx, ulong replyUserdata,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string name,
         MpvFormat format);

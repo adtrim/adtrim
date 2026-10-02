@@ -72,6 +72,7 @@ public sealed class FfmpegRunner
     public async Task<FfmpegResult> RunAsync(
         string exe, IEnumerable<string> args, Action<string>? onStdoutLine, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var psi = new ProcessStartInfo
         {
             FileName = exe,
@@ -93,7 +94,12 @@ public sealed class FfmpegRunner
             if (onStdoutLine is not null) onStdoutLine(e.Data);
             else stdout.AppendLine(e.Data);
         };
-        p.ErrorDataReceived  += (_, e) => { if (e.Data is not null) stderr.AppendLine(e.Data); };
+        p.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is null) return;
+            stderr.AppendLine(e.Data);
+            if (stderr.Length > 1_048_576) stderr.Remove(0, stderr.Length - 524_288);
+        };
 
         p.Start();
         p.BeginOutputReadLine();

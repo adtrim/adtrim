@@ -7,6 +7,15 @@ namespace AdTrim.Tests;
 public class RefineServiceTests
 {
     [Fact]
+    public void SceneEvidence_DoesNotSpreadToUnrelatedFrames()
+    {
+        var signals = new RefineService.SignalSet(Array.Empty<(long, long)>(), Array.Empty<(long, long)>(), new[] { (1_000_000L, 0.9) });
+        Assert.Equal(0.9, signals.SceneScoreAt(1_000_100));
+        Assert.Equal(0, signals.SceneScoreAt(1_033_333));
+        Assert.Equal(0, signals.SceneScoreAt(2_000_000));
+    }
+
+    [Fact]
     public void ParseCandidates_PullsPtsTimeAndPictType()
     {
         const string json = """

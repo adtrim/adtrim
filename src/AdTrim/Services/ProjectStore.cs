@@ -14,6 +14,7 @@ public enum SidecarLoadStatus
     FingerprintMismatch,
     Missing,
     Corrupt,
+    UnsupportedVersion,
 }
 
 public sealed record SidecarLoadResult(SidecarLoadStatus Status, AdTrimProject? Project, string? Message);
@@ -26,6 +27,11 @@ public sealed record SidecarLoadResult(SidecarLoadStatus Status, AdTrimProject? 
 /// </summary>
 public sealed class ProjectStore
 {
+    private readonly string _fallbackDirectory;
+    public ProjectStore(string? fallbackDirectory = null)
+        => _fallbackDirectory = fallbackDirectory ?? Path.Combine(
+            Environment.GetEnvironmentVariable("ADTRIM_DATA_DIR") ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AdTrim"), "projects");
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         WriteIndented = true,
@@ -38,10 +44,7 @@ public sealed class ProjectStore
 
     public string AppDataFallbackPathFor(string sourcePath)
     {
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "AdTrim", "projects");
-        Directory.CreateDirectory(dir);
+        var dir = _fallbackDirectory;
         var hash = FingerprintHash(sourcePath);
         return Path.Combine(dir, hash + ".adt.json");
     }
@@ -58,14 +61,23 @@ public sealed class ProjectStore
     /// </summary>
     public SidecarLoadResult Load(string sourcePath, MediaInfo current)
     {
-        var path = SidecarPathFor(sourcePath);
-        if (!File.Exists(path))
+        var candidates = CandidateSidecarPathsFor(sourcePath).Where(File.Exists)
+            .OrderByDescending(File.GetLastWriteTimeUtc).ToArray();
+        if (candidates.Length == 0) return new(SidecarLoadStatus.Missing, null, null);
+        SidecarLoadResult? failure = null;
+        foreach (var path in candidates)
         {
-            path = AppDataFallbackPathFor(sourcePath);
-            if (!File.Exists(path))
-                return new SidecarLoadResult(SidecarLoadStatus.Missing, null, null);
+            var result = LoadCandidate(path, sourcePath, current);
+            if (result.Project is not null)
+                return path == SidecarPathFor(sourcePath) ? result
+                    : result with { Message = "Recovered project from the fallback save. " + result.Message };
+            failure ??= result;
         }
+        return failure!;
+    }
 
+    private static SidecarLoadResult LoadCandidate(string path, string sourcePath, MediaInfo current)
+    {
         AdTrimProject? proj;
         try
         {
@@ -78,6 +90,11 @@ public sealed class ProjectStore
         }
         if (proj is null)
             return new SidecarLoadResult(SidecarLoadStatus.Corrupt, null, "Sidecar deserialized to null.");
+
+        if (proj.SchemaVersion > AdTrimProject.CurrentSchemaVersion)
+            return new(SidecarLoadStatus.UnsupportedVersion, null, "This project was saved by a newer AdTrim version.");
+        var error = Validate(proj);
+        if (error is not null) return new(SidecarLoadStatus.Corrupt, null, error);
 
         // Identity check: size + duration must match exactly.
         var fileInfo = new FileInfo(sourcePath);
@@ -101,9 +118,47 @@ public sealed class ProjectStore
         return new SidecarLoadResult(SidecarLoadStatus.Loaded, proj, null);
     }
 
+    internal static string? Validate(AdTrimProject project)
+    {
+        if (project.SchemaVersion < 1 || project.Fingerprint is null || project.Media is null
+            || project.Splits is null || project.ExcludedSegmentIds is null || string.IsNullOrWhiteSpace(project.SourcePath))
+            return "Project is missing required data.";
+        long duration = project.Fingerprint.DurationUs;
+        if (duration <= 0 || project.Media.DurationUs != duration || project.Fingerprint.SizeBytes < 0)
+            return "Invalid source metadata.";
+        var ids = new HashSet<string>();
+        long previous = 0;
+        var segments = new HashSet<string>();
+        foreach (var split in project.Splits)
+        {
+            if (split is null || string.IsNullOrWhiteSpace(split.Id) || !ids.Add(split.Id)
+                || split.TimeUs <= previous || split.TimeUs >= duration || !Enum.IsDefined(split.Source)
+                || (split.Confidence is { } confidence && !Enum.IsDefined(confidence)))
+                return "Invalid or unordered split boundaries.";
+            segments.Add($"segment-{previous}-{split.TimeUs}");
+            previous = split.TimeUs;
+        }
+        segments.Add($"segment-{previous}-{duration}");
+        return project.ExcludedSegmentIds.Any(id => !segments.Contains(id)) ? "Unknown excluded segment." : null;
+    }
+
+    private static void PreserveUnreadable(string path)
+    {
+        if (!File.Exists(path)) return;
+        try
+        {
+            var old = JsonSerializer.Deserialize<AdTrimProject>(File.ReadAllText(path), JsonOpts);
+            if (old is not null && old.SchemaVersion <= AdTrimProject.CurrentSchemaVersion && Validate(old) is null) return;
+        }
+        catch (JsonException) { }
+        throw new IOException("Existing project cannot be safely overwritten: " + path);
+    }
+
     /// <summary>Atomic save: write to .tmp, fsync, rename. Falls back to AppData if next-to-source fails.</summary>
     public string Save(AdTrimProject project)
     {
+        var error = Validate(project);
+        if (error is not null) throw new InvalidDataException(error);
         // Try next-to-source first.
         var primary = SidecarPathFor(project.SourcePath);
         try
@@ -115,12 +170,14 @@ public sealed class ProjectStore
         catch (IOException) { /* fall through (read-only NAS, etc.) */ }
 
         var fallback = AppDataFallbackPathFor(project.SourcePath);
+        Directory.CreateDirectory(_fallbackDirectory);
         WriteAtomic(fallback, project with { SidecarLocation = SidecarLocation.AppdataFallback });
         return fallback;
     }
 
     private static void WriteAtomic(string path, AdTrimProject project)
     {
+        PreserveUnreadable(path);
         var tmp = path + ".tmp";
         using (var fs = File.Create(tmp))
         {

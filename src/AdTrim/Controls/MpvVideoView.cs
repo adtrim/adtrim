@@ -18,6 +18,7 @@ public sealed class MpvVideoView : HwndHost
     private const uint WS_CHILD = 0x40000000;
     private const uint WS_VISIBLE = 0x10000000;
     private const uint WS_CLIPCHILDREN = 0x02000000;
+    private const uint SS_BLACKRECT = 0x00000004;
 
     public IntPtr Hwnd { get; private set; }
 
@@ -38,8 +39,8 @@ public sealed class MpvVideoView : HwndHost
         Hwnd = CreateWindowExW(
             exStyle: 0,
             className: "static",
-            windowName: "AdTrim.MpvVideoView",
-            style: WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+            windowName: "",
+            style: WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | SS_BLACKRECT,
             x: 0, y: 0, w: 0, h: 0,
             parent: hwndParent.Handle,
             menu: IntPtr.Zero, instance: IntPtr.Zero, param: IntPtr.Zero);

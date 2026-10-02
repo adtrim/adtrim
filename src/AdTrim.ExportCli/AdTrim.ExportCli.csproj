@@ -27,4 +27,14 @@
     <Compile Include="..\AdTrim\Encoders\LibX264EncoderStrategy.cs" Link="Encoders\LibX264EncoderStrategy.cs"/>
   </ItemGroup>
 
+  <ItemGroup><Compile Include="..\AdTrim\Services\ExportSafety.cs" Link="Services\ExportSafety.cs" /></ItemGroup>
+<ItemGroup>
+    <Compile Include="..\AdTrim\Services\HardwareExportException.cs" Link="Services\HardwareExportException.cs" />
+</ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\AdTrim\Services\ExportWorkspace.cs" Link="Services\ExportWorkspace.cs"/>
+    <Compile Include="..\AdTrim\Services\ExportDiskGuard.cs" Link="Services\ExportDiskGuard.cs"/>
+    <Compile Include="..\AdTrim\Services\UserPreferences.cs" Link="Services\UserPreferences.cs"/>
+  </ItemGroup>
 </Project>

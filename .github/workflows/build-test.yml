@@ -1,0 +1,20 @@
+name: Build and test
+on:
+  push:
+  pull_request:
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet restore AdTrim.sln
+      - run: dotnet build AdTrim.sln --no-restore -m:1 --configuration Release
+      - run: dotnet test tests/AdTrim.Tests/AdTrim.Tests.csproj --no-build --configuration Release --logger "trx;LogFileName=tests.trx"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: tests/AdTrim.Tests/TestResults/*.trx

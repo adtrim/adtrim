@@ -31,7 +31,7 @@ public class MainViewModelStateTests
         vm.Markers.Add(new Split { TimeUs = 3_000_000, Label = "End", Confirmed = true });
         vm.RebuildSegmentsFromSplits();
 
-        vm.CommandStack.Execute(new ToggleExcludedCommand(vm.Segments[0]));
+        vm.CommandStack.Execute(new ToggleExcludedCommand(vm, vm.Segments[0]));
 
         vm.ExpectedOutputDurationUs.Should().Be(2_000_000);
     }

@@ -20,7 +20,7 @@ public sealed class ChapterImportService
     public ChapterImportService(FfmpegRunner runner) => _runner = runner;
 
     public async Task<IReadOnlyList<ChapterBoundary>> ImportAsync(
-        string sourcePath, long durationUs, CancellationToken ct = default)
+        string sourcePath, long durationUs, CancellationToken ct = default, bool includeStart = false)
     {
         var args = new[]
         {
@@ -34,7 +34,9 @@ public sealed class ChapterImportService
             throw new InvalidOperationException($"ffprobe failed (exit {r.ExitCode}): {r.Stderr}");
 
         var raw = ParseChapters(r.Stdout);
-        return Normalize(raw, durationUs);
+        var normalized = Normalize(raw, durationUs);
+        var start = raw.FirstOrDefault(c => c.TimeUs == 0);
+        return includeStart && start is not null ? new[] { start }.Concat(normalized).ToArray() : normalized;
     }
 
     internal static IReadOnlyList<ChapterBoundary> ParseChapters(string json)

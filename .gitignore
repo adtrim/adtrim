@@ -59,6 +59,18 @@ $RECYCLE.BIN/
 # Glob covers both legacy /AdTrim-Setup.exe and current
 # /AdTrim-Setup-v1.0.NNNN.exe naming.
 /AdTrim-Setup*.exe
+/.installers/
+
+# Local workspace notes; public documentation remains tracked.
+/AGENTS.md
+/CLAUDE.md
+/BUILD_PLAN.md
+/DECISIONS.md
+/GAPS.md
+/PREFLIGHT.md
+/VALIDATION.md
+/WIN11_CLASSIC_CONTEXT_MENU.md
+/.docs/
 
 # Bundled FFmpeg binaries (large; download separately or commit deliberately)
 # If the project wants to commit them, remove or comment out these two lines.

@@ -60,8 +60,11 @@ public partial class TimelineView : UserControl
         if (e.PropertyName is nameof(MainViewModel.SelectionKind)
             or nameof(MainViewModel.SelectedMarker)
             or nameof(MainViewModel.SelectedSegment)
-            or nameof(MainViewModel.DurationUs))
+            or nameof(MainViewModel.DurationUs)
+            or nameof(MainViewModel.IsCollapsed)
+            or nameof(MainViewModel.KeptTimeline))
         {
+            _waveformWidthCache = -1;
             Redraw();
             return;
         }
@@ -86,6 +89,7 @@ public partial class TimelineView : UserControl
         }
     }
 
+    private bool _redrawPending;
     private void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         if (_vm is null) return;
@@ -94,11 +98,14 @@ public partial class TimelineView : UserControl
 
         if (ReferenceEquals(sender, _vm.Thumbnails))
         {
+            if (_vm.Thumbnails.Count == 0) _thumbnailBrushCache.Clear();
             DrawThumbnails(width);
             return;
         }
 
-        Redraw();
+        if (_redrawPending) return;
+        _redrawPending = true;
+        Dispatcher.BeginInvoke(new Action(() => { _redrawPending = false; Redraw(); }), System.Windows.Threading.DispatcherPriority.Render);
     }
 
     private void LayoutRoot_SizeChanged(object sender, SizeChangedEventArgs e) => Redraw();
@@ -118,10 +125,10 @@ public partial class TimelineView : UserControl
     }
 
     private double XOf(long timeUs, double width)
-        => _vm!.DurationUs == 0 ? 0 : (timeUs / (double)_vm.DurationUs) * width;
+        => _vm!.TimelineDurationUs == 0 ? 0 : (_vm.ToDisplayTime(timeUs) / (double)_vm.TimelineDurationUs) * width;
 
     private long TimeOfX(double x, double width)
-        => _vm!.DurationUs == 0 ? 0 : (long)Math.Round((x / width) * _vm.DurationUs);
+        => _vm!.TimelineDurationUs == 0 ? 0 : _vm.ToSourceTime((long)Math.Round((x / width) * _vm.TimelineDurationUs));
 
     private void DrawThumbnails(double width)
     {
@@ -139,7 +146,9 @@ public partial class TimelineView : UserControl
 
         for (int i = 0; i < tiles; i++)
         {
-            thumbnailByIndex.TryGetValue(i, out var thumb);
+            var sampleUs = _vm.ToSourceTime((long)((i + 0.5) / tiles * _vm.TimelineDurationUs));
+            int sourceTile = _vm.DurationUs > 0 ? Math.Clamp((int)(sampleUs * tiles / _vm.DurationUs), 0, tiles - 1) : i;
+            thumbnailByIndex.TryGetValue(sourceTile, out var thumb);
             Brush fill = laneBrush;
             if (thumb is not null)
             {
@@ -212,7 +221,8 @@ public partial class TimelineView : UserControl
         RulerCanvas.Children.Clear();
         if (_vm is null || !_vm.ShowRulerTicks) return;
 
-        var durationSec = _vm.DurationUs / 1_000_000.0;
+        var durationSec = _vm.TimelineDurationUs / 1_000_000.0;
+        if (durationSec <= 0) return;
         var step = 30.0 / _vm.ZoomFactor;
         var tertiary = (Brush)(Application.Current.TryFindResource("Text.Tertiary") ?? Brushes.Gray);
         var subtle = (Brush)(Application.Current.TryFindResource("Border.Strong") ?? Brushes.DimGray);
@@ -298,8 +308,15 @@ public partial class TimelineView : UserControl
         var colPeaks = new float[columns];
         for (int x = 0; x < columns; x++)
         {
-            int startIdx = (int)((long)x * peaks.Length / columns);
-            int endIdx = (int)((long)(x + 1) * peaks.Length / columns);
+            long start = TimeOfX(x, width);
+            long end = TimeOfX(x + 1, width);
+            if (_vm.IsCollapsed)
+            {
+                var span = _vm.KeptTimeline.Spans.FirstOrDefault(s => start >= s.StartUs && start < s.EndUs);
+                if (span is not null) end = Math.Min(end, span.EndUs);
+            }
+            int startIdx = Math.Clamp((int)(start * peaks.Length / Math.Max(1, _vm.DurationUs)), 0, peaks.Length - 1);
+            int endIdx = (int)(end * peaks.Length / Math.Max(1, _vm.DurationUs));
             if (endIdx <= startIdx) endIdx = startIdx + 1;
             if (endIdx > peaks.Length) endIdx = peaks.Length;
             float pk = 0f;
@@ -401,6 +418,7 @@ public partial class TimelineView : UserControl
         if (_vm is null) return;
         foreach (var s in _vm.Segments)
         {
+            if (_vm.IsCollapsed && s.IsExcluded) continue;
             var left = XOf(s.StartUs, width);
             var w = Math.Max(2, XOf(s.EndUs, width) - left);
             var band = new SegmentBand
@@ -410,10 +428,18 @@ public partial class TimelineView : UserControl
                 Height = 56,
                 Cursor = Cursors.Hand,
                 Tag = s,
-                ContextMenu = BuildSegmentContextMenu(s),
+                ContextMenu = _vm.CanInteract ? BuildSegmentContextMenu(s) : null,
             };
             band.MouseLeftButtonDown += OnSegmentClicked;
-            band.MouseRightButtonDown += (_, _) => _vm.SelectSegment(s);
+            band.MouseRightButtonUp += (_, e) =>
+            {
+                e.Handled = true;
+                if (!_vm.CanInteract || band.ContextMenu is not { } menu) return;
+                if (!_vm.IsCollapsed) _vm.SelectSegment(s);
+                // Selection rebuilds the bands; anchor the menu to the timeline.
+                menu.PlacementTarget = this;
+                menu.IsOpen = true;
+            };
             Canvas.SetLeft(band, left);
             Canvas.SetTop(band, 0);
             SegmentLayer.Children.Add(band);
@@ -423,6 +449,16 @@ public partial class TimelineView : UserControl
     private System.Windows.Controls.ContextMenu BuildSegmentContextMenu(Segment seg)
     {
         var menu = new System.Windows.Controls.ContextMenu();
+        var rename = new MenuItem { Header = "Rename segment..." };
+        rename.Click += (_, _) =>
+        {
+            if (_vm is null || !_vm.CanInteract) return;
+            var dialog = new AdTrim.Views.RenameSegmentDialog(seg.Label ?? "") { Owner = Window.GetWindow(this) };
+            if (dialog.ShowDialog() == true && dialog.SegmentName != seg.Label)
+                _vm.CommandStack.Execute(new RenameSegmentCommand(_vm, seg, dialog.SegmentName));
+        };
+        menu.Items.Add(rename);
+        if (_vm?.IsCollapsed == true) return menu;
         var excludedItem = new MenuItem
         {
             Header = seg.IsExcluded ? "Un-exclude segment" : "Mark segment excluded",
@@ -430,9 +466,9 @@ public partial class TimelineView : UserControl
         };
         excludedItem.Click += (_, _) =>
         {
-            if (_vm is null) return;
+            if (_vm is null || !_vm.CanEdit) return;
             _vm.SelectSegment(seg);
-            _vm.CommandStack.Execute(new ToggleExcludedCommand(seg));
+            _vm.CommandStack.Execute(new ToggleExcludedCommand(_vm, seg));
         };
         menu.Items.Add(excludedItem);
         var play = new MenuItem { Header = "Play segment", InputGestureText = "Enter" };
@@ -446,7 +482,9 @@ public partial class TimelineView : UserControl
         if (_vm is null) return;
         if (sender is FrameworkElement fe && fe.Tag is Segment seg)
         {
-            _vm.SelectSegment(seg);
+            if (_vm.IsBusy) return;
+            if (_vm.IsCollapsed) SeekRequested?.Invoke(this, (seg.StartUs, false, true, null));
+            else _vm.SelectSegment(seg);
             Redraw();
             e.Handled = true;
         }
@@ -456,6 +494,7 @@ public partial class TimelineView : UserControl
     // Markers (with click + drag)
     // -------------------------------------------------------------------
 
+    public event EventHandler<long>? ReviewJoinRequested;
     private Split? _draggingSplit;
     private SplitMarker? _draggingVisual;     // keep a handle to the live UIElement so mid-drag Redraw doesn't destroy it
     private long _dragStartUs;
@@ -468,7 +507,61 @@ public partial class TimelineView : UserControl
     private void DrawMarkers(double width)
     {
         MarkerLane.Children.Clear();
+        ReviewHighlightCanvas.Children.Clear();
         if (_vm is null) return;
+        if (_vm.IsCollapsed)
+        {
+            var kept = _vm.Segments.Where(s => !s.IsExcluded && s.DurationUs > 0).OrderBy(s => s.StartUs).ToArray();
+            var reviewTimes = kept.Where(s => s.StartUs > 0).Select(s => s.StartUs).ToList();
+            if (kept.Length > 0 && kept[^1].EndUs < _vm.DurationUs)
+                reviewTimes.Add(kept[^1].EndUs);
+            foreach (var sourceUs in reviewTimes)
+            {
+                var outputUs = _vm.KeptTimeline.ToOutput(sourceUs);
+                var x = XOf(sourceUs, width);
+                var join = new Button
+                {
+                    Style = (Style)FindResource("IconButton"),
+                    Width = 32, Height = 28,
+                    ToolTip = $"Review this split at {FormatTimeMs(sourceUs)} (play from 2 seconds before the cut)",
+                    Tag = outputUs,
+                    Content = new System.Windows.Shapes.Path
+                    {
+                        Data = Geometry.Parse("M1,8 Q12,-5 23,8 Q12,21 1,8 Z M15,8 A3,3 0 1 1 9,8 A3,3 0 1 1 15,8"),
+                        Stroke = (Brush)FindResource("Text.Primary"),
+                        StrokeThickness = 1.6, Width = 22, Height = 14, Stretch = Stretch.Uniform,
+                    },
+                };
+                System.Windows.Automation.AutomationProperties.SetName(join, "Review this split");
+                join.Click += (_, _) => ReviewJoinRequested?.Invoke(this, outputUs);
+                join.MouseEnter += (_, _) =>
+                {
+                    var brush = (SolidColorBrush)FindResource("Accent.Base");
+                    join.Effect = new DropShadowEffect { Color = brush.Color, BlurRadius = 12, ShadowDepth = 0, Opacity = 1 };
+                    ((System.Windows.Shapes.Path)join.Content).Stroke = brush;
+                    Panel.SetZIndex(join, 1);
+                    ReviewHighlightCanvas.Children.Clear();
+                    ReviewHighlightCanvas.Children.Add(new Line
+                    {
+                        X1 = x, X2 = x, Y1 = join.Height, Y2 = LayoutRoot.ActualHeight,
+                        Stroke = brush, StrokeThickness = 2,
+                        Effect = new DropShadowEffect { Color = brush.Color, BlurRadius = 8, ShadowDepth = 0, Opacity = 1 },
+                    });
+                };
+                join.MouseLeave += (_, _) =>
+                {
+                    join.Effect = null;
+                    ((System.Windows.Shapes.Path)join.Content).Stroke = (Brush)FindResource("Text.Primary");
+                    Panel.SetZIndex(join, 0);
+                    ReviewHighlightCanvas.Children.Clear();
+                };
+                Canvas.SetLeft(join, Math.Clamp(x - join.Width / 2, 0, Math.Max(0, width - join.Width)));
+                MarkerLane.Children.Add(join);
+            }
+            if (_vm.KeptTimeline.DurationUs == 0)
+                MarkerLane.Children.Add(new TextBlock { Text = "All scenes are excluded. Return to Edit view to keep footage.", Foreground = Brushes.White });
+            return;
+        }
         foreach (var m in _vm.Markers)
         {
             var marker = new SplitMarker
@@ -479,7 +572,7 @@ public partial class TimelineView : UserControl
                 Tag = m,
             };
             // Bind the visual DPs to the Split model so toggling Confirmed /
-            // IsSelected / Confidence / ShowAudition updates the icon
+            // IsSelected / Confidence updates the icon
             // immediately - otherwise the marker would only refresh on the
             // next full Redraw (collection change, selection change, resize).
             BindingOperations.SetBinding(marker, SplitMarker.ConfirmedProperty,
@@ -493,8 +586,6 @@ public partial class TimelineView : UserControl
                     TargetNullValue = Confidence.Neutral,
                     FallbackValue = Confidence.Neutral,
                 });
-            BindingOperations.SetBinding(marker, SplitMarker.ShowAuditionProperty,
-                new Binding(nameof(Split.ShowAudition)) { Source = m });
             BindingOperations.SetBinding(marker, SplitMarker.LabelProperty,
                 new Binding(nameof(Split.Label)) { Source = m });
             if (!m.IsBookend)
@@ -548,10 +639,6 @@ public partial class TimelineView : UserControl
     private System.Windows.Controls.ContextMenu BuildMarkerContextMenu(Split split)
     {
         var menu = new System.Windows.Controls.ContextMenu();
-        var preview = new MenuItem { Header = "Preview split", InputGestureText = "P" };
-        preview.Click += (_, _) => AuditionRequested?.Invoke(this, split);
-        menu.Items.Add(preview);
-
         var confirm = new MenuItem
         {
             Header = split.Confirmed ? "Unconfirm split" : "Confirm split",
@@ -559,8 +646,9 @@ public partial class TimelineView : UserControl
         };
         confirm.Click += (_, _) =>
         {
-            if (_vm is null) return;
-            _vm.CommandStack.Execute(new ToggleConfirmedCommand(split));
+            if (_vm is null || !_vm.CanEdit) return;
+            if (split.Confirmed) ConfirmedMarkerUnlockRequested?.Invoke(this, split);
+            else _vm.CommandStack.Execute(new ToggleConfirmedCommand(split));
         };
         menu.Items.Add(confirm);
 
@@ -570,10 +658,10 @@ public partial class TimelineView : UserControl
 
         menu.Items.Add(new Separator());
 
-        var prev = new MenuItem { Header = "−1 frame", InputGestureText = "←" };
+        var prev = new MenuItem { Header = "−1 frame" };
         prev.Click += (_, _) => NudgeRequested?.Invoke(this, (split, -1));
         menu.Items.Add(prev);
-        var next = new MenuItem { Header = "+1 frame", InputGestureText = "→" };
+        var next = new MenuItem { Header = "+1 frame" };
         next.Click += (_, _) => NudgeRequested?.Invoke(this, (split, +1));
         menu.Items.Add(next);
 
@@ -582,7 +670,7 @@ public partial class TimelineView : UserControl
         var delete = new MenuItem { Header = "Delete split", InputGestureText = "Del" };
         delete.Click += (_, _) =>
         {
-            if (_vm is null) return;
+            if (_vm is null || !_vm.CanEdit) return;
             _vm.CommandStack.Execute(new DeleteSplitCommand(_vm, split));
             _vm.ClearSelection();
         };
@@ -590,8 +678,6 @@ public partial class TimelineView : UserControl
         return menu;
     }
 
-    /// <summary>Raised when the user picks "Preview split" on a marker.</summary>
-    public event EventHandler<Split>? AuditionRequested;
     /// <summary>Raised when the user picks "Refine this split".</summary>
     public event EventHandler<Split>? RefineRequested;
     public event EventHandler<Split>? ConfirmedMarkerUnlockRequested;
@@ -609,7 +695,7 @@ public partial class TimelineView : UserControl
 
     private void OnMarkerMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (_vm is null || sender is not SplitMarker fe || fe.Tag is not Split split) return;
+        if (_vm is null || !_vm.CanEdit || sender is not SplitMarker fe || fe.Tag is not Split split) return;
         // Always record drag-start state, even for confirmed markers - a plain
         // click should just select, not trigger the unconfirm prompt. The
         // confirmed-marker check is deferred to OnMarkerMouseMove, fired only
@@ -657,8 +743,6 @@ public partial class TimelineView : UserControl
         var deltaUs = (long)Math.Round((dxPx / _dragWidth) * _vm.DurationUs);
         var candidate = _dragStartUs + deltaUs;
         candidate = ClampAgainstNeighbors(_draggingSplit, candidate);
-        candidate = FrameSnap.Snap(candidate, _vm.FrameRate, _vm.FrameStartPhaseUs);
-        candidate = ClampAgainstNeighbors(_draggingSplit, candidate); // re-clamp after snap
         if (candidate == _dragCurrentUs) return;
         _dragCurrentUs = candidate;
 
@@ -725,7 +809,7 @@ public partial class TimelineView : UserControl
         var idx = sorted.IndexOf(split);
         long minUs = idx > 0 ? sorted[idx - 1].TimeUs + 1 : 0;
         long maxUs = idx < sorted.Count - 1 ? sorted[idx + 1].TimeUs - 1 : _vm.DurationUs;
-        return FrameSnap.Clamp(candidateUs, minUs, maxUs);
+        return FrameSnap.SnapWithin(candidateUs, _vm.FrameRate, _vm.FrameStartPhaseUs, minUs, maxUs) ?? split.TimeUs;
     }
 
     private void OnTimelineHover(object sender, MouseEventArgs e)
@@ -760,7 +844,7 @@ public partial class TimelineView : UserControl
         Canvas.SetLeft(_hoverLine, x - 0.5);
         Canvas.SetTop(_hoverLine, 0);
 
-        _hoverLabel.Text = FormatTimeMs(timeUs);
+        _hoverLabel.Text = FormatTimeMs(_vm!.ToDisplayTime(timeUs));
         // Measure to position smartly: don't let the chip overflow the right edge.
         _hoverChip.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         var chipWidth = _hoverChip.DesiredSize.Width;
@@ -839,7 +923,7 @@ public partial class TimelineView : UserControl
 
     private void OnBackgroundContextMenu(object sender, MouseButtonEventArgs e)
     {
-        if (e.Handled || _vm is null) return;
+        if (e.Handled || _vm is null || !_vm.CanEdit) return;
         var pos = e.GetPosition(LayoutRoot);
         var width = LayoutRoot.ActualWidth;
         if (width <= 0) return;
@@ -877,7 +961,8 @@ public partial class TimelineView : UserControl
         var accent = (Brush)(Application.Current.TryFindResource("Accent.Base") ?? Brushes.DodgerBlue);
         var accentColor = ((SolidColorBrush)accent).Color;
 
-        var totalH = LayoutRoot.ActualHeight - 14;
+        // Playback can report a position before the first layout pass.
+        var totalH = Math.Max(0, LayoutRoot.ActualHeight - 14);
         var line = new Rectangle
         {
             Width = 1.5,

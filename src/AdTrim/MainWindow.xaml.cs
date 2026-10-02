@@ -34,6 +34,12 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _thumbnailCts;
     private CancellationTokenSource? _refineCts;
     private MediaInfo? _media;
+    private SourceFingerprint? _sourceFingerprint;
+    private readonly ProjectSession _session = new();
+    private bool _hydrating;
+    private bool _allowClose;
+    private bool _switching;
+    private bool _saveInProgress;
     private long? _playUntilUs;
 
     /// <summary>
@@ -46,7 +52,6 @@ public partial class MainWindow : Window
     private ExportDialog? _activeExportDialog;
 
     private readonly DispatcherTimer _autosaveTimer;
-    private const long AuditionWindowUs = 2_000_000L;          // ±2s
 
     public MainWindow()
     {
@@ -64,7 +69,20 @@ public partial class MainWindow : Window
         WireViewModelEvents((MainViewModel)DataContext);
 
         Loaded += OnLoaded;
-        Closed += (_, _) => { _previewAfter.Dispose(); _previewBefore.Dispose(); };
+        Closing += OnWindowClosing;
+        Timeline.ReviewJoinRequested += (_, outputUs) =>
+        {
+            if (DataContext is not MainViewModel vm || !vm.IsCollapsed || vm.IsBusy) return;
+            _playUntilUs = null;
+            SeekTo(vm, vm.KeptTimeline.ToSource(Math.Max(0, outputUs - 2_000_000)));
+            _previewAfter.Play();
+        };
+        _previewAfter.PlaybackFailed += (_, message) => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (DataContext is not MainViewModel vm) return;
+            if (vm.IsCollapsed) SetCollapsed(vm, false);
+            vm.Banner = new BannerInfo(StatusKind.Warning, "Preview unavailable.", message, Array.Empty<BannerAction>());
+        }));
         PreviewKeyDown += OnPreviewKeyDown;
         // PreviewMouseWheel tunnels down before children handle the event -
         // necessary because the timeline's ScrollViewer would otherwise eat
@@ -77,6 +95,7 @@ public partial class MainWindow : Window
     {
         vm.DirtyChanged += (_, _) =>
         {
+            if (_hydrating) return;
             // Debounced autosave: reset timer on every dirty event.
             _autosaveTimer.Stop();
             _autosaveTimer.Start();
@@ -131,6 +150,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void UpdateNoFrameOverlay(MainViewModel vm)
     {
+        if (vm.IsCollapsed) return;
         var frameUs = FrameDurationUs(vm);
         var paneATimeUs = vm.PlayheadUs - frameUs;
         var needsOverlay = paneATimeUs < vm.FrameStartPhaseUs - (frameUs / 2);
@@ -179,8 +199,8 @@ public partial class MainWindow : Window
         var contentWidth = viewport * vm.ZoomFactor;
         Timeline.Width = contentWidth;
 
-        if (vm.DurationUs <= 0) return;
-        var playheadX = (vm.PlayheadUs / (double)vm.DurationUs) * contentWidth;
+        if (vm.TimelineDurationUs <= 0) return;
+        var playheadX = (vm.TimelinePositionUs / (double)vm.TimelineDurationUs) * contentWidth;
         var leftEdge = TimelineScroll.HorizontalOffset;
         var rightEdge = leftEdge + viewport;
         bool offscreen = playheadX < leftEdge + 8 || playheadX > rightEdge - 8;
@@ -192,7 +212,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnLoaded(object sender, RoutedEventArgs e)
+    private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         // Pane B drives the playhead; Pane A is a passive follower seeked
         // alongside. Only Pane B updates PlayheadUs (see OnPreviewPropertyChanged),
@@ -230,6 +250,7 @@ public partial class MainWindow : Window
             // FFmpeg not yet installed - surfaces on open.
         }
 
+        if (DataContext is MainViewModel initialVm) await LoadPreferencesAsync(initialVm);
         if (App.PendingOpenPath is { } path && File.Exists(path))
         {
             App.PendingOpenPath = null;
@@ -239,6 +260,7 @@ public partial class MainWindow : Window
 
     private void OnPreviewPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
+        if (_allowClose) return;
         // mpv fires property-change events from its own thread; marshal to the
         // UI dispatcher before touching DependencyObjects (binding sources) or
         // running any command-stack logic.
@@ -274,43 +296,22 @@ public partial class MainWindow : Window
                 TimestampAfterFrame.Text = FormatFrameIndex(_previewAfter.PositionUs, vm);
             }
 
-            // Only Pane B drives PlayheadUs and audition state.
+            if (_previewAfter.IsLoading) return;
+            // Only Pane B drives PlayheadUs.
             if (!ReferenceEquals(sender, _previewAfter))
             {
                 MaybeResyncPanes(vm);
                 return;
             }
 
+            if (vm.IsCollapsed)
+            {
+                vm.PlayheadUs = vm.KeptTimeline.ToSource(_previewAfter.PositionUs);
+                return;
+            }
             vm.PlayheadUs = _previewAfter.PositionUs;
             MaybeResyncPanes(vm);
 
-            // Audition boundary cue: when the playhead first reaches the
-            // split's exact time, pause both panes for ~300ms so the user
-            // sees the boundary frame held visible, then resume to play
-            // out the +2s tail. The pause is the cue.
-            if (_auditionSplitUs is { } splitUs
-                && !_auditionBoundaryHandled
-                && _previewAfter.PositionUs >= splitUs)
-            {
-                _auditionBoundaryHandled = true;
-                _previewAfter.Pause();
-                _previewBefore.Pause();
-                var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(AuditionBoundaryPauseMs) };
-                timer.Tick += (_, _) =>
-                {
-                    timer.Stop();
-                    // Skip if the audition was cancelled (Escape) during the freeze.
-                    if (_auditionTargetEndUs is null) return;
-                    _previewAfter.Play();
-                    _previewBefore.Play();
-                };
-                _auditionResumeTimer = timer;
-                timer.Start();
-            }
-
-            // Audition end-watch.
-            if (_auditionTargetEndUs is { } endUs && _previewAfter.PositionUs >= endUs)
-                EndAudition();
             if (_playUntilUs is { } stopUs && _previewAfter.PositionUs >= stopUs)
             {
                 _previewAfter.Pause();
@@ -318,45 +319,90 @@ public partial class MainWindow : Window
                 _playUntilUs = null;
             }
         }
+        else if (e.PropertyName == nameof(MpvPreviewViewModel.IsSeeking))
+        {
+            if (DataContext is MainViewModel currentVm) MaybeResyncPanes(currentVm);
+        }
         else if (e.PropertyName == nameof(MpvPreviewViewModel.IsPlaying))
         {
             // Swap the play/pause icon visibility.
             PauseGlyph.Visibility = _previewAfter.IsPlaying ? Visibility.Visible : Visibility.Collapsed;
             PlayGlyph.Visibility = _previewAfter.IsPlaying ? Visibility.Collapsed : Visibility.Visible;
+            if (DataContext is MainViewModel currentVm) MaybeResyncPanes(currentVm);
         }
     }
 
     // ----- Pane drift / timestamp helpers ------------------------------
 
-    private bool _resyncing;
+    // The advertised rate can differ from decoded frame spacing. Let mpv
+    // find the predecessor instead of repeatedly seeking half a real frame back.
+    private CancellationTokenSource? _frameRecovery;
+    private (string? Path, long Time)? _failedFrameRecovery;
 
-    /// <summary>
-    /// Expected Before/After delta is exactly +1 frame (After leads Before).
-    /// Rapid frame-step / 1-second-step key spam (`.`, `]`) can drift the panes
-    /// - sometimes far enough that Before ends up showing a *later* frame than
-    /// After. While paused this is never acceptable, so re-seek Before to
-    /// After − frameUs whenever the actual delta strays outside half-frame
-    /// tolerance. Skips during playback (drift is acceptable there per the
-    /// design) and during an in-flight resync to avoid feedback storms.
-    /// </summary>
     private void MaybeResyncPanes(MainViewModel vm)
     {
-        if (_resyncing) return;
+        if (vm.IsCollapsed || _previewAfter.IsLoading || _previewBefore.IsLoading
+            || _previewAfter.IsSeeking || _previewBefore.IsSeeking) return;
         if (_previewAfter.IsPlaying || _previewBefore.IsPlaying) return;
-        var frameUs = FrameDurationUs(vm);
-        if (frameUs <= 0) return;
-        var actualDelta = _previewAfter.PositionUs - _previewBefore.PositionUs;
-        var lo = frameUs / 2;
-        var hi = (3 * frameUs) / 2;
-        if (actualDelta >= lo && actualDelta <= hi) return;
+        var target = _previewAfter.PositionUs;
+        if (target <= vm.FrameStartPhaseUs) return;
+        if (_previewBefore.PreviousFrameTargetUs == target)
+        {
+            if (_previewBefore.PositionUs >= target - 2 && _frameRecovery is null)
+            {
+                if (_failedFrameRecovery == (vm.SourcePath, target))
+                {
+                    NoFrameOverlay.Visibility = Visibility.Visible;
+                    MpvViewBefore.Visibility = Visibility.Collapsed;
+                    vm.StatusOverride = "Could not resolve the preceding frame at this position.";
+                }
+                else RecoverPreviousFrameAsync(vm, target);
+            }
+            return;
+        }
+        _frameRecovery?.Cancel();
+        _previewBefore.SeekPreviousFrame(target);
+    }
 
-        _resyncing = true;
-        var target = Math.Max(0, _previewAfter.PositionUs - frameUs);
-        _previewBefore.SeekUsExact(target);
-        // Clear the guard after one round-trip so future drift can be caught.
-        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
-        timer.Tick += (_, _) => { timer.Stop(); _resyncing = false; };
-        timer.Start();
+    private async void RecoverPreviousFrameAsync(MainViewModel vm, long target)
+    {
+        if (vm.SourcePath is not { } path || _ffmpeg is null) return;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        _frameRecovery = cancellation;
+        bool StillCurrent() => !_allowClose && vm.SourcePath == path && !vm.IsCollapsed
+            && !_previewAfter.IsPlaying && !_previewAfter.IsSeeking && _previewAfter.PositionUs == target;
+        try
+        {
+            var previous = await new RefineService(_ffmpeg).FindPreviousFrameAsync(path, target, cancellation.Token);
+            if (!StillCurrent()) return;
+            if (previous is { } frame)
+            {
+                _failedFrameRecovery = (path, target);
+                _previewBefore.SeekPreviousFrame(target, Math.Max(0, frame - 1));
+            }
+            else
+            {
+                _failedFrameRecovery = (path, target);
+                NoFrameOverlay.Visibility = Visibility.Visible;
+                MpvViewBefore.Visibility = Visibility.Collapsed;
+                vm.StatusOverride = "No preceding frame found within 60 seconds of this position.";
+            }
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException or IOException or System.Text.Json.JsonException)
+        {
+            if (StillCurrent())
+            {
+                _failedFrameRecovery = (path, target);
+                NoFrameOverlay.Visibility = Visibility.Visible;
+                MpvViewBefore.Visibility = Visibility.Collapsed;
+                vm.StatusOverride = "Could not resolve the preceding frame at this position.";
+            }
+        }
+        finally
+        {
+            _frameRecovery = null;
+            if (!_allowClose && ReferenceEquals(DataContext, vm)) MaybeResyncPanes(vm);
+        }
     }
 
     /// <summary>
@@ -445,8 +491,9 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnToggleMute(object sender, RoutedEventArgs e)
     {
-        var newMuted = !_previewBefore.IsMuted;
-        _previewBefore.SetMuted(newMuted);
+        var active = DataContext is MainViewModel { IsCollapsed: true } ? _previewAfter : _previewBefore;
+        var newMuted = !active.IsMuted;
+        active.SetMuted(newMuted);
         SpeakerOnGlyph.Visibility  = newMuted ? Visibility.Collapsed : Visibility.Visible;
         SpeakerOffGlyph.Visibility = newMuted ? Visibility.Visible   : Visibility.Collapsed;
     }
@@ -461,6 +508,12 @@ public partial class MainWindow : Window
     private void PlayPauseBoth()
     {
         if (DataContext is not MainViewModel vm) return;
+        if (vm.IsBusy) return;
+        if (vm.IsCollapsed)
+        {
+            if (vm.KeptTimeline.DurationUs > 0 && !_previewAfter.IsLoading) _previewAfter.PlayPause();
+            return;
+        }
         if (_previewAfter.IsPlaying)
         {
             _previewAfter.Pause();
@@ -538,7 +591,12 @@ public partial class MainWindow : Window
     {
         if (!File.Exists(path)) return;
         if (DataContext is not MainViewModel vm) return;
-        if (BlockProjectSwitchForExport(vm)) return;
+        if (BlockProjectSwitchForExport(vm) || _switching || vm.IsBusy) return;
+        _switching = true;
+        bool flushed;
+        try { flushed = await FlushBeforeLeavingAsync(vm); }
+        finally { _switching = false; }
+        if (!flushed) return;
 
         if (_ffmpeg is null || _probe is null || _chapters is null || _store is null)
         {
@@ -558,28 +616,38 @@ public partial class MainWindow : Window
             }
         }
 
+        if (vm.IsCollapsed) SetCollapsed(vm, false);
+        _switching = true;
+        _hydrating = true;
+        vm.IsBusy = true;
+        vm.BusyOperation = "Opening";
         CancelWaveformLoad(vm, clearPeaks: true);
         CancelThumbnailLoad(vm, clearThumbnails: true);
         _refineCts?.Cancel();
         _autosaveTimer.Stop();
 
-        // Open the same file in both panes. mpv handles two readers on the
-        // same path fine (and the OS page cache shares the underlying file
-        // pages, so the incremental cost is decoder state, not I/O).
-        _previewAfter.Open(path);
-        _previewBefore.Open(path);
-        VideoPlaceholder.Visibility = Visibility.Collapsed;
-        MpvViewAfter.Visibility = Visibility.Visible;
-        MpvViewBefore.Visibility = Visibility.Visible;
-
-        // Suppress autosave during initial hydration.
-        _autosaveTimer.Stop();
-
+        var previousPath = vm.SourcePath;
+        var previousPosition = vm.PlayheadUs;
         try
         {
+            _previewAfter.Open(path);
+            _previewBefore.Open(path);
+            VideoPlaceholder.Visibility = Visibility.Collapsed;
+            MpvViewAfter.Visibility = Visibility.Visible;
+            MpvViewBefore.Visibility = Visibility.Visible;
             vm.StatusKind = StatusKind.Info;
             vm.StatusOverride = "Probing media…";
-            _media = await _probe!.ProbeAsync(path);
+            var probed = await _probe!.ProbeAsync(path);
+            var fingerprint = ProjectStore.FingerprintOf(path, probed.DurationUs);
+            var loadResult = await Task.Run(() => _store!.Load(path, probed));
+            IReadOnlyList<ChapterBoundary>? imported = null;
+            if (loadResult.Project is null)
+                imported = await _chapters!.ImportAsync(path, probed.DurationUs, includeStart: true);
+            _media = probed;
+            _sourceFingerprint = fingerprint;
+            vm.SourceFingerprint = fingerprint;
+            _previewAfter.SelectAudioStream(_media.PrimaryAudioIndex);
+            _previewBefore.SelectAudioStream(_media.PrimaryAudioIndex);
             vm.SourcePath = path;
             vm.FileName = Path.GetFileName(path);
             vm.DurationUs = _media.DurationUs;
@@ -590,20 +658,18 @@ public partial class MainWindow : Window
                 $"{_media.FrameRate.AsDouble:0.##} fps · {_media.Width}×{_media.Height} · {_media.VideoCodec}";
 
             // Try sidecar hydration first.
-            var loadResult = _store!.Load(path, _media);
             if (loadResult.Project is { } proj && loadResult.Status is SidecarLoadStatus.Loaded or SidecarLoadStatus.LoadedWithMtimeWarning)
             {
                 HydrateFromSidecar(vm, proj);
-                if (loadResult.Status == SidecarLoadStatus.LoadedWithMtimeWarning)
+                if (loadResult.Message is not null)
                 {
-                    // TODO surface in status bar - for now, MessageBox keeps the soft-warning behavior visible.
                     vm.StatusKind = StatusKind.Warning;
                     vm.StatusOverride = loadResult.Message ?? "Source modified time changed; verify project state.";
                 }
             }
             else
             {
-                if (loadResult.Status is SidecarLoadStatus.Corrupt or SidecarLoadStatus.FingerprintMismatch)
+                if (loadResult.Status is SidecarLoadStatus.Corrupt or SidecarLoadStatus.FingerprintMismatch or SidecarLoadStatus.UnsupportedVersion)
                 {
                     vm.Banner = new BannerInfo(StatusKind.Warning,
                         "Project sidecar was not loaded.",
@@ -611,11 +677,20 @@ public partial class MainWindow : Window
                         Array.Empty<BannerAction>());
                 }
                 vm.StatusOverride = "Importing chapters…";
-                await HydrateFromChaptersAsync(vm, path, _media);
+                HydrateFromChapters(vm, _media, imported!);
             }
 
             vm.CommandStack.Clear();
             vm.IsDirty = false;
+            vm.SaveStatus = loadResult.Project is not null ? "Saved" : "No saved edits";
+            if (_preferences.Positions?.TryGetValue(path, out var position) == true)
+            {
+                position = Math.Clamp(position, 0, vm.DurationUs);
+                _previewAfter.Open(path, position);
+                _previewBefore.Open(path, Math.Max(0, position - FrameDurationUs(vm)));
+                vm.PlayheadUs = position;
+            }
+            else vm.PlayheadUs = 0;
             // Ensure Pane A starts 1 frame behind Pane B on initial load
             // (PlayheadUs = 0 means Pane A wants frame −1 → no-frame overlay).
             UpdateNoFrameOverlay(vm);
@@ -638,8 +713,17 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            if (previousPath is not null && _media is not null)
+            {
+                _previewAfter.Open(previousPath, previousPosition);
+                _previewBefore.Open(previousPath, Math.Max(0, previousPosition - FrameDurationUs(vm)));
+                _previewAfter.SelectAudioStream(_media.PrimaryAudioIndex);
+                _previewBefore.SelectAudioStream(_media.PrimaryAudioIndex);
+            }
+            else { _previewAfter.Stop(); _previewBefore.Stop(); }
             MessageBox.Show(this, ex.Message, "Failed to open", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+        finally { _hydrating = false; _switching = false; vm.IsBusy = false; vm.BusyOperation = null; }
     }
 
     private void CancelWaveformLoad(MainViewModel vm, bool clearPeaks)
@@ -746,6 +830,7 @@ public partial class MainWindow : Window
 
         // Add bookends + persisted internal splits.
         vm.Markers.Add(new Split { TimeUs = 0, Confidence = null, Confirmed = true, Label = "Start" });
+        vm.Markers[0].ChapterTitle = proj.StartChapterTitle;
         foreach (var ps in proj.Splits.OrderBy(s => s.TimeUs))
         {
             vm.Markers.Add(new Split
@@ -756,6 +841,7 @@ public partial class MainWindow : Window
                 OriginalTimeUs = ps.OriginalTimeUs,
                 Confidence = ps.Confidence,
                 Confirmed = ps.Confirmed,
+                ChapterTitle = ps.ChapterTitle,
             });
         }
         vm.Markers.Add(new Split { TimeUs = vm.DurationUs, Confidence = null, Confirmed = true, Label = "End" });
@@ -764,20 +850,21 @@ public partial class MainWindow : Window
         vm.RebuildSegmentsFromSplits();
     }
 
-    private async Task HydrateFromChaptersAsync(MainViewModel vm, string path, MediaInfo media)
+    private static void HydrateFromChapters(MainViewModel vm, MediaInfo media, IReadOnlyList<ChapterBoundary> chapters)
     {
-        var chapters = await _chapters!.ImportAsync(path, media.DurationUs);
         vm.ClearSelection();
         vm.Markers.Clear();
         vm.Segments.Clear();
         vm.ExcludedSegmentIds.Clear();
 
         vm.Markers.Add(new Split { TimeUs = 0, Confidence = null, Confirmed = true, Label = "Start" });
-        foreach (var c in chapters)
+        vm.Markers[0].ChapterTitle = chapters.FirstOrDefault(c => c.TimeUs == 0)?.Title;
+        foreach (var c in chapters.Where(c => c.TimeUs > 0))
         {
             vm.Markers.Add(new Split
             {
                 TimeUs = c.TimeUs,
+                ChapterTitle = c.Title,
                 Source = SplitSource.Chapter,
                 Confidence = null,
                 Confirmed = false,
@@ -787,89 +874,89 @@ public partial class MainWindow : Window
         vm.RebuildSegmentsFromSplits();
     }
 
-    private void OnAutosaveTick(object? sender, EventArgs e)
+    private async void OnAutosaveTick(object? sender, EventArgs e)
     {
         _autosaveTimer.Stop();
-        if (DataContext is not MainViewModel vm) return;
-        if (_store is null || _media is null || vm.SourcePath is null) return;
-        if (!vm.IsDirty) return;
+        if (_hydrating || _saveInProgress || DataContext is not MainViewModel vm) return;
+        await SaveProjectAsync(vm);
+    }
 
+    private async Task<bool> SaveProjectAsync(MainViewModel vm)
+    {
+        if (!vm.IsDirty) return true;
+        if (_store is null || _media is null || vm.SourcePath is null || _sourceFingerprint is null) return false;
+        var revision = vm.Revision;
+        var source = vm.SourcePath;
+        var snapshot = new AdTrimProject(AdTrimProject.CurrentSchemaVersion, source, _sourceFingerprint, _media,
+            vm.Markers.Where(m => !m.IsBookend).Select(m => new PersistedSplit(m.Id, m.TimeUs,
+                m.Source, m.OriginalTimeUs, m.Confidence, m.Confirmed, m.ChapterTitle)).ToList(),
+            vm.ExcludedSegmentIds.ToList(), SidecarLocation.NextToSource, vm.Markers.FirstOrDefault()?.ChapterTitle);
+        _saveInProgress = true;
+        vm.SaveStatus = "Saving";
         try
         {
-            var fp = ProjectStore.FingerprintOf(vm.SourcePath, _media.DurationUs);
-            var splits = vm.Markers
-                .Where(m => !m.IsBookend)
-                .Select(m => new PersistedSplit(m.Id, m.TimeUs, m.Source, m.OriginalTimeUs, m.Confidence, m.Confirmed))
-                .ToList();
-            var proj = new AdTrimProject(
-                SchemaVersion: AdTrimProject.CurrentSchemaVersion,
-                SourcePath: vm.SourcePath,
-                Fingerprint: fp,
-                Media: _media,
-                Splits: splits,
-                ExcludedSegmentIds: vm.ExcludedSegmentIds.ToList(),
-                SidecarLocation: SidecarLocation.NextToSource);
-            _store.Save(proj);
-            vm.IsDirty = false;
+            await _session.SaveAsync(_store, snapshot);
+            if (vm.SourcePath == source && vm.Revision == revision)
+            { vm.IsDirty = false; vm.SaveStatus = "Saved"; }
+            else if (vm.SourcePath == source)
+            { vm.SaveStatus = "Unsaved changes"; _autosaveTimer.Start(); }
+            return true;
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[autosave] failed: {ex.Message}");
+            vm.SaveStatus = "Save failed";
+            vm.Banner = new BannerInfo(StatusKind.Danger, "Could not save edits.", ex.Message,
+                new[] { new BannerAction("Retry", () => OnAutosaveTick(null, EventArgs.Empty)) });
+            return false;
         }
+        finally { _saveInProgress = false; }
     }
 
-    // -------------------------------------------------------------------
-    // Audition playback
-    // -------------------------------------------------------------------
-
-    private long? _auditionTargetEndUs;
-    private long? _auditionRestoreUs;
-    // Design intent: brief pause/visual cue at the boundary. The pause IS the
-    // visual cue - when the playhead crosses the split's timestamp the video
-    // freezes for ~300ms on that exact frame, then resumes. No marker pulse
-    // animation needed: the freeze on the boundary frame is what the user
-    // actually wants to evaluate.
-    private long? _auditionSplitUs;
-    private bool _auditionBoundaryHandled;
-    private DispatcherTimer? _auditionResumeTimer;
-    private const int AuditionBoundaryPauseMs = 300;
-
-    private void StartAudition()
+    private async Task<bool> FlushBeforeLeavingAsync(MainViewModel vm)
     {
-        if (DataContext is not MainViewModel vm || vm.SelectedMarker is null) return;
-        // If a prior audition's boundary pause is still pending (rare - only
-        // possible if the user re-triggers audition during the 300ms freeze),
-        // clear it so it doesn't fire into the new pass.
-        _auditionResumeTimer?.Stop();
-        _auditionResumeTimer = null;
-        var t = vm.SelectedMarker.TimeUs;
-        var frameUs = FrameDurationUs(vm);
-        _auditionRestoreUs = vm.PlayheadUs;
-        _auditionTargetEndUs = t + AuditionWindowUs;
-        _auditionSplitUs = t;
-        _auditionBoundaryHandled = false;
-        _playUntilUs = null;
-        var startB = Math.Max(0, t - AuditionWindowUs);
-        var startA = Math.Max(0, startB - frameUs);
-        _previewAfter.SeekUsExact(startB);
-        _previewBefore.SeekUsExact(startA);
-        _previewAfter.Play();
-        _previewBefore.Play();
+        _autosaveTimer.Stop();
+        bool busy = vm.IsBusy;
+        vm.IsBusy = true;
+        await SavePreferencesAsync(vm);
+        try
+        {
+            while (vm.IsDirty)
+            {
+                if (await SaveProjectAsync(vm)) continue;
+                var choice = MessageBox.Show(this, "Edits could not be saved. Retry?\nChoose No to discard unsaved edits, or Cancel to stay here.",
+                    "Save failed", MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
+                if (choice == MessageBoxResult.Cancel) return false;
+                if (choice == MessageBoxResult.No) { vm.IsDirty = false; return true; }
+            }
+            return true;
+        }
+        finally { vm.IsBusy = busy; }
     }
 
-    private void EndAudition()
+    private async void OnWindowClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        if (_auditionTargetEndUs is null) return;
-        _previewAfter.Pause();
-        _previewBefore.Pause();
-        if (_auditionRestoreUs is { } restore && DataContext is MainViewModel vm)
-            SeekTo(vm, restore);
-        _auditionTargetEndUs = null;
-        _auditionRestoreUs = null;
-        _auditionSplitUs = null;
-        _auditionBoundaryHandled = false;
-        _auditionResumeTimer?.Stop();
-        _auditionResumeTimer = null;
+        if (_allowClose)
+        {
+            // mpv must release its video output before WPF destroys the host HWNDs.
+            _previewAfter.PropertyChanged -= OnPreviewPropertyChanged;
+            _previewBefore.PropertyChanged -= OnPreviewPropertyChanged;
+            _previewAfter.Dispose();
+            _previewBefore.Dispose();
+            return;
+        }
+        e.Cancel = true;
+        if (_switching || DataContext is not MainViewModel vm || BlockProjectSwitchForExport(vm)) return;
+        _switching = true;
+        _refineCts?.Cancel();
+        if (await FlushBeforeLeavingAsync(vm))
+        {
+            _refineCts?.Cancel();
+            CancelWaveformLoad(vm, false);
+            CancelThumbnailLoad(vm, false);
+            _allowClose = true;
+            Close();
+        }
+        _switching = false;
     }
 
     // -------------------------------------------------------------------
@@ -894,6 +981,14 @@ public partial class MainWindow : Window
     /// +1s seek can't get rounded to the same keyframe in fast-seek mode.</param>
     private void SeekTo(MainViewModel vm, long timeUs, bool exact = true)
     {
+        if (vm.IsCollapsed)
+        {
+            if (vm.KeptTimeline.DurationUs == 0) return;
+            var output = vm.KeptTimeline.ToOutput(timeUs);
+            vm.PlayheadUs = vm.KeptTimeline.ToSource(output);
+            _previewAfter.SeekUsExact(output);
+            return;
+        }
         timeUs = Math.Max(0, Math.Min(vm.DurationUs, timeUs));
         vm.PlayheadUs = timeUs;
         var frameUs = FrameDurationUs(vm);
@@ -919,32 +1014,65 @@ public partial class MainWindow : Window
 
         if (e.Key == Key.Escape)
         {
-            if (_auditionTargetEndUs is not null) EndAudition();
-            else if (vm.IsBusy && vm.BusyOperation == "Refining") CancelRefine();
+            if (vm.IsBusy && vm.BusyOperation == "Refining") CancelRefine();
             e.Handled = true;
             return;
         }
 
         if (vm.IsBusy)
         {
+            if (e.Key == Key.Tab) return;
             vm.StatusKind = StatusKind.Warning;
             vm.StatusOverride = $"{vm.BusyOperation ?? "Operation"} in progress.";
             e.Handled = true;
             return;
         }
 
+        if (e.Key == Key.P && Keyboard.Modifiers == ModifierKeys.None)
+        { if (!e.IsRepeat) OnToggleCollapsed(this, new RoutedEventArgs()); e.Handled = true; return; }
+        if (e.Key is Key.Home or Key.End && Keyboard.Modifiers == ModifierKeys.None && vm.IsFileLoaded)
+        {
+            var positionUs = e.Key == Key.Home ? 0 : vm.TimelineDurationUs;
+            SeekTo(vm, vm.IsCollapsed ? vm.KeptTimeline.ToSource(positionUs) : positionUs);
+            e.Handled = true;
+            return;
+        }
+        if (ctrl && e.Key == Key.D0) { OnFitTimeline(this, new RoutedEventArgs()); e.Handled = true; return; }
+        if (ctrl && (e.Key == Key.OemPlus || e.Key == Key.Add)) { OnZoomIn(this, new RoutedEventArgs()); e.Handled = true; return; }
+        if (ctrl && (e.Key == Key.OemMinus || e.Key == Key.Subtract)) { OnZoomOut(this, new RoutedEventArgs()); e.Handled = true; return; }
+        if (!ctrl && e.Key == Key.E) { OnExport(this, new RoutedEventArgs()); e.Handled = true; return; }
+        if (vm.IsCollapsed)
+        {
+            if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None) PlayPauseBoth();
+            else if (e.Key is Key.OemComma or Key.OemPeriod) StepFrame(vm, e.Key == Key.OemComma ? -1 : 1);
+            else if (e.Key is Key.Left or Key.Right or Key.OemOpenBrackets or Key.OemCloseBrackets)
+            {
+                long step = e.Key is Key.OemOpenBrackets or Key.OemCloseBrackets ? 1_000_000 : ArrowStepUs(vm);
+                long direction = e.Key is Key.Left or Key.OemOpenBrackets ? -1 : 1;
+                SeekTo(vm, vm.KeptTimeline.ToSource(vm.TimelinePositionUs + direction * step));
+            }
+            else if (ctrl && e.Key == Key.S) OnAutosaveTick(null, EventArgs.Empty);
+            else if (ctrl && e.Key == Key.O) OnOpenFile(this, new RoutedEventArgs());
+            else if (ctrl && e.Key == Key.W) OnCloseProject(this, new RoutedEventArgs());
+            else if (!ctrl && !shift && (e.Key is >= Key.D0 and <= Key.D9 || e.Key is >= Key.NumPad0 and <= Key.NumPad9))
+            {
+                var digit = e.Key >= Key.NumPad0 ? e.Key - Key.NumPad0 : e.Key - Key.D0;
+                SeekTo(vm, vm.KeptTimeline.ToSource(vm.TimelineDurationUs * digit / 10));
+            }
+            else if (e.Key == Key.Tab) return;
+            else vm.StatusOverride = "Return to Edit view with P to change cuts.";
+            e.Handled = true;
+            return;
+        }
+        if (e.Key == Key.C && shift && !ctrl) { OnConfirmAndNext(this, new RoutedEventArgs()); e.Handled = true; return; }
         // Undo / redo
-        if (ctrl && e.Key == Key.Z) { vm.CommandStack.Undo(); e.Handled = true; return; }
+        if (ctrl && !shift && e.Key == Key.Z) { vm.CommandStack.Undo(); e.Handled = true; return; }
         if (ctrl && (e.Key == Key.Y || (shift && e.Key == Key.Z))) { vm.CommandStack.Redo(); e.Handled = true; return; }
         if (ctrl && e.Key == Key.S) { OnAutosaveTick(null, EventArgs.Empty); e.Handled = true; return; }
-        if (!ctrl && e.Key == Key.E) { OnExport(this, new RoutedEventArgs()); e.Handled = true; return; }
         if (ctrl && e.Key == Key.O) { OnOpenFile(this, new RoutedEventArgs()); e.Handled = true; return; }
         if (ctrl && e.Key == Key.W) { OnCloseProject(this, new RoutedEventArgs()); e.Handled = true; return; }
         if (ctrl && e.Key == Key.R) { OnRefineAll(this, new RoutedEventArgs()); e.Handled = true; return; }
         if (ctrl && shift && e.Key == Key.C) { OnConfirmAllRemaining(this, new RoutedEventArgs()); e.Handled = true; return; }
-        if (ctrl && e.Key == Key.D0) { OnFitTimeline(this, new RoutedEventArgs()); e.Handled = true; return; }
-        if (ctrl && (e.Key == Key.OemPlus || e.Key == Key.Add)) { OnZoomIn(this, new RoutedEventArgs()); e.Handled = true; return; }
-        if (ctrl && (e.Key == Key.OemMinus || e.Key == Key.Subtract)) { OnZoomOut(this, new RoutedEventArgs()); e.Handled = true; return; }
         if (!ctrl && e.Key == Key.R && vm.SelectedMarker is not null)
         { OnRefineSelected(this, new RoutedEventArgs()); e.Handled = true; return; }
 
@@ -1046,7 +1174,7 @@ public partial class MainWindow : Window
         // Exclude segment (X)
         if (e.Key == Key.X && !ctrl && vm.SelectedSegment is { } seg)
         {
-            vm.CommandStack.Execute(new ToggleExcludedCommand(seg));
+            vm.CommandStack.Execute(new ToggleExcludedCommand(vm, seg));
             e.Handled = true;
             return;
         }
@@ -1058,7 +1186,7 @@ public partial class MainWindow : Window
         {
             if (vm.SelectedSegment is { } delSeg)
             {
-                vm.CommandStack.Execute(new ToggleExcludedCommand(delSeg));
+                vm.CommandStack.Execute(new ToggleExcludedCommand(vm, delSeg));
                 e.Handled = true;
                 return;
             }
@@ -1075,21 +1203,13 @@ public partial class MainWindow : Window
         if (e.Key == Key.N && !ctrl)
         {
             var next = vm.NextUnconfirmedAfter(vm.PlayheadUs);
-            if (next is not null) vm.SelectMarker(next);
-            e.Handled = true;
-            return;
-        }
-
-        // Audition preview (P)
-        if (e.Key == Key.P && !ctrl && vm.SelectedMarker is not null)
-        {
-            StartAudition();
+            if (next is not null) { vm.SelectMarker(next); SeekTo(vm, next.TimeUs); }
             e.Handled = true;
             return;
         }
 
         // Play/pause (Space)
-        if (e.Key == Key.Space)
+        if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None)
         {
             PlayPauseBoth();
             e.Handled = true;
@@ -1286,7 +1406,7 @@ public partial class MainWindow : Window
         else
         {
             _preMaximizeBounds = new Rect(Left, Top, ActualWidth, ActualHeight);
-            var work = SystemParameters.WorkArea;
+            var work = MonitorBounds.WorkArea(this);
             Left = work.Left; Top = work.Top;
             Width = work.Width; Height = work.Height;
             MaxButtonIcon.Data = System.Windows.Media.Geometry.Parse(RestoreIconGeometry);
@@ -1304,10 +1424,16 @@ public partial class MainWindow : Window
     private void OnSaveProject(object sender, RoutedEventArgs e)
         => OnAutosaveTick(null, EventArgs.Empty);
 
-    private void OnCloseProject(object sender, RoutedEventArgs e)
+    private async void OnCloseProject(object sender, RoutedEventArgs e)
     {
         if (DataContext is not MainViewModel vm) return;
-        if (BlockProjectSwitchForExport(vm)) return;
+        if (BlockProjectSwitchForExport(vm) || _switching || vm.IsBusy) return;
+        _switching = true;
+        bool flushed;
+        try { flushed = await FlushBeforeLeavingAsync(vm); }
+        finally { _switching = false; }
+        if (!flushed) return;
+        SetCollapsed(vm, false);
         CancelWaveformLoad(vm, clearPeaks: true);
         CancelThumbnailLoad(vm, clearThumbnails: true);
         _refineCts?.Cancel();
@@ -1326,7 +1452,15 @@ public partial class MainWindow : Window
         vm.Banner = null;
         vm.ClearStatus();
         vm.IsDirty = false;
+        vm.IsCollapsed = false;
+        _previewAfter.Stop();
+        _previewBefore.Stop();
         _media = null;
+        _sourceFingerprint = null;
+        vm.SourceFingerprint = null;
+        vm.SaveStatus = "";
+        vm.CommandStack.Clear();
+        vm.IsDirty = false;
         VideoPlaceholder.Visibility = Visibility.Visible;
         MpvViewAfter.Visibility = Visibility.Collapsed;
         MpvViewBefore.Visibility = Visibility.Collapsed;
@@ -1349,11 +1483,13 @@ public partial class MainWindow : Window
 
     private void OnUndo(object sender, RoutedEventArgs e)
     {
+        if (DataContext is not MainViewModel { CanEdit: true }) return;
         if (DataContext is MainViewModel vm && !vm.IsBusy) vm.CommandStack.Undo();
     }
 
     private void OnRedo(object sender, RoutedEventArgs e)
     {
+        if (DataContext is not MainViewModel { CanEdit: true }) return;
         if (DataContext is MainViewModel vm && !vm.IsBusy) vm.CommandStack.Redo();
     }
 
@@ -1374,7 +1510,7 @@ public partial class MainWindow : Window
 
     private void OnAddSplitAtPlayhead(object sender, RoutedEventArgs e)
     {
-        if (DataContext is not MainViewModel vm || vm.IsBusy || vm.DurationUs <= 0) return;
+        if (DataContext is not MainViewModel vm || !vm.CanEdit || vm.DurationUs <= 0) return;
         AddSplitAtPlayhead(vm);
     }
 
@@ -1388,6 +1524,7 @@ public partial class MainWindow : Window
 
     private void OnConfirmAllRemaining(object sender, RoutedEventArgs e)
     {
+        if (DataContext is not MainViewModel { CanEdit: true }) return;
         if (DataContext is not MainViewModel vm || vm.IsBusy) return;
         var targets = vm.Markers.Where(m => !m.IsBookend && !m.Confirmed).ToList();
         if (targets.Count > 0) vm.CommandStack.Execute(new SetConfirmedCommand(targets, confirmed: true));
@@ -1395,6 +1532,7 @@ public partial class MainWindow : Window
 
     private void OnAutoConfirmHighConfidence(object sender, RoutedEventArgs e)
     {
+        if (DataContext is not MainViewModel { CanEdit: true }) return;
         if (DataContext is not MainViewModel vm || vm.IsBusy) return;
         var targets = vm.Markers
             .Where(m => !m.IsBookend && !m.Confirmed && m.Confidence == Confidence.High)
@@ -1404,23 +1542,26 @@ public partial class MainWindow : Window
 
     private void OnJumpNextUnconfirmed(object sender, RoutedEventArgs e)
     {
+        if (DataContext is not MainViewModel { CanEdit: true }) return;
         if (DataContext is not MainViewModel vm) return;
         var next = vm.NextUnconfirmedAfter(vm.PlayheadUs);
-        if (next is not null) vm.SelectMarker(next);
+        if (next is not null) { vm.SelectMarker(next); SeekTo(vm, next.TimeUs); }
     }
 
     private void OnPreviousSplit(object sender, RoutedEventArgs e)
     {
         if (DataContext is not MainViewModel vm) return;
-        var prev = vm.Markers.Where(m => m.TimeUs < vm.PlayheadUs).OrderByDescending(m => m.TimeUs).FirstOrDefault();
-        if (prev is not null) SeekTo(vm, prev.TimeUs);
+        var previous = vm.Markers.Select(m => vm.ToDisplayTime(m.TimeUs))
+            .Where(t => t < vm.TimelinePositionUs).DefaultIfEmpty(0).Max();
+        SeekTo(vm, vm.ToSourceTime(previous));
     }
 
     private void OnNextSplit(object sender, RoutedEventArgs e)
     {
         if (DataContext is not MainViewModel vm) return;
-        var next = vm.Markers.Where(m => m.TimeUs > vm.PlayheadUs).OrderBy(m => m.TimeUs).FirstOrDefault();
-        if (next is not null) SeekTo(vm, next.TimeUs);
+        var next = vm.Markers.Select(m => vm.ToDisplayTime(m.TimeUs))
+            .Where(t => t > vm.TimelinePositionUs).DefaultIfEmpty(vm.TimelineDurationUs).Min();
+        SeekTo(vm, vm.ToSourceTime(next));
     }
 
     private void OnStepFrameBack(object sender, RoutedEventArgs e)
@@ -1435,6 +1576,7 @@ public partial class MainWindow : Window
 
     private void StepFrame(MainViewModel vm, int direction)
     {
+        if (vm.IsBusy) return;
         if (_previewAfter.IsPlaying) { _previewAfter.Pause(); _previewBefore.Pause(); }
         // Use mpv's native frame-step commands rather than a duration-based
         // seek. The container's r_frame_rate (used by FrameDurationUs) doesn't
@@ -1451,12 +1593,12 @@ public partial class MainWindow : Window
         if (direction > 0)
         {
             _previewAfter.StepFrameForward();
-            _previewBefore.StepFrameForward();
+            if (!vm.IsCollapsed) _previewBefore.StepFrameForward();
         }
         else
         {
             _previewAfter.StepFrameBack();
-            _previewBefore.StepFrameBack();
+            if (!vm.IsCollapsed) _previewBefore.StepFrameBack();
         }
     }
 
@@ -1473,7 +1615,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (vm.IsBusy) return;
+        if (!vm.IsFileLoaded || vm.IsBusy) return;
         if (_ffmpeg is null)
         {
             vm.Banner = new BannerInfo(StatusKind.Danger,
@@ -1483,8 +1625,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        var encoder = new Encoders.LibX264EncoderStrategy();
-        var service = new ExportService(_ffmpeg, encoder);
 
         // Status-bar progress sink. Tee'd to the dialog so the dialog's
         // progress view AND the main-window status bar update together -
@@ -1492,6 +1632,7 @@ public partial class MainWindow : Window
         // "Run in background."
         var statusBarProgress = new Progress<ExportProgress>(p =>
         {
+            if (p.Phase == ExportPhase.Cleanup) return;
             vm.StatusOverride = p.Message;
             vm.StatusKind = p.Phase == ExportPhase.Failed ? StatusKind.Danger : StatusKind.Info;
             vm.ProgressPercent = p.OverallPercent;
@@ -1501,10 +1642,26 @@ public partial class MainWindow : Window
 
         var dlg = new ExportDialog { Owner = this };
         _activeExportDialog = dlg;
-        dlg.Bind(vm, _media);
-        dlg.AttachExportRunner(service, statusBarProgress);
+        dlg.Bind(vm, _media, _preferences.ExportAcceleration);
+        BackgroundExportBanner.DataContext = dlg.DataContext;
+        dlg.IsVisibleChanged += (_, _) => UpdateBackgroundExportBanner();
+        dlg.ExportFinished += (_, _) => UpdateBackgroundExportBanner();
+        dlg.Closed += async (_, _) =>
+        {
+            if (dlg.DataContext is ExportDialogViewModel completed)
+            { _preferences = _preferences with { ExportAcceleration = !completed.CanCheckHardware ? _preferences.ExportAcceleration : completed.SelectedAcceleration.Id }; await SavePreferencesAsync(vm); }
+        };
+        dlg.AttachExportRunner(_ffmpeg, statusBarProgress);
         dlg.ExportFinished += (_, _) => HandleExportFinished(vm, dlg);
-        dlg.Closed += (_, _) => { if (ReferenceEquals(_activeExportDialog, dlg)) _activeExportDialog = null; };
+        dlg.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_activeExportDialog, dlg))
+            {
+                _activeExportDialog = null;
+                BackgroundExportBanner.DataContext = null;
+                UpdateBackgroundExportBanner();
+            }
+        };
         // Modeless: doesn't block MainWindow. Lets the user reopen on a second
         // Export click after "Run in background" hides this same instance.
         dlg.Show();
@@ -1554,6 +1711,12 @@ public partial class MainWindow : Window
     /// those don't have a dialog to surface, so the click is harmlessly
     /// inert rather than confusing.
     /// </summary>
+    private void UpdateBackgroundExportBanner()
+    {
+        BackgroundExportBanner.Visibility = _activeExportDialog is { IsExportInFlight: true, IsVisible: false }
+            ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private void OnStatusOverrideClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         if (_activeExportDialog is null) return;
@@ -1607,15 +1770,17 @@ public partial class MainWindow : Window
 
     private void OnToggleExcluded(object sender, RoutedEventArgs e)
     {
+        if (DataContext is not MainViewModel { CanEdit: true }) return;
         if (DataContext is not MainViewModel vm) return;
         if (vm.IsBusy) return;
         var seg = vm.SelectedSegment;
         if (seg is null) return;
-        vm.CommandStack.Execute(new ToggleExcludedCommand(seg));
+        vm.CommandStack.Execute(new ToggleExcludedCommand(vm, seg));
     }
 
     private void OnDeleteSelectedSplit(object sender, RoutedEventArgs e)
     {
+        if (DataContext is not MainViewModel { CanEdit: true }) return;
         if (DataContext is not MainViewModel vm) return;
         if (vm.IsBusy) return;
         var marker = vm.SelectedMarker;
@@ -1624,13 +1789,9 @@ public partial class MainWindow : Window
         vm.ClearSelection();
     }
 
-    private void OnPreviewSelectedSplit(object sender, RoutedEventArgs e)
-    {
-        if (DataContext is MainViewModel { SelectedMarker: not null }) StartAudition();
-    }
-
     private void OnConfirmSelectedSplit(object sender, RoutedEventArgs e)
     {
+        if (DataContext is not MainViewModel { CanEdit: true }) return;
         if (DataContext is not MainViewModel vm || vm.SelectedMarker is null) return;
         if (vm.IsBusy) return;
         if (vm.SelectedMarker.Confirmed && !ConfirmUnconfirm(vm.SelectedMarker)) return;
@@ -1658,6 +1819,7 @@ public partial class MainWindow : Window
 
     private void OnMoveSelectedToPlayhead(object sender, RoutedEventArgs e)
     {
+        if (DataContext is not MainViewModel { CanEdit: true }) return;
         if (DataContext is not MainViewModel vm || vm.SelectedMarker is null) return;
         if (vm.IsBusy) return;
         var split = vm.SelectedMarker;
@@ -1669,9 +1831,7 @@ public partial class MainWindow : Window
         var idx = sorted.IndexOf(split);
         long minUs = idx > 0 ? sorted[idx - 1].TimeUs + 1 : 0;
         long maxUs = idx < sorted.Count - 1 ? sorted[idx + 1].TimeUs - 1 : vm.DurationUs;
-        var candidate = FrameSnap.Clamp(vm.PlayheadUs, minUs, maxUs);
-        candidate = FrameSnap.Snap(candidate, vm.FrameRate, vm.FrameStartPhaseUs);
-        candidate = FrameSnap.Clamp(candidate, minUs, maxUs);
+        var candidate = FrameSnap.SnapWithin(vm.PlayheadUs, vm.FrameRate, vm.FrameStartPhaseUs, minUs, maxUs) ?? split.TimeUs;
         if (candidate == split.TimeUs) return;
         vm.CommandStack.Execute(new MoveSplitCommand(vm, split, split.TimeUs, candidate));
     }
@@ -1680,13 +1840,6 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainViewModel vm || vm.SelectedMarker is null) return;
         OnTimelineNudgeRequested(this, (vm.SelectedMarker, directionFrames));
-    }
-
-    private void OnTimelineAuditionRequested(object? sender, Split split)
-    {
-        if (DataContext is not MainViewModel vm) return;
-        vm.SelectMarker(split);
-        StartAudition();
     }
 
     private async void OnTimelineRefineRequested(object? sender, Split split)
@@ -1715,7 +1868,7 @@ public partial class MainWindow : Window
     /// </summary>
     private async Task RefineMarkersAsync(MainViewModel vm, IReadOnlyList<Split> targets)
     {
-        if (vm.IsBusy) return;
+        if (!vm.CanEdit) return;
         if (vm.SourcePath is null || _ffmpeg is null)
         {
             vm.Banner = new BannerInfo(StatusKind.Danger,
@@ -1752,6 +1905,7 @@ public partial class MainWindow : Window
         _refineCts?.Dispose();
         _refineCts = new CancellationTokenSource();
         var ct = _refineCts.Token;
+        var refineSource = vm.SourcePath;
         vm.IsBusy = true;
         vm.BusyOperation = "Refining";
         vm.Banner = new BannerInfo(StatusKind.Info,
@@ -1773,6 +1927,7 @@ public partial class MainWindow : Window
             var marker = eligible[i];
             var idx = sorted.IndexOf(marker);
             long minBound = idx > 0 ? sorted[idx - 1].TimeUs : 0;
+            if (idx > 0 && mutations.LastOrDefault(m => m.Marker == sorted[idx - 1]) is { } previous) minBound = previous.ToUs;
             long maxBound = idx < sorted.Count - 1 ? sorted[idx + 1].TimeUs : vm.DurationUs;
 
             vm.StatusOverride = $"Refining {i + 1} / {eligible.Count}…";
@@ -1782,7 +1937,7 @@ public partial class MainWindow : Window
             try
             {
                 ct.ThrowIfCancellationRequested();
-                result = await _refine.RefineOneAsync(vm.SourcePath, marker.TimeUs, minBound, maxBound, ct);
+                result = await _refine.RefineOneAsync(vm.SourcePath, marker.TimeUs, minBound, maxBound, ct, _media?.PrimaryAudioIndex);
             }
             catch (OperationCanceledException)
             {
@@ -1807,6 +1962,7 @@ public partial class MainWindow : Window
                 return;
             }
 
+            if (ct.IsCancellationRequested || vm.SourcePath != refineSource) return;
             if (result is null || result.Confidence == Confidence.Unchanged)
             {
                 unchanged++;
@@ -1830,6 +1986,7 @@ public partial class MainWindow : Window
                 ToOriginalTimeUs: marker.OriginalTimeUs ?? marker.TimeUs));
         }
 
+        if (ct.IsCancellationRequested || vm.SourcePath != refineSource) return;
         vm.ClearStatus();
         vm.IsBusy = false;
         vm.BusyOperation = null;
@@ -1914,9 +2071,7 @@ public partial class MainWindow : Window
         var idx = target.IndexOf(e.split);
         long minUs = idx > 0 ? target[idx - 1].TimeUs + 1 : 0;
         long maxUs = idx < target.Count - 1 ? target[idx + 1].TimeUs - 1 : vm.DurationUs;
-        var candidate = FrameSnap.Clamp(e.split.TimeUs + frameUs, minUs, maxUs);
-        candidate = FrameSnap.Snap(candidate, vm.FrameRate, vm.FrameStartPhaseUs);
-        candidate = FrameSnap.Clamp(candidate, minUs, maxUs);
+        var candidate = FrameSnap.SnapWithin(e.split.TimeUs + frameUs, vm.FrameRate, vm.FrameStartPhaseUs, minUs, maxUs) ?? e.split.TimeUs;
         if (candidate != e.split.TimeUs)
             vm.CommandStack.Execute(new MoveSplitCommand(vm, e.split, e.split.TimeUs, candidate));
     }

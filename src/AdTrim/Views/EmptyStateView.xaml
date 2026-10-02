@@ -7,7 +7,7 @@
     <!-- WPF `Border` only supports solid edges. To draw a dashed rounded
          border, layer a `Rectangle` (with the gradient fill + dashed stroke)
          underneath the content `StackPanel`. -->
-    <Grid MaxWidth="880" Height="600" Margin="40">
+    <Grid MaxWidth="880" MaxHeight="600" Margin="40">
       <Rectangle RadiusX="12" RadiusY="12"
                  Stroke="{StaticResource Border.Strong}" StrokeThickness="2"
                  StrokeDashArray="4 4" StrokeDashCap="Round"

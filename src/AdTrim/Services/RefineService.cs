@@ -15,7 +15,7 @@ namespace AdTrim.Services;
 ///      (signals are 0..1; "in window" → 1.0 unless distance-decayed).
 ///   4. Pick the highest-scoring candidate; the refined split time is that
 ///      frame's pkt_pts_time (already frame-authoritative).
-///   5. Clamp to neighbors + source bounds.
+///   5. Choose only candidates strictly inside neighboring boundaries.
 ///   6. Confidence bucket from (top, margin to second-best).
 ///
 /// IMPORTANT: the filter graph + scoring formula here are
@@ -31,8 +31,8 @@ public sealed class RefineService
     public RefineService(FfmpegRunner runner) => _runner = runner;
 
     /// <summary>
-    /// Refine a single split. `neighbors` is `(prevUs, nextUs)` - refined time
-    /// is clamped to `(prev+1us, next-1us)`. `duration` is `(0, durationUs)`.
+    /// Refine a single split using actual frames strictly inside the supplied
+    /// neighboring boundaries, including source bookends.
     /// Returns null if the source has no candidate frames in the window.
     /// </summary>
     public async Task<RefineResult?> RefineOneAsync(
@@ -40,13 +40,16 @@ public sealed class RefineService
         long originalTimeUs,
         long minBoundUs,
         long maxBoundUs,
-        CancellationToken ct = default)
+        CancellationToken ct = default, int? primaryAudioIndex = null)
     {
         long winStartUs = Math.Max(0, originalTimeUs - WindowHalfUs);
         long winEndUs = originalTimeUs + WindowHalfUs;
 
         var candidates = await EnumerateCandidatesAsync(sourcePath, winStartUs, winEndUs, ct).ConfigureAwait(false);
+        candidates = candidates.Where(f => f.timeUs > minBoundUs && f.timeUs < maxBoundUs
+            && f.timeUs >= winStartUs && f.timeUs <= winEndUs).ToArray();
         if (candidates.Count == 0) return null;
+        primaryAudioIndex ??= (await new MediaProbeService(_runner).ProbeAsync(sourcePath, ct).ConfigureAwait(false)).PrimaryAudioIndex;
 
         // ffmpeg with `-ss N -i FILE` (input seek, no -copyts) emits frames
         // whose pts_time is *seek-normalized*: source_pts - N. Frames before
@@ -58,7 +61,7 @@ public sealed class RefineService
         // Verified empirically on the BBT fixture (2026-05-16): `-ss 258 -t 4`
         // + scene-cut showinfo reports pts_time:3.953533, which corresponds
         // to source 261.953 - exactly the visible cut frame.
-        var signals = await CollectSignalsAsync(sourcePath, winStartUs, winEndUs, winStartUs, ct).ConfigureAwait(false);
+        var signals = await CollectSignalsAsync(sourcePath, winStartUs, winEndUs, winStartUs, primaryAudioIndex.Value, ct).ConfigureAwait(false);
 
         // Score every candidate.
         //
@@ -99,7 +102,7 @@ public sealed class RefineService
         var confidence = ClassifyConfidence(topScore, margin, tiedCount: tied.Count);
         long refinedUs = confidence == Confidence.Unchanged
             ? originalTimeUs
-            : FrameSnap.Clamp(picked.timeUs, minBoundUs + 1, maxBoundUs - 1);
+            : picked.timeUs;
 
         return new RefineResult(
             SplitId: "",   // caller maps back to the source split
@@ -160,13 +163,12 @@ public sealed class RefineService
         string sourcePath, long winStartUs, long winEndUs, CancellationToken ct)
     {
         var startSec = (winStartUs / 1_000_000.0).ToString("0.000", CultureInfo.InvariantCulture);
-        var durSec = ((winEndUs - winStartUs) / 1_000_000.0).ToString("0.000", CultureInfo.InvariantCulture);
 
         var args = new[]
         {
             "-v", "error",
             "-select_streams", "v:0",
-            "-read_intervals", $"{startSec}%+{durSec}",
+            "-read_intervals", $"{startSec}%{(winEndUs / 1_000_000m).ToString("0.######", CultureInfo.InvariantCulture)}",
             "-show_entries", "frame=pts_time,pict_type",
             "-of", "json",
             sourcePath,
@@ -176,6 +178,19 @@ public sealed class RefineService
             throw new InvalidOperationException($"ffprobe show_frames failed (exit {r.ExitCode}): {r.Stderr}");
 
         return ParseCandidates(r.Stdout);
+    }
+
+    public async Task<long?> FindPreviousFrameAsync(string sourcePath, long timeUs, CancellationToken ct)
+    {
+        // Used only when the player's backstep cannot cross a damaged timestamp gap.
+        foreach (long lookbackUs in new long[] { 2_000_000, 10_000_000, 60_000_000 })
+        {
+            var startUs = Math.Max(0, timeUs - lookbackUs);
+            var frames = await EnumerateCandidatesAsync(sourcePath, startUs, timeUs + 100_000, ct).ConfigureAwait(false);
+            var previous = frames.Where(f => f.timeUs < timeUs - 2).Select(f => (long?)f.timeUs).Max();
+            if (previous is not null || startUs == 0) return previous;
+        }
+        return null;
     }
 
     internal static IReadOnlyList<(long timeUs, char pictType)> ParseCandidates(string json)
@@ -225,22 +240,22 @@ public sealed class RefineService
                 var d = Math.Abs(t - tUs);
                 if (d < bestDelta) { bestDelta = d; best = s; }
             }
-            return Math.Clamp(best, 0.0, 1.0);
+            return bestDelta <= 1_000 ? Math.Clamp(best, 0.0, 1.0) : 0.0;
         }
     }
 
     private async Task<SignalSet> CollectSignalsAsync(
-        string sourcePath, long winStartUs, long winEndUs, long offsetUs, CancellationToken ct)
+        string sourcePath, long winStartUs, long winEndUs, long offsetUs, int audioIndex, CancellationToken ct)
     {
         var startSec = (winStartUs / 1_000_000.0).ToString("0.000", CultureInfo.InvariantCulture);
-        var durSec = ((winEndUs - winStartUs) / 1_000_000.0).ToString("0.000", CultureInfo.InvariantCulture);
+        var durSec = ((winEndUs - winStartUs) / 1_000_000m).ToString("0.######", CultureInfo.InvariantCulture);
 
         // Newer FFmpeg (N-12xxxx+) rejects filtergraphs where every branch
         // ends in nullsink - the graph reports "zero outputs". Each terminal
         // must produce a labelled output that we then -map and discard via
         // `-f null -`. blackdetect / silencedetect / metadata=print all
         // write to stderr regardless of how the frames are routed.
-        var args = new[]
+        var args = new List<string>
         {
             "-v", "info",
             "-ss", startSec, "-t", durSec,
@@ -249,7 +264,7 @@ public sealed class RefineService
               "[0:v]split=2[v1][v2];"
             + "[v1]blackdetect=d=0.04:pix_th=0.10[vb];"
             + "[v2]select='gt(scene\\,0.0)',metadata=print[vs];"
-            + "[0:a]silencedetect=n=-30dB:d=0.04[as]",
+            + (audioIndex >= 0 ? $"[0:{audioIndex}]silencedetect=n=-30dB:d=0.04[as]" : "anullsrc,atrim=duration=0[as]"),
             "-map", "[vb]",
             "-map", "[vs]",
             "-map", "[as]",

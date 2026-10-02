@@ -7,7 +7,7 @@ REM   - NSIS is installed (https://nsis.sourceforge.io/Download); the script
 REM     auto-detects the default install locations OR you can override via
 REM     %ADTRIM_NSIS_DIR%
 REM
-REM Output: AdTrim-Setup-v<version>.exe at the repo root, where <version>
+REM Output: .installers\AdTrim-Setup-v<version>.exe, where <version>
 REM is read from AppVersion.Numeric in src\AdTrim\AppVersion.cs (single
 REM source of truth for the app version). The same version goes into the
 REM NSIS APPVERSION macro so the
@@ -15,7 +15,7 @@ REM Add/Remove Programs entry stays accurate.
 REM
 REM End-to-end flow for an updated app:
 REM   publish.cmd && installer.cmd
-REM   Then run AdTrim-Setup-v<version>.exe.
+REM   Then run .installers\AdTrim-Setup-v<version>.exe.
 
 setlocal enabledelayedexpansion
 
@@ -53,7 +53,10 @@ goto :missing_nsis
 :have_nsis
 if not exist "%PUBLISH%\AdTrim.exe" goto :missing_publish
 
-set "OUTFILE=%~dp0AdTrim-Setup-v!APPVERSION!.exe"
+if not exist "%~dp0.installers" mkdir "%~dp0.installers"
+if errorlevel 1 goto :failed
+set "OUTFILE=%~dp0.installers\AdTrim-Setup-v!APPVERSION!.exe"
+if exist "!OUTFILE!" goto :existing_installer
 
 echo Using NSIS: %MAKENSIS%
 echo Version:   !APPVERSION!
@@ -63,6 +66,8 @@ echo.
 
 REM cd into the repo root so relative paths inside installer.nsi resolve.
 cd /d "%~dp0"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\prepare-installer.ps1"
+if errorlevel 1 goto :failed
 "%MAKENSIS%" /DAPPVERSION=!APPVERSION! "%NSI%"
 if errorlevel 1 goto :failed
 
@@ -75,6 +80,11 @@ exit /b 0
 :missing_version
 echo ERROR: could not parse AppVersion.Numeric from "%VERSIONFILE%".
 echo Expected a line like:  public const string Numeric = "1.0.NNNN";
+exit /b 1
+
+:existing_installer
+echo ERROR: installer already exists: !OUTFILE!
+echo Use a new version for changed builds. Existing installers are preserved.
 exit /b 1
 
 :missing_nsis

@@ -7,7 +7,7 @@ using AdTrim.Services;
 // Standalone export driver for export validation.
 //
 // Usage:
-//   export-cli --in <source.mp4> --out <output.mp4> [--exclude 0,2,4,...]
+//   export-cli --in <source.mp4> --out <output.mp4> [--exclude 0,2,4,...] [--overwrite]
 //
 // Segments are derived from chapter-imported splits + [0, duration] bookends.
 // `--exclude` takes zero-based segment indices to drop. If omitted, every
@@ -17,11 +17,13 @@ using AdTrim.Services;
 string? inPath = null, outPath = null;
 var excludeIndices = new HashSet<int>();
 bool autoExcludeEven = true;
+bool overwrite = false;
 
 for (int i = 0; i < args.Length; i++)
 {
     switch (args[i])
     {
+        case "--overwrite": overwrite = true; break;
         case "--in":      inPath = args[++i]; break;
         case "--out":     outPath = args[++i]; break;
         case "--exclude":
@@ -37,7 +39,7 @@ for (int i = 0; i < args.Length; i++)
 
 if (inPath is null || outPath is null)
 {
-    Console.Error.WriteLine("usage: export-cli --in <source.mp4> --out <output.mp4> [--exclude 0,2,4,...]");
+    Console.Error.WriteLine("usage: export-cli --in <source.mp4> --out <output.mp4> [--exclude 0,2,4,...] [--overwrite]");
     return 64;
 }
 
@@ -104,10 +106,12 @@ var plan = new ExportPlan(
     SourceDurationUs: media.DurationUs,
     PrimaryAudioStreamIndex: media.PrimaryAudioIndex,
     KeptSegments: keptSegments,
-    FrameRate: media.FrameRate);
+    FrameRate: media.FrameRate,
+    PrimaryAudioCodec: media.PrimaryAudio?.Codec ?? "",
+    Fingerprint: new SourceFingerprint(new FileInfo(inPath).Length,
+        new DateTimeOffset(File.GetLastWriteTimeUtc(inPath)).ToUnixTimeMilliseconds(), media.DurationUs),
+    Overwrite: overwrite);
 
-Directory.CreateDirectory(Path.GetDirectoryName(outPath) ?? ".");
-if (File.Exists(outPath)) File.Delete(outPath);
 
 var lastPercent = -1;
 var progress = new Progress<ExportProgress>(p =>

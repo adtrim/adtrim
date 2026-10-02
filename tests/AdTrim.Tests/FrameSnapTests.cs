@@ -11,6 +11,14 @@ public class FrameSnapTests
     // ~33366.7µs. Snapping any time in that frame's interval should land
     // on the start of the frame.
     [Fact]
+    public void BoundedSnap_DoesNotCreateANonFrameAtANeighbor()
+    {
+        var frame = FrameSnap.SnapWithin(50_000, new Rational(30, 1), 0, 33_334, 99_999);
+        Assert.Equal(66_667, frame);
+        Assert.Null(FrameSnap.SnapWithin(40_000, new Rational(30, 1), 0, 33_334, 60_000));
+    }
+
+    [Fact]
     public void Snap_AtFrameBoundary_IsUnchanged()
     {
         var fps = new Rational(30000, 1001);

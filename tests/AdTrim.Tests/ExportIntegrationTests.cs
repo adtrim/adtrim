@@ -273,6 +273,7 @@ public class ExportIntegrationTests
             "exp w spaces 'and' quote-" + Guid.NewGuid().ToString("n").Substring(0, 8));
         Directory.CreateDirectory(outDir);
         var outPath = Path.Combine(outDir, "Show Name S01E02 - It's Working.mp4");
+        await File.WriteAllTextAsync(outPath, "previous export");
 
         try
         {
@@ -287,7 +288,8 @@ public class ExportIntegrationTests
                 PrimaryAudioStreamIndex: media.PrimaryAudio!.Index,
                 KeptSegments: segments,
                 FrameRate: media.FrameRate,
-                PrimaryAudioCodec: media.PrimaryAudio.Codec);
+                PrimaryAudioCodec: media.PrimaryAudio.Codec,
+                Overwrite: true);
 
             await export.RunExportAsync(plan);
 
@@ -299,6 +301,52 @@ public class ExportIntegrationTests
         {
             try { Directory.Delete(outDir, recursive: true); } catch { /* best effort */ }
         }
+    }
+
+    [SkippableTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedOrCancelledExport_PreservesExistingDestination(bool cancel)
+    {
+        var fixture = FindFixture();
+        Skip.If(fixture is null, SkipReason);
+        var runner = new FfmpegRunner();
+        var media = await new MediaProbeService(runner).ProbeAsync(fixture!);
+        var directory = Path.Combine(AppContext.BaseDirectory, "export-safety-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var output = Path.Combine(directory, "existing.mp4");
+        const string previous = "previous export must survive";
+        await File.WriteAllTextAsync(output, previous);
+        var hash = Sha256(fixture!);
+        using var cts = new CancellationTokenSource();
+        try
+        {
+            var plan = new ExportPlan(fixture!, output, media.DurationUs, media.PrimaryAudio!.Index,
+                new[] { new ExportSegment(0, 0, 1_000_000, "Part 1") }, media.FrameRate,
+                media.PrimaryAudio.Codec, Overwrite: true);
+            var service = new ExportService(runner, cancel ? new LibX264EncoderStrategy() : new FailingEncoder());
+            var progress = new ImmediateProgress(p => { if (p.Phase == ExportPhase.Validating) cts.Cancel(); });
+            if (cancel)
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.RunExportAsync(plan, progress, cts.Token));
+            else
+                await Assert.ThrowsAsync<ExportException>(() => service.RunExportAsync(plan));
+            Assert.Equal(previous, await File.ReadAllTextAsync(output));
+            Assert.Equal(hash, Sha256(fixture!));
+            Assert.Empty(Directory.GetFiles(directory, ".adtrim-*.mp4"));
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    private sealed class ImmediateProgress(Action<ExportProgress> report) : IProgress<ExportProgress>
+    {
+        public void Report(ExportProgress value) => report(value);
+    }
+
+    private sealed class FailingEncoder : IEncoderStrategy
+    {
+        public string DisplayName => "Failure test";
+        public IReadOnlyList<string> BuildSegmentArgs(string sourcePath, ExportSegment segment, int primaryAudioStreamIndex, string outputPath)
+            => new[] { "-invalid-adtrim-test-option" };
     }
 
     /// <summary>

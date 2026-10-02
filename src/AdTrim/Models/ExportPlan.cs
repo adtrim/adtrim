@@ -17,7 +17,9 @@ public sealed record ExportPlan(
     int PrimaryAudioStreamIndex,
     IReadOnlyList<ExportSegment> KeptSegments,
     Rational FrameRate,
-    string PrimaryAudioCodec = "")
+    string PrimaryAudioCodec = "",
+    SourceFingerprint? Fingerprint = null,
+    bool Overwrite = false)
 {
     public long ExpectedOutputDurationUs => KeptSegments.Sum(s => s.DurationUs);
 }
@@ -25,6 +27,8 @@ public sealed record ExportPlan(
 public enum ExportPhase
 {
     Planning,
+    Cleanup,
+    Restarting,
     EncodingSegment,
     Concatenating,
     Validating,
@@ -38,4 +42,6 @@ public sealed record ExportProgress(
     int TotalSegments,
     double SegmentPercent,        // 0.0..1.0 for current segment
     double OverallPercent,        // 0.0..1.0
-    string Message);
+    string Message,
+    string? EncoderName = null,
+    string? FallbackNotice = null);

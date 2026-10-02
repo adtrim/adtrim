@@ -19,8 +19,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$FfmpegDir,
-    [string]$MinVersion = '8.1.2',
-    [string]$ReviewedDate = '2026-06-24',
+    [string]$MinVersion = '9.0.2',
+    [string]$ReviewedDate = '2026-10-01',
     [int]$MaxAgeDays = 90
 )
 

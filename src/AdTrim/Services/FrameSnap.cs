@@ -6,8 +6,7 @@ namespace AdTrim.Services;
 /// Routine frame-snap math against <c>r_frame_rate</c>'s rational, with a
 /// phase offset for files whose first video frame doesn't sit at time 0.
 /// This is the authoritative snap for
-/// marker drag and manual placement - no FFmpeg call needed. Refinement
-/// and audition boundary marking still use ffprobe.
+/// marker drag and manual placement - no FFmpeg call needed. Refinement still uses ffprobe.
 ///
 /// <para><b>Why the phase parameter exists:</b> Plex DVR `.ts` captures
 /// usually start mid-GOP, so the autoconverter-produced MP4 has the
@@ -27,6 +26,17 @@ public static class FrameSnap
         var adjusted = timeUs - phaseUs;
         var frameIndex = Math.Round(adjusted * num / (1_000_000.0 * den));
         return phaseUs + (long)Math.Round(frameIndex * (1_000_000.0 * den) / num);
+    }
+
+    public static long? SnapWithin(long timeUs, Rational frameRate, long phaseUs, long minUs, long maxUs)
+    {
+        if (minUs > maxUs || frameRate.Numerator <= 0 || frameRate.Denominator <= 0) return null;
+        decimal frameUs = 1_000_000m * frameRate.Denominator / frameRate.Numerator;
+        var first = decimal.Ceiling((minUs - phaseUs) / frameUs);
+        var last = decimal.Floor((maxUs - phaseUs) / frameUs);
+        if (first > last) return null;
+        var frame = Math.Clamp(decimal.Round((timeUs - phaseUs) / frameUs), first, last);
+        return phaseUs + (long)decimal.Round(frame * frameUs);
     }
 
     /// <summary>Clamp to [minUs, maxUs], inclusive.</summary>

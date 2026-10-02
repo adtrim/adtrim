@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:app="clr-namespace:AdTrim"
         Title="About AdTrim"
-        Width="420" Height="400"
+        Width="420" Height="430" PreviewMouseLeftButtonDown="OnWindowMouseDown"
         WindowStartupLocation="CenterOwner"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -28,8 +28,7 @@
       </Grid.RowDefinitions>
 
       <!-- Title bar (drag area + close) -->
-      <Grid Grid.Row="0" Height="36" Background="Transparent"
-            MouseLeftButtonDown="OnTitleBarMouseDown">
+      <Grid Grid.Row="0" Height="36" Background="Transparent">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*"/>
           <ColumnDefinition Width="Auto"/>
@@ -37,7 +36,7 @@
         <TextBlock Grid.Column="0" Text="About"
                    Margin="16,0,0,0" VerticalAlignment="Center"
                    Foreground="{StaticResource Text.Secondary}" FontSize="12"/>
-        <Button Grid.Column="1" Style="{StaticResource WindowControlButton.Close}"
+        <Button x:Name="TitleCloseButton" Grid.Column="1" Style="{StaticResource DialogCloseButton}"
                 Click="OnClose">
           <Path Stroke="{StaticResource Text.Secondary}" StrokeThickness="1"
                 Data="M0.5,0.5 L9.5,9.5 M9.5,0.5 L0.5,9.5"/>
@@ -58,6 +57,13 @@
                    FontFamily="{StaticResource Font.Mono}" FontSize="12"
                    HorizontalAlignment="Center" Margin="0,4,0,0"
                    Foreground="{StaticResource Text.Tertiary}"/>
+        <TextBlock Text="Created by Mark Hewitt" FontSize="12"
+                   HorizontalAlignment="Center" Margin="0,10,0,0"
+                   Foreground="{StaticResource Text.Secondary}"/>
+        <TextBlock HorizontalAlignment="Center" Margin="0,6,0,0" FontSize="12">
+          <Hyperlink NavigateUri="https://github.com/mhco" RequestNavigate="OnGitHubLink"
+                     Foreground="{StaticResource Accent.Base}">https://github.com/mhco</Hyperlink>
+        </TextBlock>
         <TextBlock Text="Cut the commercials. Keep the show."
                    TextAlignment="Center" TextWrapping="Wrap"
                    Margin="0,16,0,0"

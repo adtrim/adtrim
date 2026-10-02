@@ -27,7 +27,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string? SourcePath
     {
         get => _sourcePath;
-        set { if (Set(ref _sourcePath, value)) Notify(nameof(IsFileLoaded)); }
+        set { if (Set(ref _sourcePath, value)) Notify(nameof(IsFileLoaded), nameof(CanToggleCollapsed)); }
     }
 
     public string MediaInfoLine { get; set; } = "";
@@ -36,7 +36,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public long DurationUs
     {
         get => _durationUs;
-        set { if (Set(ref _durationUs, value)) Notify(nameof(IsFileLoaded)); }
+        set { if (Set(ref _durationUs, value)) Notify(nameof(IsFileLoaded), nameof(CanToggleCollapsed)); }
     }
 
     /// <summary>True once a media file has been opened (probe complete, splits populated).</summary>
@@ -46,7 +46,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public long PlayheadUs
     {
         get => _playheadUs;
-        set => Set(ref _playheadUs, value);
+        set { if (Set(ref _playheadUs, value)) Notify(nameof(TimelinePositionUs)); }
     }
 
     // Default zoom = 1.0× - whole video fits in the timeline viewport when a
@@ -114,9 +114,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     /// <summary>IDs of segments marked excluded. Persisted; survives marker moves
-    /// because segment IDs are derived from start/end µs.</summary>
+    /// using boundary identity during editing and current timestamps when saved.</summary>
     public HashSet<string> ExcludedSegmentIds { get; } = new();
 
+    public SourceFingerprint? SourceFingerprint { get; set; }
+    public long Revision { get; private set; }
+    private string _saveStatus = "";
+    public string SaveStatus { get => _saveStatus; set => Set(ref _saveStatus, value); }
+    private readonly HashSet<Split> _observedMarkers = new();
+    private readonly HashSet<Segment> _observedSegments = new();
+    private bool _rebuilding;
     private bool _isDirty;
     public bool IsDirty
     {
@@ -175,10 +182,28 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool IsBusy
     {
         get => _isBusy;
-        set { if (Set(ref _isBusy, value)) Notify(nameof(CanEdit)); }
+        set { if (Set(ref _isBusy, value)) Notify(nameof(CanEdit), nameof(CanInteract), nameof(CanToggleCollapsed)); }
     }
 
-    public bool CanEdit => !IsBusy;
+    public bool CanToggleCollapsed => IsFileLoaded && !IsBusy;
+    public bool CanInteract => !IsBusy;
+    public bool CanEdit => !IsBusy && !IsCollapsed;
+    private bool _isCollapsed;
+    public bool IsCollapsed
+    {
+        get => _isCollapsed;
+        set { if (Set(ref _isCollapsed, value)) Notify(nameof(CanEdit), nameof(TimelineDurationUs), nameof(TimelinePositionUs)); }
+    }
+    public KeptTimeline KeptTimeline { get; private set; } = new(Array.Empty<Segment>());
+    public long TimelineDurationUs => IsCollapsed ? KeptTimeline.DurationUs : DurationUs;
+    public long TimelinePositionUs => IsCollapsed ? KeptTimeline.ToOutput(PlayheadUs) : PlayheadUs;
+    public long ToSourceTime(long displayedUs) => IsCollapsed ? KeptTimeline.ToSource(displayedUs) : displayedUs;
+    public long ToDisplayTime(long sourceUs) => IsCollapsed ? KeptTimeline.ToOutput(sourceUs) : sourceUs;
+    public void RefreshKeptTimeline()
+    {
+        KeptTimeline = new KeptTimeline(Segments);
+        Notify(nameof(KeptTimeline), nameof(TimelineDurationUs), nameof(TimelinePositionUs));
+    }
 
     private string? _busyOperation;
     public string? BusyOperation
@@ -235,26 +260,36 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private void OnMarkersCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        if (e.NewItems is not null)
-            foreach (Split m in e.NewItems) m.PropertyChanged += OnMarkerPropertyChanged;
-        if (e.OldItems is not null)
-            foreach (Split m in e.OldItems) m.PropertyChanged -= OnMarkerPropertyChanged;
+        if (e.Action == NotifyCollectionChangedAction.Reset)
+        {
+            foreach (var marker in _observedMarkers) marker.PropertyChanged -= OnMarkerPropertyChanged;
+            _observedMarkers.Clear();
+        }
+        if (e.OldItems is not null) foreach (Split marker in e.OldItems)
+        { marker.PropertyChanged -= OnMarkerPropertyChanged; _observedMarkers.Remove(marker); }
+        if (e.NewItems is not null) foreach (Split marker in e.NewItems)
+            if (_observedMarkers.Add(marker)) marker.PropertyChanged += OnMarkerPropertyChanged;
         NotifyConfirmProgress();
     }
 
     private void OnSegmentsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        if (e.NewItems is not null)
-            foreach (Segment s in e.NewItems) s.PropertyChanged += OnSegmentPropertyChanged;
-        if (e.OldItems is not null)
-            foreach (Segment s in e.OldItems) s.PropertyChanged -= OnSegmentPropertyChanged;
+        if (e.Action == NotifyCollectionChangedAction.Reset)
+        {
+            foreach (var segment in _observedSegments) segment.PropertyChanged -= OnSegmentPropertyChanged;
+            _observedSegments.Clear();
+        }
+        if (e.OldItems is not null) foreach (Segment segment in e.OldItems)
+        { segment.PropertyChanged -= OnSegmentPropertyChanged; _observedSegments.Remove(segment); }
+        if (e.NewItems is not null) foreach (Segment segment in e.NewItems)
+            if (_observedSegments.Add(segment)) segment.PropertyChanged += OnSegmentPropertyChanged;
         Notify(nameof(ExpectedOutputDurationUs));
     }
 
     private void OnMarkerPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         // Selection-only changes don't dirty the project.
-        if (e.PropertyName is nameof(Split.IsSelected) or nameof(Split.ShowAudition)) return;
+        if (e.PropertyName is nameof(Split.IsSelected)) return;
         if (e.PropertyName is nameof(Split.Confirmed))
             NotifyConfirmProgress();
         MarkDirty();
@@ -266,6 +301,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private void OnSegmentPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (_rebuilding) return;
         if (e.PropertyName is nameof(Segment.State))
         {
             // Selection state changes don't dirty. Excluded-state changes do.
@@ -278,6 +314,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     if (nowExcluded) ExcludedSegmentIds.Add(s.Id);
                     else ExcludedSegmentIds.Remove(s.Id);
                     MarkDirty();
+                    RefreshKeptTimeline();
                     Notify(nameof(ExpectedOutputDurationUs));
                 }
             }
@@ -288,7 +325,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private void MarkDirty()
     {
+        Revision++;
         IsDirty = true;
+        SaveStatus = "Unsaved changes";
         DirtyChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -301,7 +340,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (marker.IsBookend) return;
         SelectedMarker = marker;
         marker.IsSelected = true;
-        marker.ShowAudition = true;
         SelectionKind = SelectionKind.Marker;
         PlayheadUs = marker.TimeUs;
     }
@@ -319,7 +357,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (SelectedMarker is { } m)
         {
             m.IsSelected = false;
-            m.ShowAudition = false;
             SelectedMarker = null;
         }
         if (SelectedSegment is { } s)
@@ -333,24 +370,48 @@ public sealed class MainViewModel : INotifyPropertyChanged
     // ---- Segment derivation ------------------------------------------------
     /// <summary>
     /// Rebuild segments from sorted splits + [0, duration] bookends. Replays
-    /// `ExcludedSegmentIds` so excluded state survives marker moves.
+    /// Stable boundary keys preserve exclusion when marker timestamps move.
     /// </summary>
-    public void RebuildSegmentsFromSplits()
+    public HashSet<string> CaptureExclusions() => Segments.Where(s => s.IsExcluded)
+        .Select(s => s.BoundaryKey).ToHashSet();
+
+    public void RebuildSegmentsFromSplits(HashSet<string>? restoreExclusions = null)
     {
-        // Marker collection is the source of truth - assume it's sorted by TimeUs.
         var sorted = Markers.OrderBy(m => m.TimeUs).ToList();
-        Segments.Clear();
-        for (int i = 0; i < sorted.Count - 1; i++)
+        var prior = Segments.ToArray();
+        var byBoundary = prior.ToDictionary(s => s.BoundaryKey);
+        var selected = SelectedSegment?.BoundaryKey;
+        _rebuilding = true;
+        try
         {
-            var seg = new Segment
+            if (SelectedSegment is not null) ClearSelection();
+            Segments.Clear();
+            for (int i = 0; i < sorted.Count - 1; i++)
             {
-                StartUs = sorted[i].TimeUs,
-                EndUs = sorted[i + 1].TimeUs,
-                Label = $"Part {i + 1}",
-            };
-            seg.State = ExcludedSegmentIds.Contains(seg.Id) ? SegmentState.Excluded : SegmentState.Default;
-            Segments.Add(seg);
+                var seg = new Segment
+                {
+                    BoundaryKey = sorted[i].Id + ":" + sorted[i + 1].Id,
+                    StartUs = sorted[i].TimeUs,
+                    EndUs = sorted[i + 1].TimeUs,
+                    Label = sorted[i].ChapterTitle ?? $"Part {i + 1}",
+                };
+                byBoundary.TryGetValue(seg.BoundaryKey, out var same);
+                var overlap = same is null ? prior.Where(s => s.StartUs < seg.EndUs && s.EndUs > seg.StartUs).ToArray() : Array.Empty<Segment>();
+                bool excluded = restoreExclusions is not null ? restoreExclusions.Contains(seg.BoundaryKey)
+                    : same is not null ? same.IsExcluded
+                    : prior.Length == 0 ? ExcludedSegmentIds.Contains(seg.Id)
+                    : overlap.Length > 0 && overlap.All(s => s.IsExcluded);
+                seg.State = excluded ? SegmentState.Excluded : SegmentState.Default;
+                Segments.Add(seg);
+            }
+            ExcludedSegmentIds.Clear();
+            foreach (var seg in Segments.Where(s => s.IsExcluded)) ExcludedSegmentIds.Add(seg.Id);
+            if (selected is not null && Segments.FirstOrDefault(s => s.BoundaryKey == selected) is { } selection)
+                SelectSegment(selection);
         }
+        finally { _rebuilding = false; }
+        RefreshKeptTimeline();
+        Notify(nameof(ExpectedOutputDurationUs));
     }
 
     public Split? NextUnconfirmedAfter(long timeUs)

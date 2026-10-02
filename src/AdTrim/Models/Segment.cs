@@ -13,6 +13,7 @@ public enum SegmentState
 
 public sealed class Segment : INotifyPropertyChanged
 {
+    public string BoundaryKey { get; init; } = "";
     private long _startUs;
     private long _endUs;
     private SegmentState _state;
@@ -34,7 +35,7 @@ public sealed class Segment : INotifyPropertyChanged
 
     public long DurationUs => _endUs - _startUs;
 
-    /// <summary>Deterministic ID: derived from start/end so excluded-state survives marker moves.</summary>
+    /// <summary>Sidecar ID derived from current source bounds. BoundaryKey is the editing identity.</summary>
     public string Id => $"segment-{_startUs}-{_endUs}";
 
     public SegmentState State

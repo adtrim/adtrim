@@ -2,11 +2,13 @@
 
 Raw `ffprobe` output captured from the fixtures. Use these for integration-test assertions and for verifying `MediaProbeService` parses correctly. Do **not** re-probe in CI on every run - these results are pinned.
 
-The files themselves are not in the repo (they're large and personal). Locations on the user's machine are listed below.
+The media files are not included in the repository. Configure fixture paths locally
+as described in [Testing](../docs/TESTING.md); the values below pin expected media
+properties without requiring a particular machine's directory layout.
 
 ## File 1: Raw Plex DVR `.ts` recording
 
-**Path**: `D:\Recorded TV\The Neighborhood (2018)\Season 08\The Neighborhood (2018) - S08E19 - Welcome to Kalamazoo.ts`
+**Fixture**: raw transport-stream sample, kept outside the repository.
 
 **Characteristics**:
 - Container: `mpegts`
@@ -56,7 +58,7 @@ Use case in tests: verifies the app correctly *rejects* `.ts` files in V1 (only 
 
 ## File 2: Post-processed MP4 with ComSkip chapters (PRIMARY FIXTURE)
 
-**Path**: `D:\Recorded TV\.test_autoconvert\The Rookie (2018) - S08E18 - The Bandit.mp4`
+**Fixture path configuration**: `ADTRIM_FIXTURE_MP4`.
 
 **Characteristics**:
 - Container: `mov,mp4,m4a,3gp,3g2,mj2` (MP4)
@@ -153,7 +155,7 @@ The chapters end at 3594.660 s but the format duration is 3596.528 s - there is 
 
 ## File 3: Post-processed MP4 with INCOMPLETE ComSkip chapters (adversarial)
 
-**Path**: `D:\Recorded TV\The Big Bang Theory (2007)\Season 03\The Big Bang Theory (2007) - S03E07 - The Guitarist Amplification.mp4`
+**Fixture path configuration**: `ADTRIM_FIXTURE_BBT_MP4`.
 
 **Characteristics**:
 - Container: MP4
@@ -288,10 +290,8 @@ of the fixture from the same source:
 4. **`bin_data` stream is present** in the post-processed MP4 - drove the explicit `-map 0:v -map 0:a` on export to drop caption data.
 5. **Chapter labeling** uses `Commercial X` / `Part X` - drove the discussion about auto-excluding (user chose neutral import).
 
-## Local FFmpeg availability
+## FFmpeg availability
 
-The user has FFmpeg installed at:
-- `C:\Program Files\ffmpeg\bin\ffprobe.exe`
-- `C:\tools\ffmpeg\bin\ffprobe.exe`
-
-These are for **dev-time exploration only**. The app uses the bundled binaries under `binaries/ffmpeg/win-x64/`, resolved via `AppContext.BaseDirectory`. Do not assume FFmpeg is on `PATH` at runtime.
+The app uses bundled binaries under `binaries/ffmpeg/win-x64/`, resolved via
+`AppContext.BaseDirectory`. See [bundled components](../binaries/README.md) for
+setup and the development override. Do not assume FFmpeg is on PATH at runtime.

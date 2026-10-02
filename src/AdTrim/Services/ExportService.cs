@@ -39,14 +39,51 @@ public sealed class ExportService
     public async Task RunExportAsync(
         ExportPlan plan,
         IProgress<ExportProgress>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool allowSoftwareFallback = false)
     {
+        var reporting = new ForwardProgress(p => progress?.Report(p with { EncoderName = _encoder.DisplayName }));
+        try { await RunAttemptAsync(plan, reporting, ct).ConfigureAwait(false); }
+        catch (HardwareExportException) when (allowSoftwareFallback && _encoder.IsHardware && !ct.IsCancellationRequested)
+        {
+            const string notice = "Hardware encoding failed. Export restarted using software.";
+            var software = new LibX264EncoderStrategy();
+            progress?.Report(new(ExportPhase.Restarting, 0, plan.KeptSegments.Count, 0, 0, notice, software.DisplayName, notice));
+            var fallbackProgress = new ForwardProgress(p => progress?.Report(p with { FallbackNotice = notice }));
+            await new ExportService(_runner, software).RunExportAsync(plan, fallbackProgress, ct).ConfigureAwait(false);
+        }
+    }
+
+    private sealed class ForwardProgress(Action<ExportProgress> report) : IProgress<ExportProgress>
+    { public void Report(ExportProgress value) => report(value); }
+
+    private async Task RunAttemptAsync(ExportPlan plan, IProgress<ExportProgress>? progress, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        ExportSafety.EnsureDifferentFiles(plan.SourcePath, plan.OutputPath);
+        if (File.Exists(plan.OutputPath) && !plan.Overwrite)
+            throw new ExportException("Output already exists. Confirm overwrite first.");
+        if (plan.KeptSegments.Count == 0 || plan.KeptSegments.Any(s => s.StartUs < 0 || s.EndUs > plan.SourceDurationUs || s.DurationUs <= 0))
+            throw new ExportException("Invalid kept segments.");
+        var sourceInfo = new FileInfo(plan.SourcePath);
+        var sourceSize = sourceInfo.Length;
+        var sourceWrite = sourceInfo.LastWriteTimeUtc;
+        var current = await new MediaProbeService(_runner).ProbeAsync(plan.SourcePath, ct).ConfigureAwait(false);
+        if (current.DurationUs != plan.SourceDurationUs || (plan.Fingerprint is { } fp &&
+            (fp.SizeBytes != sourceSize || fp.DurationUs != current.DurationUs)))
+            throw new ExportException("Source changed since the project was opened. Reopen it before exporting.");
+        _encoder.ValidateDevice();
+        var destination = Path.GetFullPath(plan.OutputPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        var userCancellation = ct;
+        await using var disk = new ExportDiskGuard(new[] { Path.GetTempPath(), Path.GetDirectoryName(destination)! }, ct);
+        ct = disk.Token;
+        using var workspace = ExportWorkspace.Create(destination);
+        var staging = workspace.StagingPath;
         progress?.Report(new ExportProgress(ExportPhase.Planning, 0, plan.KeptSegments.Count, 0, 0,
             $"Preparing {plan.KeptSegments.Count} segment(s)…"));
 
-        var tempDir = Path.Combine(Path.GetTempPath(), "AdTrim", "exp-" + Guid.NewGuid().ToString("n").Substring(0, 8));
-        Directory.CreateDirectory(tempDir);
-        bool success = false;
+        var tempDir = workspace.TempDirectory;
 
         try
         {
@@ -106,8 +143,12 @@ public sealed class ExportService
 
                 var r = await _runner.RunFfmpegAsync(args, OnStdoutLine, ct).ConfigureAwait(false);
                 if (!r.Success)
+                {
+                    if (_encoder.IsHardware && HardwareExportException.IsDeviceFailure(r.Stderr))
+                        throw new HardwareExportException($"{_encoder.DisplayName} failed: {Tail(r.Stderr, 1200)}");
                     throw new ExportException(
                         $"Segment {segIndex1Based} encode failed (exit {r.ExitCode}):\n{Tail(r.Stderr, 1500)}");
+                }
                 if (!File.Exists(outPath) || new FileInfo(outPath).Length == 0)
                     throw new ExportException($"Segment {segIndex1Based} produced no output: {outPath}");
 
@@ -155,7 +196,7 @@ public sealed class ExportService
                 "-metadata", $"comment=Edited by AdTrim {AppVersion.Display}",
                 "-metadata", $"creation_time={creationTime}",
                 "-movflags", "+faststart",
-                plan.OutputPath,
+                staging,
             };
             var muxR = await _runner.RunFfmpegAsync(muxArgs, ct).ConfigureAwait(false);
             if (!muxR.Success)
@@ -167,14 +208,25 @@ public sealed class ExportService
                 ExportPhase.Validating, plan.KeptSegments.Count, plan.KeptSegments.Count,
                 0, 0.99, "Validating output…"));
 
-            await ValidateOutputAsync(plan, cumulativeMs, ct).ConfigureAwait(false);
+            await ValidateOutputAsync(plan with { OutputPath = staging }, cumulativeMs, ct).ConfigureAwait(false);
+
+            ct.ThrowIfCancellationRequested();
+            sourceInfo.Refresh();
+            if (sourceInfo.Length != sourceSize || sourceInfo.LastWriteTimeUtc != sourceWrite)
+                throw new ExportException("Source changed during export. Output was not published.");
+            ExportSafety.EnsureDifferentFiles(plan.SourcePath, destination);
+            if (plan.Overwrite && File.Exists(destination)) File.Replace(staging, destination, null);
+            else File.Move(staging, destination);
 
             progress?.Report(new ExportProgress(
                 ExportPhase.Done, plan.KeptSegments.Count, plan.KeptSegments.Count,
                 1, 1, "Export complete"));
-            success = true;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (!userCancellation.IsCancellationRequested && disk.Failure is not null)
+        {
+            throw new ExportException(disk.Failure);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not HardwareExportException)
         {
             progress?.Report(new ExportProgress(
                 ExportPhase.Failed, 0, plan.KeptSegments.Count, 0, 0, ex.Message));
@@ -182,11 +234,9 @@ public sealed class ExportService
         }
         finally
         {
-            // Temp dir deleted on success; preserved on failure for diagnosis.
-            if (success)
-            {
-                try { Directory.Delete(tempDir, recursive: true); } catch { /* best effort */ }
-            }
+            if (!await workspace.CleanupAsync().ConfigureAwait(false))
+                progress?.Report(new ExportProgress(ExportPhase.Cleanup, 0, 0, 0, 0,
+                    "Some export temporary files could not be removed. AdTrim will retry cleanup the next time it starts."));
         }
     }
 
@@ -229,7 +279,10 @@ public sealed class ExportService
             sb.AppendLine("TIMEBASE=1/1000");
             sb.AppendLine($"START={startMs.ToString(CultureInfo.InvariantCulture)}");
             sb.AppendLine($"END={endMs.ToString(CultureInfo.InvariantCulture)}");
-            sb.AppendLine($"title={segments[i].PartTitle}");
+            var title = segments[i].PartTitle.Replace("\\", "\\\\")
+                .Replace("=", "\\=").Replace(";", "\\;").Replace("#", "\\#")
+                .Replace("\r\n", "\n").Replace("\r", "\n").Replace("\n", "\\\n");
+            sb.AppendLine($"title={title}");
             cumMs = endMs;
         }
         await File.WriteAllTextAsync(outPath, sb.ToString(), Utf8NoBom, ct).ConfigureAwait(false);

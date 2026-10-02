@@ -14,7 +14,7 @@ steps below are the fallback / reference.
    `libx264`, which configures the FFmpeg bundle as a whole as GPL 2+):
    https://www.gyan.dev/ffmpeg/builds/  →  `ffmpeg-release-full.7z`
 
-   **Minimum version: 8.1.2.** Earlier 8.1.x builds carry CVE-2026-8461 (an
+   **Minimum version: 9.0.2.** Earlier 8.1.x builds carry CVE-2026-8461 (an
    out-of-bounds write in the MagicYUV decoder, fixed in 8.1.2). AdTrim decodes
    user-supplied source files with auto-selected decoders, so the path is
    reachable. After copying, confirm with `ffmpeg.exe -version`.
@@ -26,6 +26,12 @@ steps below are the fallback / reference.
    them into the output directory.
 
 ## Updating after a security advisory (runbook)
+
+Packaging review, 2026-10-01: checked the FFmpeg security page and the current
+shinchiro release. Standalone FFmpeg/ffprobe use Gyan 9.0.2, the latest stable
+release. Playback uses `mpv-dev-x86_64-20261001-git-3186d369f9.7z`, verified
+against the GitHub release asset's SHA-256 digest:
+`de0aa24a39e27b07d9f663616f8d09c91586c7328d8c33fbfbc8e3888c35d89c`.
 
 Run this when a new FFmpeg/libmpv CVE lands **or** when `publish.cmd`'s version
 gate fails on the review-expiry (it nags every `MaxAgeDays` in

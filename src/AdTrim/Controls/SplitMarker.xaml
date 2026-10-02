@@ -51,24 +51,6 @@
              StrokeThickness="1.6"
              StrokeLineJoin="Round"/>
 
-    <!-- Audition button (shows when selected) - sits above triangle -->
-    <Border x:Name="AuditionChip"
-            VerticalAlignment="Top" HorizontalAlignment="Center"
-            Margin="0,-22,0,0"
-            Background="{StaticResource Bg.Elevated}"
-            BorderBrush="{StaticResource Border.Strong}" BorderThickness="1"
-            CornerRadius="4" Padding="6,3,7,3"
-            Visibility="{Binding ShowAudition, ElementName=Self, Converter={StaticResource Bool2Vis}}">
-      <Border.Effect>
-        <DropShadowEffect BlurRadius="12" ShadowDepth="4" Direction="270" Color="Black" Opacity="0.45"/>
-      </Border.Effect>
-      <StackPanel Orientation="Horizontal">
-        <Polygon Points="0,0 6,3 0,6" Fill="{StaticResource Accent.Base}"
-                 VerticalAlignment="Center" Margin="0,0,4,0"/>
-        <TextBlock Text="Preview ±2s" Style="{StaticResource Text.Body}" FontSize="11" FontWeight="Medium"/>
-      </StackPanel>
-    </Border>
-
     <!-- Optional label under the ruler (e.g. Start / End) -->
     <TextBlock x:Name="LabelTb"
                Text="{Binding Label, ElementName=Self}"

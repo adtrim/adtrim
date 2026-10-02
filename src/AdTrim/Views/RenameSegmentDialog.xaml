@@ -1,0 +1,30 @@
+<Window x:Class="AdTrim.Views.RenameSegmentDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Rename segment" Width="420" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize" WindowStyle="None" AllowsTransparency="True" ShowInTaskbar="False"
+        Background="Transparent" Foreground="{StaticResource Text.Primary}"
+        FontFamily="{StaticResource Font.UI}">
+  <Border Background="{StaticResource Bg.Surface}" BorderBrush="{StaticResource Border.Subtle}" BorderThickness="1" CornerRadius="10">
+    <DockPanel>
+      <Grid DockPanel.Dock="Top" Height="36" Background="Transparent" MouseLeftButtonDown="OnTitleBarMouseDown">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <TextBlock Text="Rename segment" Margin="16,0,0,0" VerticalAlignment="Center" Foreground="{StaticResource Text.Secondary}" FontSize="12"/>
+        <Button x:Name="TitleCloseButton" Grid.Column="1" Style="{StaticResource DialogCloseButton}" Click="OnTitleClose" ToolTip="Cancel rename" AutomationProperties.Name="Cancel rename">
+          <Path Stroke="{StaticResource Text.Secondary}" StrokeThickness="1" Data="M0.5,0.5 L9.5,9.5 M9.5,0.5 L0.5,9.5"/>
+        </Button>
+      </Grid>
+  <StackPanel Margin="20">
+    <Label Content="Segment _name" Target="{Binding ElementName=NameBox}"/>
+    <TextBox x:Name="NameBox" TextChanged="OnNameChanged"/>
+    <TextBlock Text="Used as the chapter name in the exported video." Margin="0,10,0,18"
+               Foreground="{StaticResource Text.Secondary}" TextWrapping="Wrap"/>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+      <Button Content="Cancel" IsCancel="True" Style="{StaticResource Button.Ghost}" Margin="0,0,8,0"/>
+      <Button x:Name="RenameButton" Content="Rename" IsDefault="True"
+              Style="{StaticResource Button.Primary}" Click="OnRename"/>
+    </StackPanel>
+  </StackPanel>
+    </DockPanel>
+  </Border>
+</Window>

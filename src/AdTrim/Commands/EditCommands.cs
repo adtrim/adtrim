@@ -8,6 +8,7 @@ public sealed class AddSplitCommand : IEditCommand
 {
     private readonly MainViewModel _vm;
     private readonly Split _split;
+    private HashSet<string>? _exclusions;
 
     public AddSplitCommand(MainViewModel vm, long timeUs, SplitSource source)
     {
@@ -19,6 +20,7 @@ public sealed class AddSplitCommand : IEditCommand
 
     public void Do()
     {
+        _exclusions ??= _vm.CaptureExclusions();
         var insertAt = 0;
         for (; insertAt < _vm.Markers.Count; insertAt++)
             if (_vm.Markers[insertAt].TimeUs > _split.TimeUs) break;
@@ -29,7 +31,7 @@ public sealed class AddSplitCommand : IEditCommand
     public void Undo()
     {
         _vm.Markers.Remove(_split);
-        _vm.RebuildSegmentsFromSplits();
+        _vm.RebuildSegmentsFromSplits(_exclusions);
     }
 }
 
@@ -79,6 +81,7 @@ public sealed class DeleteSplitCommand : IEditCommand
     private readonly MainViewModel _vm;
     private readonly Split _split;
     private int _originalIndex;
+    private HashSet<string>? _exclusions;
 
     public DeleteSplitCommand(MainViewModel vm, Split split)
     {
@@ -90,6 +93,10 @@ public sealed class DeleteSplitCommand : IEditCommand
 
     public void Do()
     {
+        _exclusions ??= _vm.CaptureExclusions();
+        var adjacent = _vm.Segments.Where(s => s.StartUs == _split.TimeUs || s.EndUs == _split.TimeUs).ToArray();
+        if (adjacent.Select(s => s.IsExcluded).Distinct().Count() > 1)
+            _vm.StatusOverride = "Merged section kept. Undo restores the boundary and exclusions.";
         _originalIndex = _vm.Markers.IndexOf(_split);
         _vm.Markers.Remove(_split);
         _vm.RebuildSegmentsFromSplits();
@@ -98,7 +105,7 @@ public sealed class DeleteSplitCommand : IEditCommand
     public void Undo()
     {
         _vm.Markers.Insert(_originalIndex, _split);
-        _vm.RebuildSegmentsFromSplits();
+        _vm.RebuildSegmentsFromSplits(_exclusions);
     }
 }
 
@@ -138,22 +145,51 @@ public sealed class SetConfirmedCommand : IEditCommand
     }
 }
 
+public sealed class RenameSegmentCommand : IEditCommand
+{
+    private readonly MainViewModel _vm;
+    private readonly Split _start;
+    private readonly string? _before;
+    private readonly string _after;
+
+    public RenameSegmentCommand(MainViewModel vm, Segment segment, string name)
+    {
+        _vm = vm;
+        _start = vm.Markers.Single(m => m.TimeUs == segment.StartUs);
+        _before = _start.ChapterTitle;
+        _after = name.Trim();
+        if (_after.Length == 0) throw new ArgumentException("Enter a segment name.", nameof(name));
+    }
+
+    public string Description => "Rename segment";
+    public void Do() => Apply(_after);
+    public void Undo() => Apply(_before);
+    private void Apply(string? name)
+    {
+        _start.ChapterTitle = name;
+        _vm.RebuildSegmentsFromSplits();
+    }
+}
+
 public sealed class ToggleExcludedCommand : IEditCommand
 {
-    private readonly Segment _segment;
-    public ToggleExcludedCommand(Segment segment) => _segment = segment;
-    public string Description => _segment.IsExcluded ? "Un-exclude segment" : "Mark segment excluded";
+    private readonly MainViewModel _vm;
+    private readonly string _key;
+    public ToggleExcludedCommand(MainViewModel vm, Segment segment)
+    { _vm = vm; _key = segment.BoundaryKey; }
+    public string Description => "Toggle exclusion";
     public void Do() => Flip();
     public void Undo() => Flip();
     private void Flip()
     {
-        _segment.State = _segment.State switch
+        var segment = _vm.Segments.First(s => s.BoundaryKey == _key);
+        segment.State = segment.State switch
         {
-            SegmentState.Default          => SegmentState.Excluded,
-            SegmentState.Excluded         => SegmentState.Default,
-            SegmentState.Selected         => SegmentState.SelectedExcluded,
+            SegmentState.Default => SegmentState.Excluded,
+            SegmentState.Excluded => SegmentState.Default,
+            SegmentState.Selected => SegmentState.SelectedExcluded,
             SegmentState.SelectedExcluded => SegmentState.Selected,
-            _ => _segment.State,
+            _ => segment.State,
         };
     }
 }
