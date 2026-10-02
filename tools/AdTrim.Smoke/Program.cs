@@ -220,55 +220,52 @@ internal static class Program
                 Require(protectionVm.Validate().Any(v => v.Kind == ExportValidationKind.Blocking && v.Message.Contains("source MP4")),
                     "Source overwrite stays blocked even with overwrite confirmation");
                 Invoke(window, "OnExport", window, new RoutedEventArgs());
-                var folderDialog = app.Windows.OfType<AdTrim.Views.ExportDialog>().Single();
+                var folderDialog = (AdTrim.Views.ExportView)((ContentControl)window.FindName("ExportHost")).Content;
                 var folderVm = (ExportDialogViewModel)folderDialog.DataContext;
                 Require(folderVm.OutputFolder == Path.GetDirectoryName(source), "Export ignores the previous recording's saved destination");
                 folderVm.OutputFolder = directory;
                 folderDialog.Close();
                 Invoke(window, "OnExport", window, new RoutedEventArgs());
-                folderDialog = app.Windows.OfType<AdTrim.Views.ExportDialog>().Single();
+                folderDialog = (AdTrim.Views.ExportView)((ContentControl)window.FindName("ExportHost")).Content;
                 Require(((ExportDialogViewModel)folderDialog.DataContext).OutputFolder == Path.GetDirectoryName(source),
                     "Every new export dialog defaults to the current recording's folder");
-                var backgroundBanner = (Button)window.FindName("BackgroundExportBanner");
-                folderDialog.Hide();
-                Require(backgroundBanner.Visibility == Visibility.Collapsed, "Hidden export configuration does not show a running-export banner");
-                folderDialog.Show();
+                Require(vm.IsExportScreen && !vm.CanEdit && !vm.CanInteract, "Export screen disables editor commands");
+                var savedSelection = vm.SelectionKind;
+                var savedMarker = vm.SelectedMarker;
+                var savedSegment = vm.SelectedSegment;
+                var savedZoom = vm.ZoomFactor;
+                var savedPosition = vm.PlayheadUs;
+                Invoke(window, "OnFitTimeline", window, new RoutedEventArgs());
+                Require(vm.ZoomFactor == savedZoom, "Export screen blocks timeline commands outside the hidden editor");
+                window.UpdateLayout();
+                Capture(window, Path.Combine(directory, "export-page-setup.png"));
                 folderVm = (ExportDialogViewModel)folderDialog.DataContext;
                 for (int i = 0; i < 250 && !folderVm.CanCheckHardware; i++) await Task.Delay(20);
                 Require(folderVm.CanCheckHardware, "Export options finish listing before the test starts exporting");
                 folderVm.SelectedAcceleration = ExportAccelerationOption.Software;
                 folderVm.OutputFolder = directory;
-                folderVm.OutputFilename = "background-export.mp4";
+                folderVm.OutputFilename = "page-export.mp4";
                 Invoke(folderDialog, "OnExport", folderDialog, new RoutedEventArgs());
-                Require(folderDialog.IsExportInFlight && folderDialog.ExportTask is not null, "Start a real export for background banner checks");
-                ((Button)folderDialog.FindName("TitleCloseButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Require(folderDialog.IsExportInFlight && folderDialog.ExportTask is not null, "Start an export inside the recording window");
+                folderDialog.Close();
+                Require(vm.IsExportScreen, "A running export cannot be detached from its recording window");
                 window.UpdateLayout();
-                Require(backgroundBanner.Visibility == Visibility.Visible && backgroundBanner.ActualHeight == 30,
-                    "Hiding an active export shows a 30-pixel banner");
-                Require(ReferenceEquals(backgroundBanner.DataContext, folderVm), "Background banner uses the active export's progress");
-                var bannerBounds = backgroundBanner.TransformToAncestor(window).TransformBounds(new Rect(backgroundBanner.RenderSize));
-                Require(Math.Abs(bannerBounds.Top - 64) < 1, "Background export banner sits directly below the menu bar");
-                Capture(window, Path.Combine(directory, "background-export.png"));
-                backgroundBanner.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                Require(folderDialog.IsVisible && backgroundBanner.Visibility == Visibility.Collapsed,
-                    "Clicking the banner restores the same export window and hides the banner");
-                Invoke(folderDialog, "OnRunInBackground", folderDialog, new RoutedEventArgs());
+                Capture(window, Path.Combine(directory, "export-page-progress.png"));
                 await folderDialog.ExportTask!;
                 for (int i = 0; i < 100 && folderDialog.IsExportInFlight; i++) await Task.Delay(20);
-                Require(folderVm.IsCompleted && backgroundBanner.Visibility == Visibility.Collapsed,
-                    "Completed background export removes the banner");
+                Require(folderVm.IsCompleted, "Embedded export reaches completion");
                 folderDialog.Close();
+                Require(!vm.IsExportScreen && vm.ZoomFactor == savedZoom && vm.PlayheadUs == savedPosition,
+                    "Back to editing restores timeline position and zoom");
+                Require(vm.SelectionKind == savedSelection && vm.SelectedMarker == savedMarker && vm.SelectedSegment == savedSegment,
+                    "Back to editing preserves the selected boundary or segment");
+                await CheckConcurrentExports(app, window, directory);
                 var plan = exportVm.BuildPlan()!;
-                var progressDialog = new AdTrim.Views.ExportDialog { Owner = window, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
+                var progressDialog = new AdTrim.Views.ExportView();
                 progressDialog.Bind(vm, media, "software");
                 var progressVm = (ExportDialogViewModel)progressDialog.DataContext;
                 progressVm.BeginExport(plan);
-                progressDialog.Show();
-                var workArea = (Rect)typeof(MainWindow).Assembly.GetType("AdTrim.Services.MonitorBounds")!
-                    .GetMethod("WorkArea")!.Invoke(null, new object?[] { progressDialog, null })!;
-                Require(Math.Abs(progressDialog.Top + progressDialog.ActualHeight / 2 - (workArea.Top + workArea.Height / 2)) < 2
-                    && Math.Abs(progressDialog.Left + progressDialog.ActualWidth / 2 - (workArea.Left + workArea.Width / 2)) < 2,
-                    "Export progress opens centered on its monitor");
+                var progressHost = ShowExportForTest(progressDialog, window);
                 Require(progressVm.ExportMethodLabel == "Choosing automatically...", "Automatic export does not claim a device before selection");
                 foreach (var encoder in new[] { "AMD Radeon RX 9060 XT (hardware H.264)", "Software (H.264)" })
                 {
@@ -312,8 +309,8 @@ internal static class Program
                         "Progress window stays within its monitor height cap");
                     Require(Math.Abs(progressDialog.ActualHeight - collapsedHeight) < 2, "Opening details preserves the progress window height");
                     var mainPanel = (Grid)progressDialog.FindName("ProgressMainPanel");
-                    Require(Math.Abs(mainPanel.ActualWidth * 32 / 21 - detailsPanel.ActualWidth - detailsPanel.Margin.Right) < 2,
-                        "Progress panel has its widened share of the window");
+                    Require(Math.Abs(mainPanel.ActualWidth - 420) < 2,
+                        "Progress panel keeps its readable width while details expand");
                     if (count == 100)
                     {
 
@@ -332,65 +329,17 @@ internal static class Program
                 var compactSummary = (TextBlock)progressDialog.FindName("PartsSummaryText");
                 Require(compactSummary.Text.Contains("parts kept ·") && !compactSummary.Text.Contains("final video"),
                     "Compact summary shows counts without repeating the final duration");
-                foreach (var edge in new[] { "Left", "Right", "TopLeft", "TopRight", "BottomLeft", "BottomRight" })
+                foreach (var size in new[] { new Size(1280, 540), new Size(1280, 900), new Size(1920, 1000) })
                 {
-                    progressDialog.Width = 1060;
-                    progressDialog.Height = 751;
-                    progressDialog.Left = workArea.Left + 150;
-                    progressDialog.Top = workArea.Top + 80;
-                    progressDialog.UpdateLayout();
-                    var oldLeft = progressDialog.Left;
-                    var oldRight = oldLeft + progressDialog.ActualWidth;
-                    var oldTop = progressDialog.Top;
-                    var oldBottom = oldTop + progressDialog.ActualHeight;
-                    var grip = (System.Windows.Controls.Primitives.Thumb)progressDialog.FindName(edge + "ResizeGrip");
-                    grip.RaiseEvent(new System.Windows.Controls.Primitives.DragDeltaEventArgs(edge.Contains("Left") ? -40 : 40,
-                        edge.Contains("Top") ? -30 : edge.Contains("Bottom") ? 30 : 0)
-                        { RoutedEvent = System.Windows.Controls.Primitives.Thumb.DragDeltaEvent });
-                    progressDialog.UpdateLayout();
-                    Require(Math.Abs(progressDialog.ActualWidth - 1100) < 2, $"{edge} grip expands width");
-                    Require(Math.Abs((edge.Contains("Left") ? progressDialog.Left + progressDialog.ActualWidth - oldRight
-                        : progressDialog.Left - oldLeft)) < 2, $"{edge} grip preserves the opposite horizontal edge");
-                    Require(Math.Abs(progressDialog.ActualHeight - (oldBottom - oldTop) - (edge.Length > 5 ? 30 : 0)) < 2,
-                        $"{edge} grip changes height only for diagonal resizing");
+                    progressHost.Width = size.Width;
+                    progressHost.Height = size.Height;
+                    progressHost.UpdateLayout();
+                    var scroll = (ScrollViewer)progressDialog.FindName("PartsScrollViewer");
+                    var footer = (FrameworkElement)progressDialog.FindName("ProgressFooter");
+                    var footerBounds = footer.TransformToAncestor(progressDialog).TransformBounds(new Rect(footer.RenderSize));
+                    Require(footerBounds.Bottom <= progressDialog.ActualHeight && scroll.ViewportHeight > 100,
+                        "Export page keeps actions visible and details scrollable at " + size);
                 }
-                progressDialog.Width = 1060;
-                progressDialog.Height = 751;
-                progressDialog.Top = workArea.Top + 40;
-                progressDialog.UpdateLayout();
-                var autoCap = workArea.Height * 0.75;
-                var beforeWidth = progressDialog.ActualWidth;
-                var partsViewport = ((ScrollViewer)progressDialog.FindName("PartsScrollViewer")).ViewportHeight;
-                var bottomGrip = (System.Windows.Controls.Primitives.Thumb)progressDialog.FindName("BottomResizeGrip");
-                bottomGrip.RaiseEvent(new System.Windows.Controls.Primitives.DragDeltaEventArgs(0, autoCap - progressDialog.ActualHeight + 120)
-                    { RoutedEvent = System.Windows.Controls.Primitives.Thumb.DragDeltaEvent });
-                progressDialog.UpdateLayout();
-                Require(progressDialog.ActualHeight > autoCap && progressDialog.ActualWidth == beforeWidth,
-                    "Manual resizing exceeds the automatic height cap without changing width");
-                Require(((ScrollViewer)progressDialog.FindName("PartsScrollViewer")).ViewportHeight > partsViewport,
-                    "Extra height expands the export details viewport");
-                var manualHeight = progressDialog.ActualHeight;
-                progressDialog.Top += 2;
-                progressDialog.UpdateLayout();
-                Require(progressDialog.SizeToContent == SizeToContent.Manual && Math.Abs(progressDialog.ActualHeight - manualHeight) < 1,
-                    "Moving a resized export window preserves manual height");
-                var bottomBefore = progressDialog.Top + progressDialog.ActualHeight;
-                var topGrip = (System.Windows.Controls.Primitives.Thumb)progressDialog.FindName("TopResizeGrip");
-                topGrip.RaiseEvent(new System.Windows.Controls.Primitives.DragDeltaEventArgs(0, 40)
-                    { RoutedEvent = System.Windows.Controls.Primitives.Thumb.DragDeltaEvent });
-                progressDialog.UpdateLayout();
-                Require(Math.Abs(progressDialog.Top + progressDialog.ActualHeight - bottomBefore) < 1,
-                    "Resizing from the top keeps the bottom edge fixed");
-                bottomGrip.RaiseEvent(new System.Windows.Controls.Primitives.DragDeltaEventArgs(0, -10000)
-                    { RoutedEvent = System.Windows.Controls.Primitives.Thumb.DragDeltaEvent });
-                progressDialog.UpdateLayout();
-                Require(((ScrollViewer)progressDialog.FindName("PartsScrollViewer")).ViewportHeight >= 70,
-                    "Minimum height preserves usable export details and footer");
-                bottomGrip.RaiseEvent(new System.Windows.Controls.Primitives.DragDeltaEventArgs(0, 10000)
-                    { RoutedEvent = System.Windows.Controls.Primitives.Thumb.DragDeltaEvent });
-                progressDialog.UpdateLayout();
-                Require(progressDialog.Top + progressDialog.ActualHeight <= workArea.Bottom + 1,
-                    "Manual enlargement stays inside the monitor work area");
                 Capture(progressDialog, Path.Combine(directory, "quiet-focus-resized.png"));
                 progressVm.MarkComplete();
                 progressDialog.UpdateLayout();
@@ -456,6 +405,54 @@ internal static class Program
         Dispatcher.Run();
         return result;
     }
+    private static async Task CheckConcurrentExports(App app, MainWindow original, string directory)
+    {
+        var secondSource = Path.Combine(directory, "second.mp4");
+        var second = await app.OpenRecordingAsync(secondSource);
+        second.Opacity = 0;
+        second.ShowInTaskbar = false;
+        ((MainViewModel)second.DataContext).Segments[0].State = SegmentState.Excluded;
+        Invoke(original, "OnExport", original, new RoutedEventArgs());
+        Invoke(second, "OnExport", second, new RoutedEventArgs());
+        var firstView = (AdTrim.Views.ExportView)((ContentControl)original.FindName("ExportHost")).Content;
+        var secondView = (AdTrim.Views.ExportView)((ContentControl)second.FindName("ExportHost")).Content;
+        var firstVm = (ExportDialogViewModel)firstView.DataContext;
+        var secondVm = (ExportDialogViewModel)secondView.DataContext;
+        for (int i = 0; i < 250 && (!firstVm.CanCheckHardware || !secondVm.CanCheckHardware); i++) await Task.Delay(20);
+        firstVm.SelectedAcceleration = secondVm.SelectedAcceleration = ExportAccelerationOption.Software;
+        firstVm.OutputFolder = secondVm.OutputFolder = directory;
+        firstVm.OutputFilename = "second.mp4";
+        Invoke(firstView, "OnExport", firstView, new RoutedEventArgs());
+        Require(!firstView.IsExportInFlight && firstVm.ValidationIssues.Any(v => v.Message.Contains("another AdTrim window")),
+            "An export cannot overwrite a recording owned by another window");
+        firstVm.OutputFilename = secondVm.OutputFilename = "simultaneous.mp4";
+        Invoke(firstView, "OnExport", firstView, new RoutedEventArgs());
+        Invoke(secondView, "OnExport", secondView, new RoutedEventArgs());
+        Require(!secondView.IsExportInFlight && secondVm.ValidationIssues.Any(v => v.Message.Contains("Another window is exporting")),
+            "Two windows cannot publish to the same output filename");
+        secondVm.OutputFilename = "simultaneous-second.mp4";
+        Invoke(secondView, "OnExport", secondView, new RoutedEventArgs());
+        Require(firstView.IsExportInFlight && secondView.IsExportInFlight, "Independent windows can run exports simultaneously");
+        await secondView.CancelAndWaitAsync();
+        Require(secondVm.Mode == ExportDialogMode.Cancelled, "Cancelling one window stops only its export");
+        await firstView.ExportTask!;
+        for (int i = 0; i < 100 && firstView.IsExportInFlight; i++) await Task.Delay(20);
+        Require(firstVm.IsCompleted, "The other window's export still completes");
+        firstView.Close();
+        secondView.Close();
+        second.Close();
+        for (int i = 0; i < 100 && second.IsVisible; i++) await Task.Delay(20);
+    }
+
+    internal static Window ShowExportForTest(AdTrim.Views.ExportView view, Window owner)
+    {
+        var host = new Window { Owner = owner, Width = 1280, Height = 720, Content = view,
+            ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
+        view.Closed += (_, _) => host.Close();
+        host.Show();
+        return host;
+    }
+
     private static async Task CheckMultipleWindows(App app, MainWindow original, string source, string directory)
     {
         var secondSource = Path.Combine(directory, "second.mp4");
@@ -469,7 +466,7 @@ internal static class Program
         var empty = app.Windows.OfType<MainWindow>().Single(w => w != original);
         pipeCancellation.Cancel();
         await server;
-        Require(empty is not null, "Launching AdTrim without a path requests a new window through the app handoff");
+        Require(app.Windows.OfType<MainWindow>().Count() == 2, "Launching AdTrim without a path requests a new window through the app handoff");
         empty.Opacity = 0;
         empty.ShowInTaskbar = false;
         await empty.Ready;
@@ -709,7 +706,7 @@ internal static class Program
             }
         }
     }
-    private static void Capture(Window window, string path)
+    private static void Capture(System.Windows.Controls.ContentControl window, string path)
     {
         var content = (FrameworkElement)window.Content;
         content.UpdateLayout();

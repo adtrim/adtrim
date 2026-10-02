@@ -32,7 +32,9 @@ Moving or refining a split preserves the adjacent exclusion decisions. Splitting
 
 Project saves run in the background. The status changes to **Saved** only after writing succeeds; opening another file, closing a project, and exiting flush pending edits. If the recording's folder cannot be written, saves use `%LOCALAPPDATA%\AdTrim\projects`. Reopening uses the newest valid matching save, including that fallback. Corrupt and newer-version projects are preserved. To reset a project completely, remove its fallback save as well as its adjacent sidecar.
 
-Waveform/thumbnail visibility, output folder, window bounds, and recent playback positions are stored separately in `%LOCALAPPDATA%\AdTrim\preferences.json`. Viewing and playback changes do not create project edits. Waveform and thumbnail extraction remain opt-in on a fresh setup.
+Waveform/thumbnail visibility, export acceleration, window bounds, and recent playback positions are stored separately in `%LOCALAPPDATA%\AdTrim\preferences.json`. Viewing and playback changes do not create project edits. Waveform and thumbnail extraction remain opt-in on a fresh setup.
+
+Export setup and progress replace the editor inside the recording window. The editor's position, zoom, and selection are retained when you return. During export, that window's editing commands are disabled; other recording windows remain available. Closing an exporting window asks whether to cancel its export, waits for cleanup, then closes only that window. Completed exports offer Open video, Open folder, and Back to editing. Multiple windows cannot export to the same destination or overwrite another open recording.
 
 Exports are staged and validated before replacing an existing output. Replacement requires confirmation (or `--overwrite` in the export CLI). The source cannot be selected as the output, including through a Windows hard link.
 
@@ -52,7 +54,7 @@ Export temporary files are tracked and removed after success, failure, or cancel
 
 Download the latest installer from the [Releases](https://github.com/adtrim/adtrim/releases) page and run it.
 
-The installer is unsigned (no code-signing certificate yet), so Windows SmartScreen will warn you the first time you run it. Click "More info" â†’ "Run anyway" to proceed. The bundled binaries (ffmpeg, ffprobe, libmpv) are pulled from upstream public builds - see [Bundled components](#bundled-components) below.
+The installer is unsigned (no code-signing certificate yet), so Windows SmartScreen will warn you the first time you run it. Click "More info" → "Run anyway" to proceed. The bundled binaries (ffmpeg, ffprobe, libmpv) are pulled from upstream public builds - see [Bundled components](#bundled-components) below.
 
 New installations default to `%LOCALAPPDATA%\Programs\AdTrim`. Updates retain the existing installation folder, including the old `%LOCALAPPDATA%\AdTrim` location, so existing shortcuts keep working. Close AdTrim and run the newer installer to update; no separate uninstall is needed. Settings, saved projects, and caches remain under `%LOCALAPPDATA%\AdTrim`. The uninstaller removes only installation-owned files and leaves user data in place. Upgrades do not run the legacy recursive uninstaller.
 
@@ -140,7 +142,7 @@ Because both bundled binaries are GPL, the installer as a whole is GPL-licensed 
 
 AdTrim is licensed under the **GNU General Public License, version 3**. See [LICENSE](LICENSE) for the full text.
 
-Copyright Â© 2026 Mark Hewitt.
+Copyright © 2026 Mark Hewitt.
 
 In short: you can use, modify, and redistribute it, including for commercial purposes - but any distributed derivative must also be released under GPLv3 with source available. The original copyright notice must be preserved.
 

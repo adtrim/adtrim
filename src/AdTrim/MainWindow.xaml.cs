@@ -42,14 +42,9 @@ public partial class MainWindow : Window
     private bool _saveInProgress;
     private long? _playUntilUs;
 
-    /// <summary>
-    /// Currently-displayed or currently-hidden-but-still-running export
-    /// dialog. Held across export lifecycles so a second Export click - or
-    /// a status-bar click on the "Encoding…" indicator - brings back the
-    /// same dialog (with its parts list + live progress intact) rather
-    /// than spawning a fresh one. Cleared on the dialog's Closed event.
-    /// </summary>
-    private ExportDialog? _activeExportDialog;
+    private ExportView? _activeExportDialog;
+    private bool _closingExport;
+
 
     private readonly DispatcherTimer _autosaveTimer;
 
@@ -604,6 +599,13 @@ public partial class MainWindow : Window
     {
         if (!File.Exists(path)) { _openingPath = null; return; }
         path = Path.GetFullPath(path);
+        if (Application.Current is App exportingApp && exportingApp.IsExportDestination(path))
+        {
+            MessageBox.Show(this, "Another window is exporting to this file. Wait for that export to finish before opening it.",
+                "Export in progress", MessageBoxButton.OK, MessageBoxImage.Information);
+            _openingPath = null;
+            return;
+        }
         if (Application.Current is App app && app.FindRecordingWindow(path, this) is { } existing)
         { existing.BringForward(); _openingPath = null; return; }
         if (_switching) return;
@@ -972,7 +974,19 @@ public partial class MainWindow : Window
             return;
         }
         e.Cancel = true;
-        if (_switching || DataContext is not MainViewModel vm || BlockProjectSwitchForExport(vm)) return;
+        if (_closingExport || _switching || DataContext is not MainViewModel vm) return;
+        if (_activeExportDialog is { } export)
+        {
+            if (export.IsExportInFlight)
+            {
+                if (MessageBox.Show(this, "Cancel this export and close this window? Other AdTrim windows will stay open.",
+                    "Cancel export and close", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+                _closingExport = true;
+                try { await export.CancelAndWaitAsync(); }
+                finally { _closingExport = false; }
+            }
+            export.Close();
+        }
         _switching = true;
         _refineCts?.Cancel();
         if (await FlushBeforeLeavingAsync(vm))
@@ -1036,6 +1050,7 @@ public partial class MainWindow : Window
     {
         if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control)
         { OnNewWindow(this, new RoutedEventArgs()); e.Handled = true; return; }
+        if (_activeExportDialog is not null) return;
 
         if (DataContext is not MainViewModel vm) return;
 
@@ -1249,6 +1264,7 @@ public partial class MainWindow : Window
 
     private void OnPreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
+        if (_activeExportDialog is not null) return;
         if (DataContext is not MainViewModel vm) return;
 
         // Ctrl+Wheel = zoom.
@@ -1502,13 +1518,12 @@ public partial class MainWindow : Window
     private bool BlockProjectSwitchForExport(MainViewModel vm)
     {
         if (_activeExportDialog is null) return false;
-        _activeExportDialog.Show();
-        _activeExportDialog.Activate();
+        _activeExportDialog.Focus();
         vm.Banner = new BannerInfo(StatusKind.Warning,
-            "Export dialog is active.",
+            "Export is open.",
             _activeExportDialog.IsExportInFlight
                 ? "Cancel or finish the export before opening or closing a project."
-                : "Close the export dialog before opening or closing a project.",
+                : "Return to editing before opening or closing a project.",
             Array.Empty<BannerAction>());
         return true;
     }
@@ -1527,17 +1542,17 @@ public partial class MainWindow : Window
 
     private void OnZoomIn(object sender, RoutedEventArgs e)
     {
-        if (DataContext is MainViewModel vm) vm.ZoomFactor = Math.Clamp(vm.ZoomFactor * 1.25, 0.25, 32.0);
+        if (DataContext is MainViewModel { CanInteract: true } vm) vm.ZoomFactor = Math.Clamp(vm.ZoomFactor * 1.25, 0.25, 32.0);
     }
 
     private void OnZoomOut(object sender, RoutedEventArgs e)
     {
-        if (DataContext is MainViewModel vm) vm.ZoomFactor = Math.Clamp(vm.ZoomFactor * 0.8, 0.25, 32.0);
+        if (DataContext is MainViewModel { CanInteract: true } vm) vm.ZoomFactor = Math.Clamp(vm.ZoomFactor * 0.8, 0.25, 32.0);
     }
 
     private void OnFitTimeline(object sender, RoutedEventArgs e)
     {
-        if (DataContext is MainViewModel vm) vm.ZoomFactor = 1.0;
+        if (DataContext is MainViewModel { CanInteract: true } vm) vm.ZoomFactor = 1.0;
     }
 
     private void OnAddSplitAtPlayhead(object sender, RoutedEventArgs e)
@@ -1638,12 +1653,9 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainViewModel vm) return;
 
-        // A dialog is already open (configuring or hidden-but-running). Bring
-        // it back rather than spawning a parallel instance.
         if (_activeExportDialog is not null)
         {
-            _activeExportDialog.Show();
-            _activeExportDialog.Activate();
+            _activeExportDialog.Focus();
             return;
         }
 
@@ -1658,10 +1670,6 @@ public partial class MainWindow : Window
         }
 
 
-        // Status-bar progress sink. Tee'd to the dialog so the dialog's
-        // progress view AND the main-window status bar update together -
-        // the latter keeps working when the user hides the dialog via
-        // "Run in background."
         var statusBarProgress = new Progress<ExportProgress>(p =>
         {
             if (p.Phase == ExportPhase.Cleanup) return;
@@ -1672,12 +1680,13 @@ public partial class MainWindow : Window
 
         vm.Banner = null;
 
-        var dlg = new ExportDialog { Owner = this };
+        _previewAfter.Pause();
+        _previewBefore.Pause();
+        CancelWaveformLoad(vm, false);
+        CancelThumbnailLoad(vm, false);
+        var dlg = new ExportView();
         _activeExportDialog = dlg;
         dlg.Bind(vm, _media, _preferences.ExportAcceleration);
-        BackgroundExportBanner.DataContext = dlg.DataContext;
-        dlg.IsVisibleChanged += (_, _) => UpdateBackgroundExportBanner();
-        dlg.ExportFinished += (_, _) => UpdateBackgroundExportBanner();
         dlg.Closed += async (_, _) =>
         {
             if (dlg.DataContext is ExportDialogViewModel completed)
@@ -1690,22 +1699,22 @@ public partial class MainWindow : Window
             if (ReferenceEquals(_activeExportDialog, dlg))
             {
                 _activeExportDialog = null;
-                BackgroundExportBanner.DataContext = null;
-                UpdateBackgroundExportBanner();
+                ExportHost.Content = null;
+                ExportHost.Visibility = Visibility.Collapsed;
+                EditorWorkspace.Visibility = Visibility.Visible;
+                vm.IsExportScreen = false;
+                if (vm.ShowWaveform && vm.SourcePath is { } waveformPath && _media is not null) StartWaveformLoad(vm, waveformPath, _media);
+                if (vm.ShowThumbnails && vm.SourcePath is { } thumbnailPath && _media is not null) StartThumbnailLoad(vm, thumbnailPath, _media);
             }
         };
-        // Modeless: doesn't block MainWindow. Lets the user reopen on a second
-        // Export click after "Run in background" hides this same instance.
-        dlg.Show();
+        EditorWorkspace.Visibility = Visibility.Collapsed;
+        vm.IsExportScreen = true;
+        ExportHost.Content = dlg;
+        ExportHost.Visibility = Visibility.Visible;
+        dlg.Focus();
     }
 
-    /// <summary>
-    /// Post-export banner + optional sidecar deletion. Fired from the dialog's
-    /// ExportFinished event regardless of whether the dialog was visible when
-    /// the task completed (it re-shows itself on completion, but we still
-    /// want the main-window banner in case the user immediately closes it).
-    /// </summary>
-    private void HandleExportFinished(MainViewModel vm, ExportDialog dlg)
+    private void HandleExportFinished(MainViewModel vm, ExportView dlg)
     {
         var plan = dlg.AcceptedPlan;
         switch (dlg.Outcome)
@@ -1726,7 +1735,7 @@ public partial class MainWindow : Window
                 vm.ClearStatus();
                 vm.Banner = new BannerInfo(StatusKind.Danger,
                     "Export failed.",
-                    "See the export dialog for details.",
+                    "See the export screen for details.",
                     Array.Empty<BannerAction>());
                 break;
 
@@ -1734,26 +1743,6 @@ public partial class MainWindow : Window
                 vm.ClearStatus();
                 break;
         }
-    }
-
-    /// <summary>
-    /// Status-bar click handler. When an export dialog is alive (visible or
-    /// hidden via "Run in background"), bring it back into view. No-op when
-    /// the status text belongs to some other long-running op like Refine -
-    /// those don't have a dialog to surface, so the click is harmlessly
-    /// inert rather than confusing.
-    /// </summary>
-    private void UpdateBackgroundExportBanner()
-    {
-        BackgroundExportBanner.Visibility = _activeExportDialog is { IsExportInFlight: true, IsVisible: false }
-            ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private void OnStatusOverrideClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
-    {
-        if (_activeExportDialog is null) return;
-        _activeExportDialog.Show();
-        _activeExportDialog.Activate();
     }
 
     private static void RevealInExplorer(string path)

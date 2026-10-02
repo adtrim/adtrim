@@ -1,19 +1,13 @@
-<Window x:Class="AdTrim.Views.ExportDialog"
+<UserControl x:Class="AdTrim.Views.ExportView"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:conv="clr-namespace:AdTrim.Converters"
         xmlns:vm="clr-namespace:AdTrim.ViewModels"
-        Title="Export merged MP4"
-        Width="640" Height="751"
-        WindowStartupLocation="CenterOwner"
-        WindowStyle="None"
-        AllowsTransparency="True"
-        Background="Transparent"
-        ResizeMode="NoResize"
-        ShowInTaskbar="False"
+        Focusable="True"
+        Background="{StaticResource Bg.Window}"
         FontFamily="{StaticResource Font.UI}">
 
-  <Window.Resources>
+  <UserControl.Resources>
     <conv:BoolToVisibilityConverter x:Key="Bool2Vis"/>
     <conv:ProgressRingConverter x:Key="ProgressRing"/>
     <Style TargetType="ComboBoxItem">
@@ -89,32 +83,15 @@
     <conv:StatusKindToBannerBgConverter x:Key="StatusKindBannerBg"/>
     <conv:BoolToCollapsedConverter x:Key="Bool2Collapse"/>
     <conv:ProgressTrackWidthConverter x:Key="ProgressTrackWidth"/>
-  </Window.Resources>
+  </UserControl.Resources>
 
-  <Grid>
-  <!-- Dialog body -->
-  <Border Background="{StaticResource Bg.Surface}"
-          BorderBrush="{StaticResource Border.Strong}" BorderThickness="1"
-          CornerRadius="10">
-    <Border.Effect>
-      <DropShadowEffect BlurRadius="64" ShadowDepth="24" Direction="270"
-                        Color="Black" Opacity="0.55"/>
-    </Border.Effect>
-
-    <DockPanel>
-      <Grid DockPanel.Dock="Top" Height="36" Background="Transparent" MouseLeftButtonDown="OnTitleBarMouseDown">
-        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-        <TextBlock Text="Export" Margin="16,0,0,0" VerticalAlignment="Center" Foreground="{StaticResource Text.Secondary}" FontSize="12"/>
-        <Button x:Name="TitleCloseButton" Grid.Column="1" Style="{StaticResource DialogCloseButton}" Click="OnTitleClose" ToolTip="Close window; an active export continues in the background" AutomationProperties.Name="Close window; an active export continues in the background">
-          <Path Stroke="{StaticResource Text.Secondary}" StrokeThickness="1" Data="M0.5,0.5 L9.5,9.5 M9.5,0.5 L0.5,9.5"/>
-        </Button>
-      </Grid>
+  <Grid Margin="28,20" MaxWidth="1360" HorizontalAlignment="Stretch">
     <Grid>
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="*"/>
         <ColumnDefinition Width="Auto"/>
       </Grid.ColumnDefinitions>
-      <Border Grid.Column="1" Width="310" Margin="0,20,20,20" Padding="18"
+      <Border Grid.Column="1" Width="380" Margin="24,0,0,0" Padding="18"
               Background="{StaticResource Bg.Surface2}" CornerRadius="6"
               Visibility="{Binding ShowEvaluation, Converter={StaticResource Bool2Vis}}">
         <DockPanel>
@@ -139,7 +116,10 @@
       <!-- ====================================================== -->
       <!-- CONFIGURING VIEW                                        -->
       <!-- ====================================================== -->
-      <Grid Visibility="{Binding IsConfiguring, Converter={StaticResource Bool2Vis}}">
+      <Grid Visibility="{Binding IsConfiguring, Converter={StaticResource Bool2Vis}}" MaxWidth="820" HorizontalAlignment="Stretch">
+        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Grid>
         <Grid.RowDefinitions>
           <RowDefinition Height="Auto"/>   <!-- Header -->
           <RowDefinition Height="Auto"/>   <!-- Summary stats -->
@@ -147,8 +127,6 @@
           <RowDefinition Height="Auto"/>   <!-- Output filename -->
           <RowDefinition Height="Auto"/>   <!-- Post-export options -->
           <RowDefinition Height="Auto"/>   <!-- Warning banner -->
-          <RowDefinition Height="*"/>      <!-- Spacer -->
-          <RowDefinition Height="Auto"/>   <!-- Footer -->
         </Grid.RowDefinitions>
 
         <!-- Header -->
@@ -160,10 +138,7 @@
           </TextBlock>
         </StackPanel>
 
-        <!-- Summary stats. Time values are TextBoxes via SelectableText so the
-             user can highlight + copy them. The primary Export action lives in
-             the footer (bottom-right) to match the progress modal's "Run in
-             background" button. -->
+        <!-- Duration summary -->
         <Border Grid.Row="1" Margin="24,20,24,0"
                 Background="{StaticResource Bg.Surface2}"
                 BorderBrush="{StaticResource Border.Subtle}" BorderThickness="1"
@@ -312,10 +287,10 @@
         </ItemsControl>
         </ScrollViewer>
 
-        <!-- Footer: Cancel bottom-left, Export bottom-right - matches the
-             progress modal where Cancel-export sits on the left and Run-in-
-             background sits on the right. -->
-        <Border Grid.Row="7" Background="Transparent"
+        </Grid>
+        </ScrollViewer>
+        <!-- Actions stay visible while configuration scrolls. -->
+        <Border x:Name="ConfigFooter" Grid.Row="1" Background="Transparent"
                 BorderBrush="{StaticResource Border.Subtle}" BorderThickness="0,1,0,0"
                 Padding="20,14">
           <Grid>
@@ -324,7 +299,7 @@
               <ColumnDefinition Width="*"/>
               <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <Button Grid.Column="0" Content="Cancel" Click="OnCancel"/>
+            <Button Grid.Column="0" Content="Back to editing" Click="OnCancel"/>
             <Button Grid.Column="2" Style="{StaticResource Button.Primary}" Click="OnExport"
                     IsEnabled="{Binding CanCheckHardware}"
                     Padding="14,8">
@@ -342,14 +317,12 @@
       </Grid>
 
       <Grid TextElement.Foreground="{StaticResource Text.Primary}" Visibility="{Binding IsConfiguring, Converter={StaticResource Bool2Collapse}}">
-        <Grid.ColumnDefinitions><ColumnDefinition Width="21*"/><ColumnDefinition x:Name="ProgressDetailsColumn" Width="32*"/></Grid.ColumnDefinitions>
+        <Grid.ColumnDefinitions><ColumnDefinition Width="420"/><ColumnDefinition x:Name="ProgressDetailsColumn" Width="*"/></Grid.ColumnDefinitions>
         <Grid x:Name="ProgressMainPanel">
-        <Grid.RowDefinitions>
-          <RowDefinition Height="Auto"/>
-          <RowDefinition Height="Auto"/>
-          <RowDefinition Height="*"/>
-          <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
+        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel>
+
         <StackPanel x:Name="ProgressSummary" Grid.Row="0" Margin="28,24,28,0">
           <TextBlock Text="{Binding ProgressHeading}" HorizontalAlignment="Center"
                      Foreground="{StaticResource Text.Secondary}" FontSize="11" FontWeight="SemiBold"/>
@@ -389,6 +362,11 @@
               <DataTrigger Binding="{Binding CleanupWarning}" Value=""><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
             </Style.Triggers></Style></TextBlock.Style>
           </TextBlock>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,16,0,0"
+                      Visibility="{Binding IsCompleted, Converter={StaticResource Bool2Vis}}">
+            <Button Content="Open video" Click="OnOpenVideo" Margin="0,0,8,0"/>
+            <Button Content="Open folder" Click="OnOpenFolder"/>
+          </StackPanel>
           <TextBlock x:Name="PartsSummaryText" Text="{Binding PartsSummary}" HorizontalAlignment="Center"
                      Foreground="{StaticResource Text.Secondary}" FontSize="12" Margin="0,16"
                      TextAlignment="Center" TextWrapping="Wrap"/>
@@ -415,7 +393,9 @@
 
 
         <!-- Footer -->
-        <Border x:Name="ProgressFooter" Grid.Row="3" Background="Transparent"
+        </StackPanel>
+        </ScrollViewer>
+        <Border x:Name="ProgressFooter" Grid.Row="1" Background="Transparent"
                 BorderBrush="{StaticResource Border.Subtle}" BorderThickness="0,1,0,0"
                 Padding="20,14">
           <Grid>
@@ -429,18 +409,14 @@
             <Button Grid.Column="0" Style="{StaticResource Button.Danger}" Click="OnCancelExport"
                     Content="Cancel export"
                     Visibility="{Binding IsExporting, Converter={StaticResource Bool2Vis}}"/>
-            <Button Grid.Column="2" Style="{StaticResource Button.Primary}" Click="OnRunInBackground"
-                    Content="Run in background"
-                    Visibility="{Binding IsExporting, Converter={StaticResource Bool2Vis}}"/>
-
-            <!-- Terminal (completed or failed): Close -->
+            <!-- Return after completion, failure, or cancellation. -->
             <Button Grid.Column="2" Style="{StaticResource Button.Primary}" Click="OnCloseTerminal"
-                    Content="Close"
+                    Content="Back to editing"
                     Visibility="{Binding IsTerminal, Converter={StaticResource Bool2Vis}}"/>
           </Grid>
         </Border>
         </Grid>
-        <Border x:Name="ProgressDetails" Grid.Column="1" Background="{StaticResource Bg.Surface2}" CornerRadius="7" Margin="0,0,16,16" Padding="20">
+        <Border x:Name="ProgressDetails" Grid.Column="1" Background="{StaticResource Bg.Surface2}" CornerRadius="7" Margin="24,0,0,0" Padding="20">
           <Grid>
             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
             <TextBlock x:Name="ProgressDetailsTitle" Text="Export details" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,20"/>
@@ -637,55 +613,5 @@
         </Border>
       </Grid>
     </Grid>
-    </DockPanel>
-  </Border>
-    <Thumb x:Name="TopResizeGrip" Height="6" Margin="12,0,12,0" VerticalAlignment="Top"
-           Cursor="SizeNS" DragDelta="OnResizeWindow" Tag="Top"
-           Visibility="{Binding IsConfiguring, Converter={StaticResource Bool2Collapse}}"
-           AutomationProperties.Name="Resize export window from top">
-      <Thumb.Template><ControlTemplate TargetType="Thumb"><Border Background="Transparent"/></ControlTemplate></Thumb.Template>
-    </Thumb>
-    <Thumb x:Name="BottomResizeGrip" Height="6" Margin="12,0,12,0" VerticalAlignment="Bottom"
-           Cursor="SizeNS" DragDelta="OnResizeWindow" Tag="Bottom"
-           Visibility="{Binding IsConfiguring, Converter={StaticResource Bool2Collapse}}"
-           AutomationProperties.Name="Resize export window from bottom">
-      <Thumb.Template><ControlTemplate TargetType="Thumb"><Border Background="Transparent"/></ControlTemplate></Thumb.Template>
-    </Thumb>
-    <Thumb x:Name="LeftResizeGrip" Width="6" Margin="0,12,0,12" HorizontalAlignment="Left"
-           Cursor="SizeWE" DragDelta="OnResizeWindow" Tag="Left"
-           Visibility="{Binding IsConfiguring, Converter={StaticResource Bool2Collapse}}"
-           AutomationProperties.Name="Resize export window from left">
-      <Thumb.Template><ControlTemplate TargetType="Thumb"><Border Background="Transparent"/></ControlTemplate></Thumb.Template>
-    </Thumb>
-    <Thumb x:Name="RightResizeGrip" Width="6" Margin="0,12,0,12" HorizontalAlignment="Right"
-           Cursor="SizeWE" DragDelta="OnResizeWindow" Tag="Right"
-           Visibility="{Binding IsConfiguring, Converter={StaticResource Bool2Collapse}}"
-           AutomationProperties.Name="Resize export window from right">
-      <Thumb.Template><ControlTemplate TargetType="Thumb"><Border Background="Transparent"/></ControlTemplate></Thumb.Template>
-    </Thumb>
-    <Thumb x:Name="TopLeftResizeGrip" Width="12" Height="12" HorizontalAlignment="Left" VerticalAlignment="Top"
-           Cursor="SizeNWSE" DragDelta="OnResizeWindow" Tag="TopLeft"
-           Visibility="{Binding IsConfiguring, Converter={StaticResource Bool2Collapse}}"
-           AutomationProperties.Name="Resize export window from topleft">
-      <Thumb.Template><ControlTemplate TargetType="Thumb"><Border Background="Transparent"/></ControlTemplate></Thumb.Template>
-    </Thumb>
-    <Thumb x:Name="TopRightResizeGrip" Width="12" Height="12" HorizontalAlignment="Right" VerticalAlignment="Top"
-           Cursor="SizeNESW" DragDelta="OnResizeWindow" Tag="TopRight"
-           Visibility="{Binding IsConfiguring, Converter={StaticResource Bool2Collapse}}"
-           AutomationProperties.Name="Resize export window from topright">
-      <Thumb.Template><ControlTemplate TargetType="Thumb"><Border Background="Transparent"/></ControlTemplate></Thumb.Template>
-    </Thumb>
-    <Thumb x:Name="BottomLeftResizeGrip" Width="12" Height="12" HorizontalAlignment="Left" VerticalAlignment="Bottom"
-           Cursor="SizeNESW" DragDelta="OnResizeWindow" Tag="BottomLeft"
-           Visibility="{Binding IsConfiguring, Converter={StaticResource Bool2Collapse}}"
-           AutomationProperties.Name="Resize export window from bottomleft">
-      <Thumb.Template><ControlTemplate TargetType="Thumb"><Border Background="Transparent"/></ControlTemplate></Thumb.Template>
-    </Thumb>
-    <Thumb x:Name="BottomRightResizeGrip" Width="12" Height="12" HorizontalAlignment="Right" VerticalAlignment="Bottom"
-           Cursor="SizeNWSE" DragDelta="OnResizeWindow" Tag="BottomRight"
-           Visibility="{Binding IsConfiguring, Converter={StaticResource Bool2Collapse}}"
-           AutomationProperties.Name="Resize export window from bottomright">
-      <Thumb.Template><ControlTemplate TargetType="Thumb"><Border Background="Transparent"/></ControlTemplate></Thumb.Template>
-    </Thumb>
   </Grid>
-</Window>
+</UserControl>

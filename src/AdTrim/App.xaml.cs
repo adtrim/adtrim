@@ -17,9 +17,29 @@ public partial class App : Application
     private Mutex? _singleInstanceMutex;
     private CancellationTokenSource? _pipeServerCts;
 
+    private readonly Dictionary<Views.ExportView, Models.ExportPlan> _exports = new();
+
+    public string? ReserveExport(Views.ExportView view, Models.ExportPlan plan)
+    {
+        if (FindRecordingWindow(plan.OutputPath) is not null)
+            return "The output cannot replace a recording open in another AdTrim window.";
+        if (_exports.Any(e => e.Key != view && Services.ExportSafety.SameFile(e.Value.OutputPath, plan.OutputPath)))
+            return "Another window is exporting to this filename. Choose a different filename.";
+        _exports[view] = plan;
+        return null;
+    }
+
+    public bool IsExportDestination(string path) => _exports.Values.Any(e => Services.ExportSafety.SameFile(e.OutputPath, path));
+
+    public void ReleaseExport(Views.ExportView view) => _exports.Remove(view);
+
     public MainWindow NewWindow(string? path = null)
     {
         var window = new MainWindow(path);
+        window.Closed += (_, _) =>
+        {
+            if (MainWindow == window) MainWindow = Windows.OfType<MainWindow>().FirstOrDefault(w => w != window);
+        };
         window.Show();
         return window;
     }
@@ -94,7 +114,7 @@ public partial class App : Application
     private void OnStartupInner(StartupEventArgs e)
     {
         var path = e.Args.Length > 0 ? e.Args[0] : null;
-        // If invoked with a path and a previous instance owns the mutex, hand off and exit.
+        // Keep window routing and shared preferences in one process.
         _singleInstanceMutex = new Mutex(initiallyOwned: true, name: MutexName, out var createdNew);
         if (!createdNew)
         {

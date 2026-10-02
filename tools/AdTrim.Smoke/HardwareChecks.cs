@@ -52,7 +52,7 @@ internal static class HardwareChecks
         var cached = await detector.DetectAsync();
         Require(result.Results.SequenceEqual(cached.Results), "Capability cache preserves adapter identities and results");
 
-        var dialog = new ExportDialog { Owner = owner, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
+        var dialog = new ExportView();
         dialog.Bind(project, media);
         dialog.AttachExportRunner(runner, new Sink(_ => { }));
         var vm = (ExportDialogViewModel)dialog.DataContext;
@@ -71,7 +71,7 @@ internal static class HardwareChecks
                     "Evaluation label is shown while rechecking is disabled");
             }
         };
-        dialog.Show();
+        Program.ShowExportForTest(dialog, owner);
         for (int i = 0; i < 150 && !vm.CanCheckHardware; i++) await Task.Delay(100);
         Require(!vm.IsCheckingHardware, "Export hardware check finishes without blocking the dispatcher");
         Require(vm.AccelerationOptions.Count == result.Results.Count + 2,
@@ -83,9 +83,9 @@ internal static class HardwareChecks
         await vm.CheckHardwareAsync(detector, "software", false, CancellationToken.None);
         Require(vm.SelectedAcceleration.Id == "software", "An explicitly saved Software choice is preserved");
         await vm.CheckHardwareAsync(detector, "automatic", false, CancellationToken.None);
-        typeof(ExportDialog).GetMethod("OnRecheckHardware", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+        typeof(ExportView).GetMethod("OnRecheckHardware", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
             .Invoke(dialog, new object[] { dialog, new RoutedEventArgs() });
-        Require(vm.ShowEvaluation && dialog.Width > 640, "Evaluate options opens an inline results area without squeezing the export form");
+        Require(vm.ShowEvaluation && dialog.ActualWidth > 640, "Evaluate options opens an inline results area without squeezing the export form");
         for (int i = 0; i < 900 && vm.IsCheckingHardware; i++) await Task.Delay(100);
         Require(!vm.IsCheckingHardware && vm.EvaluationReport.Contains("Fastest in this test:"), "Inline evaluation reports the fastest successful encoder");
         Require(!Application.Current.Windows.OfType<EncoderOptionsDialog>().Any(), "Manual evaluation does not open a popup");
@@ -112,7 +112,7 @@ internal static class HardwareChecks
             selector.IsDropDownOpen = false;
         }
         var completedEvaluation = vm.Evaluation;
-        typeof(ExportDialog).GetMethod("OnHideEvaluation", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+        typeof(ExportView).GetMethod("OnHideEvaluation", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
             .Invoke(dialog, new object[] { dialog, new RoutedEventArgs() });
         Require(!vm.ShowEvaluation && vm.CanOpenResults, "Hidden results remain available");
         ((System.Windows.Controls.Button)dialog.FindName("EvaluationResultsButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
@@ -130,12 +130,12 @@ internal static class HardwareChecks
         vm.OutputFolder = directory;
         vm.OutputFilename = "dialog-hardware.mp4";
         File.Delete(cachePath);
-        typeof(ExportDialog).GetMethod("OnExport", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+        typeof(ExportView).GetMethod("OnExport", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
             .Invoke(dialog, new object[] { dialog, new RoutedEventArgs() });
         Require(dialog.ExportTask is not null, "Export button starts the selected encoder");
-        ((System.Windows.Controls.Button)dialog.FindName("TitleCloseButton")).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
-        Require(!dialog.IsVisible && dialog.IsExportInFlight && dialog.Outcome == ExportDialogOutcome.RunInBackground,
-            "Export title-bar close hides the window while the export continues");
+        dialog.Close();
+        Require(dialog.IsVisible && dialog.IsExportInFlight,
+            "An active export stays attached to its recording window");
         await dialog.ExportTask!;
         for (int i = 0; i < 50 && !vm.IsCompleted; i++) await Task.Delay(20);
         Require(vm.IsCompleted && vm.ActiveEncoder == vm.CreateEncoder().DisplayName, "Dialog shows the actual encoder through completion");
@@ -244,10 +244,10 @@ internal static class HardwareChecks
     }
     private static async Task CheckMissingAdapterRecoveryAsync(Window owner, string directory, MainViewModel project, MediaInfo media, FfmpegRunner runner)
     {
-        var dialog = new ExportDialog { Owner = owner, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
+        var dialog = new ExportView();
         dialog.Bind(project, media, "missing-test-adapter");
         dialog.AttachExportRunner(runner, new Sink(_ => { }));
-        dialog.Show();
+        Program.ShowExportForTest(dialog, owner);
         var vm = (ExportDialogViewModel)dialog.DataContext;
         for (int i = 0; i < 150 && !vm.CanCheckHardware; i++) await Task.Delay(100);
         Require(vm.SelectedAcceleration.Id == "missing-test-adapter", "Missing saved GPU is retained instead of silently choosing software");
@@ -257,7 +257,7 @@ internal static class HardwareChecks
         var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
         timer.Tick += (_, _) =>
         {
-            var popup = Application.Current.Windows.OfType<EncoderOptionsDialog>().FirstOrDefault(w => w.Owner == dialog && w.IsVisible);
+            var popup = Application.Current.Windows.OfType<EncoderOptionsDialog>().FirstOrDefault(w => w.Owner == Window.GetWindow(dialog) && w.IsVisible);
             if (popup is null) return;
             timer.Stop();
             sawRecovery = true;
@@ -277,7 +277,7 @@ internal static class HardwareChecks
         timer.Start();
         try
         {
-            typeof(ExportDialog).GetMethod("OnExport", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            typeof(ExportView).GetMethod("OnExport", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
                 .Invoke(dialog, new object[] { dialog, new RoutedEventArgs() });
             await dialog.ExportTask!;
             for (int i = 0; i < 50 && !vm.IsCompleted; i++) await Task.Delay(20);

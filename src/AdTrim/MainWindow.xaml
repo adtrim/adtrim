@@ -47,16 +47,12 @@
     <vm:MainViewModel/>
   </Window.DataContext>
 
-  <Grid>
+  <Grid x:Name="WindowLayoutGrid">
     <Grid.RowDefinitions>
-      <RowDefinition Height="32"/>   <!-- Title bar -->
-      <RowDefinition Height="32"/>   <!-- Menu bar -->
-      <RowDefinition Height="*"/>    <!-- Video pane -->
-      <RowDefinition Height="Auto"/> <!-- Banner (collapsed by default) -->
-      <RowDefinition Height="56"/>   <!-- Transport bar -->
-      <RowDefinition Height="40"/>   <!-- Timeline toolbar -->
-      <RowDefinition Height="182"/>  <!-- Timeline strip wrapper (174 + pad) -->
-      <RowDefinition Height="26"/>   <!-- Status bar -->
+      <RowDefinition Height="32"/>
+      <RowDefinition Height="32"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="26"/>
     </Grid.RowDefinitions>
 
     <!-- =============================================================== -->
@@ -120,14 +116,14 @@
         <Menu Grid.Column="0" VerticalAlignment="Stretch" Padding="4,0">
           <MenuItem Header="_File" Style="{StaticResource MenuBarItem}">
             <MenuItem Header="New window" InputGestureText="Ctrl+N" Style="{StaticResource DropdownMenuItem}" Click="OnNewWindow"/>
-            <MenuItem Header="Open…"             InputGestureText="Ctrl+O"        Style="{StaticResource DropdownMenuItem}" Click="OnOpenFile"/>
+            <MenuItem Header="Open…"             InputGestureText="Ctrl+O"        Style="{StaticResource DropdownMenuItem}" Click="OnOpenFile" IsEnabled="{Binding CanInteract}"/>
             <MenuItem Header="Open Recent"       InputGestureText="▸"             Style="{StaticResource DropdownMenuItem}" IsEnabled="False"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
-            <MenuItem Header="Save project"      InputGestureText="Ctrl+S"        Style="{StaticResource DropdownMenuItem}" Click="OnSaveProject"/>
+            <MenuItem Header="Save project"      InputGestureText="Ctrl+S"        Style="{StaticResource DropdownMenuItem}" Click="OnSaveProject" IsEnabled="{Binding CanInteract}"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem x:Name="ExportMenuItem" IsEnabled="{Binding IsFileLoaded}" Header="Export merged MP4…" InputGestureText="E"            Style="{StaticResource DropdownMenuItem}" Click="OnExport"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
-            <MenuItem Header="Close project"     InputGestureText="Ctrl+W"        Style="{StaticResource DropdownMenuItem}" Click="OnCloseProject"/>
+            <MenuItem Header="Close project"     InputGestureText="Ctrl+W"        Style="{StaticResource DropdownMenuItem}" Click="OnCloseProject" IsEnabled="{Binding CanInteract}"/>
             <MenuItem Header="Exit"              InputGestureText="Alt+F4"        Style="{StaticResource DropdownMenuItem}" Click="OnClose"/>
           </MenuItem>
           <MenuItem Header="_Edit" Style="{StaticResource MenuBarItem}" IsEnabled="{Binding CanEdit}">
@@ -143,7 +139,7 @@
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem Header="Mark segment as excluded"   InputGestureText="X"             Style="{StaticResource DropdownMenuItem}" Click="OnToggleExcluded"/>
           </MenuItem>
-          <MenuItem Header="_View" Style="{StaticResource MenuBarItem}">
+          <MenuItem Header="_View" Style="{StaticResource MenuBarItem}" IsEnabled="{Binding CanInteract}">
             <MenuItem Header="Zoom in"        InputGestureText="Ctrl+="  Style="{StaticResource DropdownMenuItem}" Click="OnZoomIn"/>
             <MenuItem Header="Zoom out"       InputGestureText="Ctrl+−"  Style="{StaticResource DropdownMenuItem}" Click="OnZoomOut"/>
             <MenuItem Header="Fit timeline"   InputGestureText="Ctrl+0"  Style="{StaticResource DropdownMenuItem}" Click="OnFitTimeline"/>
@@ -195,31 +191,15 @@
     <!-- rectangle outright. The placeholder gradient + EmptyStateView    -->
     <!-- still cover both panes via ColumnSpan until media is loaded.     -->
     <!-- =============================================================== -->
-    <DockPanel Grid.Row="2">
-      <Button x:Name="BackgroundExportBanner" DockPanel.Dock="Top" Height="30"
-              Visibility="Collapsed" Click="OnExport" Cursor="Hand"
-              ToolTip="Show export progress" AutomationProperties.Name="Show background export progress">
-        <Button.Template>
-          <ControlTemplate TargetType="Button">
-            <Border Background="#B91C1C" Padding="14,0">
-              <ContentPresenter VerticalAlignment="Center"/>
-            </Border>
-          </ControlTemplate>
-        </Button.Template>
-        <Grid>
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="Auto"/>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="Auto"/>
-          </Grid.ColumnDefinitions>
-          <TextBlock Text="Exporting in background" Foreground="White" FontWeight="SemiBold" Margin="0,0,18,0"/>
-          <TextBlock Grid.Column="1" Text="{Binding ProgressLine}" Foreground="White" TextTrimming="CharacterEllipsis"/>
-          <StackPanel Grid.Column="2" Orientation="Horizontal">
-            <TextBlock Text="{Binding ProgressPercentText}" Foreground="White" Margin="16,0"/>
-            <TextBlock Text="Show progress" Foreground="White" FontWeight="SemiBold"/>
-          </StackPanel>
-        </Grid>
-      </Button>
+    <Grid x:Name="EditorWorkspace" Grid.Row="2">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="*"/>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="56"/>
+        <RowDefinition Height="40"/>
+        <RowDefinition Height="182"/>
+      </Grid.RowDefinitions>
+    <DockPanel Grid.Row="0">
     <Grid Background="Black">
 
       <Grid.ColumnDefinitions>
@@ -297,7 +277,7 @@
     <!-- =============================================================== -->
     <!-- EMPTY STATE - fills the editor-body rows when no file is loaded -->
     <!-- =============================================================== -->
-    <Border Grid.Row="2" Grid.RowSpan="5"
+    <Border Grid.Row="0" Grid.RowSpan="5"
             Background="{StaticResource Bg.Window}"
             Visibility="{Binding IsFileLoaded, Converter={StaticResource Bool2Collapse}}">
       <views:EmptyStateView/>
@@ -306,7 +286,7 @@
     <!-- =============================================================== -->
     <!-- INLINE BANNER (above transport, design screen 10)                -->
     <!-- =============================================================== -->
-    <Border Grid.Row="3"
+    <Border Grid.Row="1"
             Visibility="{Binding HasBanner, Converter={StaticResource Bool2Vis}}"
             Background="{Binding Banner.Kind, Converter={StaticResource StatusKindBannerBg}}"
             BorderBrush="{StaticResource Border.Subtle}"
@@ -357,7 +337,7 @@
     <!-- =============================================================== -->
     <!-- TRANSPORT BAR                                                    -->
     <!-- =============================================================== -->
-    <Border Grid.Row="4" Background="{StaticResource Bg.Surface}"
+    <Border Grid.Row="2" Background="{StaticResource Bg.Surface}"
             BorderBrush="{StaticResource Border.Subtle}" BorderThickness="0,1"
             Visibility="{Binding IsFileLoaded, Converter={StaticResource Bool2Vis}}">
       <Grid Margin="16,0">
@@ -521,7 +501,7 @@
     <!-- =============================================================== -->
     <!-- TIMELINE TOOLBAR                                                -->
     <!-- =============================================================== -->
-    <Border Grid.Row="5" Background="{StaticResource Bg.Surface}"
+    <Border Grid.Row="3" Background="{StaticResource Bg.Surface}"
             BorderBrush="{StaticResource Border.Subtle}" BorderThickness="0,1,0,0"
             Visibility="{Binding IsFileLoaded, Converter={StaticResource Bool2Vis}}">
       <Grid x:Name="TimelineToolbar" Margin="16,0" IsEnabled="{Binding CanEdit}">
@@ -669,7 +649,7 @@
     <!-- =============================================================== -->
     <!-- TIMELINE STRIP                                                   -->
     <!-- =============================================================== -->
-    <Border Grid.Row="6" Background="{StaticResource Bg.Surface}"
+    <Border Grid.Row="4" Background="{StaticResource Bg.Surface}"
             BorderBrush="{StaticResource Border.Subtle}" BorderThickness="0,1,0,0"
             Visibility="{Binding IsFileLoaded, Converter={StaticResource Bool2Vis}}">
       <ScrollViewer x:Name="TimelineScroll"
@@ -689,10 +669,11 @@
       </ScrollViewer>
     </Border>
 
+    </Grid>
     <!-- =============================================================== -->
     <!-- STATUS BAR                                                       -->
     <!-- =============================================================== -->
-    <Border Grid.Row="7" Background="{StaticResource Bg.Surface}"
+    <Border Grid.Row="3" Background="{StaticResource Bg.Surface}"
             BorderBrush="{StaticResource Border.Subtle}" BorderThickness="0,1,0,0">
       <Grid Margin="12,0">
         <Grid.ColumnDefinitions>
@@ -739,8 +720,6 @@
                     HorizontalAlignment="Left"
                     Background="Transparent"
                     Cursor="Hand"
-                    MouseLeftButtonUp="OnStatusOverrideClick"
-                    ToolTip="Click to open the export progress window"
                     Visibility="{Binding HasStatusOverride, Converter={StaticResource Bool2Vis}}">
           <TextBlock Text="{Binding StatusOverride}" FontSize="12"
                      Foreground="{Binding StatusKind, Converter={StaticResource StatusKindBrush}}"/>
@@ -811,7 +790,7 @@
         <!-- Right cluster: Zoom | Output | Version (file loaded), or just
              Version (no file). Dividers match the left side's spec. -->
         <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
-          <Button x:Name="StatusResetZoomButton" Content="{Binding ZoomFactor}" ContentStringFormat="Zoom {0:0.0}×" FontFamily="{StaticResource Font.Mono}"
+          <Button x:Name="StatusResetZoomButton" IsEnabled="{Binding CanInteract}" Content="{Binding ZoomFactor}" ContentStringFormat="Zoom {0:0.0}×" FontFamily="{StaticResource Font.Mono}"
                      Foreground="{StaticResource Text.Secondary}" FontSize="12" Padding="5,0"
                      ToolTip="Reset zoom to 1× (Ctrl+0)" AutomationProperties.Name="Reset zoom to 1×" Click="OnFitTimeline"
                      Visibility="{Binding IsFileLoaded, Converter={StaticResource Bool2Vis}}"/>
@@ -829,5 +808,7 @@
         </StackPanel>
       </Grid>
     </Border>
+    <ContentControl x:Name="ExportHost" Grid.Row="2" Visibility="Collapsed"
+                    HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"/>
   </Grid>
 </Window>

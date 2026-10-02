@@ -185,9 +185,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set { if (Set(ref _isBusy, value)) Notify(nameof(CanEdit), nameof(CanInteract), nameof(CanToggleCollapsed)); }
     }
 
-    public bool CanToggleCollapsed => IsFileLoaded && !IsBusy;
-    public bool CanInteract => !IsBusy;
-    public bool CanEdit => !IsBusy && !IsCollapsed;
+    private bool _isExportScreen;
+    public bool IsExportScreen
+    {
+        get => _isExportScreen;
+        set { if (Set(ref _isExportScreen, value)) Notify(nameof(CanEdit), nameof(CanInteract), nameof(CanToggleCollapsed)); }
+    }
+    public bool CanToggleCollapsed => IsFileLoaded && CanInteract;
+    public bool CanInteract => !IsBusy && !IsExportScreen;
+    public bool CanEdit => CanInteract && !IsCollapsed;
     private bool _isCollapsed;
     public bool IsCollapsed
     {
