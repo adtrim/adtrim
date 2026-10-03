@@ -1,126 +1,36 @@
-# Bundled binaries
+# Native media binaries
 
-`AdTrim` resolves `ffmpeg.exe` and `ffprobe.exe` at runtime from
-`AppContext.BaseDirectory/binaries/ffmpeg/win-x64/`. They are **not** committed
-to the repo (large binaries, license boundary auditability).
+AdTrim uses FFmpeg and ffprobe for analysis/export and libmpv for playback. Release binaries are built from the retained source inputs in [tools/native](../tools/native/README.md). They are not stored in Git.
 
-## One-time install
+## Obtain the binaries
 
-**Easiest:** double-click `fetch-binaries.cmd` - it downloads, checksum-verifies,
-and installs both ffmpeg and libmpv into this tree automatically. The manual
-steps below are the fallback / reference.
+For an exact release build, use the binaries from the matching AdTrim installer, or build the matching `AdTrim-Media-Sources-v<version>.tar.gz` archive attached to the [release](https://github.com/adtrim/adtrim/releases). The archive includes source snapshots, build instructions and an input hash manifest. GitHub's automatic AdTrim source archive does not include these native sources.
 
-1. Download the **gyan.dev** Windows build, "full" variant (must include
-   `libx264`, which configures the FFmpeg bundle as a whole as GPL 2+):
-   https://www.gyan.dev/ffmpeg/builds/  →  `ffmpeg-release-full.7z`
+Place the three outputs here:
 
-   **Minimum version: 9.0.2.** Earlier 8.1.x builds carry CVE-2026-8461 (an
-   out-of-bounds write in the MagicYUV decoder, fixed in 8.1.2). AdTrim decodes
-   user-supplied source files with auto-selected decoders, so the path is
-   reachable. After copying, confirm with `ffmpeg.exe -version`.
-2. Extract.
-3. Copy these two files into this folder:
-   - `binaries/ffmpeg/win-x64/ffmpeg.exe`
-   - `binaries/ffmpeg/win-x64/ffprobe.exe`
-4. Rebuild. The csproj `<Content Include="binaries\**\*.*">` rule copies
-   them into the output directory.
+- `ffmpeg/win-x64/ffmpeg.exe`
+- `ffmpeg/win-x64/ffprobe.exe`
+- `mpv/win-x64/libmpv-2.dll`
 
-## Updating after a security advisory (runbook)
+The project copies them into build and publish output. The .NET runtime is bundled separately by the self-contained publish.
 
-Packaging review, 2026-10-01: checked the FFmpeg security page and the current
-shinchiro release. Standalone FFmpeg/ffprobe use Gyan 9.0.2, the latest stable
-release. Playback uses `mpv-dev-x86_64-20261001-git-3186d369f9.7z`, verified
-against the GitHub release asset's SHA-256 digest:
-`de0aa24a39e27b07d9f663616f8d09c91586c7328d8c33fbfbc8e3888c35d89c`.
+`fetch-binaries.cmd` remains a development utility for third-party builds. Its downloads are not the recorded release build and do not supply this release's matching source package. `publish.cmd` rejects binaries whose hashes differ from `native-build.json`.
 
-Run this when a new FFmpeg/libmpv CVE lands **or** when `publish.cmd`'s version
-gate fails on the review-expiry (it nags every `MaxAgeDays` in
-`check-ffmpeg-version.ps1`).
+## Current build
 
-1. **Check the advisories:**
-   - FFmpeg - https://ffmpeg.org/security.html
-   - libmpv - the shinchiro build's embedded FFmpeg (compare its build date).
-2. **Update the binaries:** double-click `fetch-binaries.cmd` (or run
-   `fetch-binaries.ps1`). It pulls ffmpeg (BtbN's release-branch gpl build, with
-   gyan.dev release-full as automatic fallback) and the latest shinchiro libmpv,
-   verifies each against the builder's published checksum, drops them into
-   `binaries/ffmpeg/win-x64/` and `binaries/mpv/win-x64/`, and runs the version
-   gate so you know whether the ffmpeg it pulled clears the floor.
-3. **Update the pin in one place** - `check-ffmpeg-version.ps1`:
-   `MinVersion` (if the floor moved) and `ReviewedDate` (always → today).
-   Mirror the version number in step 1 above.
-4. **If nothing needed updating** (already current): just bump `ReviewedDate`
-   to today - that clears the gate and records that you checked.
-5. **Cut the release:** bump `AppVersion.Numeric`, run `publish.cmd && installer.cmd`,
-   publish the GitHub release with the new `AdTrim-Setup-v<version>.exe`.
+FFmpeg/ffprobe and libmpv's embedded FFmpeg use FFmpeg 9.0.2, revision `946fcce07b`. libmpv uses mpv revision `3186d369f9`. The build retains libx264, AMD AMF, NVIDIA NVENC and Intel QSV, Windows graphics/audio output, and the codecs and filters used by AdTrim. Other optional third-party features are not enabled.
 
-A routine run stays on your current ffmpeg major (patch/minor only). **Crossing a
-major** (e.g. 8.x to 9.x) can change CLI/filter behavior, so it's a deliberate,
-tested step, not a double-click: run `fetch-binaries.ps1 -AllowMajorUpgrade`, then
-re-test export, refine, and playback against real recordings before shipping.
+The native input revisions and hashes are in `tools/native/sources.lock.json`. The output hashes and matching source archive are recorded in `native-build.json`. Required notices are in `installer/licenses/`, copied beside the application. FFmpeg and the combined libmpv build are distributed under GPLv3 with matching source access.
 
-## Dev-time fallback
+## Updating
 
-`Services/FfmpegRunner` looks for binaries in this order:
+1. Check [FFmpeg security advisories](https://ffmpeg.org/security.html) and [mpv advisories](https://github.com/mpv-player/mpv/security/advisories). Review both export and playback: updating the standalone executable alone does not update FFmpeg inside libmpv.
+2. Retain the new source archives and any build inputs or patches. Update the source manifest and build instructions, then build in a fresh directory. Do not replace fixed revisions with floating branches.
+3. Run application tests, synthetic playback/frame-position checks and hardware export checks. Compare performance with the previous binaries. Record unavailable hardware explicitly.
+4. Prepare the matching source archive and notices. Update `native-build.json` with the resulting binary and source-archive hashes. A checksum alone does not establish corresponding-source completeness.
+5. Update `check-ffmpeg-version.ps1` after an actual advisory review. Its current minimum is 9.0.2. Run the normal publish and installer commands; do not bypass either payload or version checks.
+6. Publish the source archive and its checksum alongside the installer, maintaining the source link in the installed notices.
 
-1. `AppContext.BaseDirectory/binaries/ffmpeg/win-x64/` (bundled - production path)
-2. `%ADTRIM_FFMPEG_DIR%` (env var - dev override)
-3. Throws with a clear message.
+## Development override
 
-The user's own dev-only install at `C:\Program Files\ffmpeg\bin\` can be
-used by setting `ADTRIM_FFMPEG_DIR=C:\Program Files\ffmpeg\bin`.
-
-## libmpv (video preview backend)
-
-`AdTrim` uses **libmpv** for the video preview pane (the MPV-based
-swap replaced LibVLC to bring seek latency from ~1 s to ~50-150 ms - the
-MPV swap was a seek-latency win). At runtime it resolves the DLL from
-`AppContext.BaseDirectory/binaries/mpv/win-x64/libmpv-2.dll`.
-
-### One-time install
-
-1. Download a Windows libmpv build. The most reliable source is the
-   shinchiro builds (sourceforge):
-   - https://sourceforge.net/projects/mpv-player-windows/files/libmpv/
-   - Pick the latest `mpv-dev-x86_64-*.7z` (must be x86_64, not i686).
-   **Security note:** `libmpv-2.dll` statically links its *own* copy of FFmpeg,
-   independent of the bundled `ffmpeg.exe`. Bumping `ffmpeg.exe` does **not**
-   patch libmpv. The playback path decodes whatever source you load, so for
-   CVE-2026-8461 coverage pick a libmpv build whose embedded FFmpeg is 8.1.2 or
-   newer (a current shinchiro build satisfies this; verify the build date /
-   bundled FFmpeg version if in doubt).
-2. Extract the archive.
-3. Copy **`libmpv-2.dll`** into `binaries/mpv/win-x64/libmpv-2.dll`.
-   (You can ignore the other files in the archive - headers, lib, etc.
-   We only need the DLL at runtime.)
-4. Rebuild - the csproj's `<Content Include="binaries\**\*.*">` rule
-   copies the DLL into the output directory.
-
-Typical DLL size: ~50 MB.
-
-### Dev-time fallback
-
-`Services/LibMpv.EnsureLoaded` looks for `libmpv-2.dll` in this order:
-
-1. `AppContext.BaseDirectory/binaries/mpv/win-x64/` (bundled - production path)
-2. `%ADTRIM_MPV_DIR%` (env var - dev override)
-3. Throws with a clear error message.
-
-`dev-launch.cmd` sets `ADTRIM_MPV_DIR` if you've installed libmpv
-somewhere other than this folder.
-
-### Why a separate download?
-
-libmpv ships under GPLv2-or-later, like FFmpeg's `libx264`. Bundling it
-in the repo would make the entire repo GPL-covered for redistribution
-purposes. Keeping it as a one-time post-clone install preserves source
-flexibility and is consistent with the FFmpeg approach above.
-
-## License notices
-
-When the installer runs, license notices are copied alongside the app from
-`installer/licenses/`:
-
-- `LICENSE.FFmpeg.txt` - FFmpeg LGPL/GPL
-- `LICENSE.x264.txt` - x264 GPL 2+
-- `LICENSE.libmpv.txt` - libmpv GPL 2+
+`FfmpegRunner` first uses the bundled files under `AppContext.BaseDirectory/binaries/ffmpeg/win-x64/`, then checks `ADTRIM_FFMPEG_DIR`. libmpv loads from `binaries/mpv/win-x64/libmpv-2.dll` beside the application. No system FFmpeg installation is required.

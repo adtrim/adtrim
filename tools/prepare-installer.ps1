@@ -1,9 +1,10 @@
 param([string]$PublishDirectory = (Join-Path $PSScriptRoot '..\src\AdTrim\bin\Release\net10.0-windows\win-x64\publish'))
 $ErrorActionPreference = 'Stop'
 $publish = (Resolve-Path -LiteralPath $PublishDirectory).Path
-foreach ($relative in @('AdTrim.exe', 'binaries\mpv\win-x64\libmpv-2.dll', 'binaries\ffmpeg\win-x64\ffmpeg.exe', 'binaries\ffmpeg\win-x64\ffprobe.exe')) {
+foreach ($relative in @('AdTrim.exe', 'binaries\native-build.json', 'binaries\mpv\win-x64\libmpv-2.dll', 'binaries\ffmpeg\win-x64\ffmpeg.exe', 'binaries\ffmpeg\win-x64\ffprobe.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $publish $relative) -PathType Leaf)) { throw "Missing package file: $relative" }
 }
+& (Join-Path $PSScriptRoot 'check-native-payload.ps1') -BinariesDir (Join-Path $publish 'binaries') -ManifestPath (Join-Path $PSScriptRoot '..\binaries\native-build.json')
 $versionSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\src\AdTrim\AppVersion.cs') -Raw
 if ($versionSource -notmatch 'Numeric\s*=\s*"([0-9.]+)"') { throw 'Cannot read the application version.' }
 $expectedVersion = $Matches[1] + '.0'

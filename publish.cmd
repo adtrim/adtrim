@@ -32,9 +32,12 @@ REM ffmpeg/ffprobe are bundled from the project's own binaries tree - the
 REM single source for both dev and release builds. The csproj Content rule
 REM copies binaries\ into the build output (the same path the runtime
 REM resolver reads), so publish.cmd only validates the tree here; it does
-REM not copy from a system install. Drop the gyan.dev 8.1.2+ "full" build
-REM into binaries\ffmpeg\win-x64\ (see binaries\README.md).
+REM not copy from a system install. Use the recorded native source build
+REM in binaries\ffmpeg\win-x64\ (see binaries\README.md).
 set "FFMPEG_DIR=%~dp0binaries\ffmpeg\win-x64"
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\check-native-payload.ps1" -BinariesDir "%~dp0binaries"
+if errorlevel 1 goto :bad_native_payload
 
 if not exist "%FFMPEG_DIR%\ffmpeg.exe"  goto :missing_ffmpeg
 if not exist "%FFMPEG_DIR%\ffprobe.exe" goto :missing_ffprobe
@@ -109,6 +112,12 @@ exit /b 1
 :missing_ffprobe
 echo ERROR: ffprobe.exe not found at "%FFMPEG_DIR%\ffprobe.exe"
 echo Set ADTRIM_FFMPEG_DIR to a folder containing ffmpeg.exe + ffprobe.exe.
+exit /b 1
+
+:bad_native_payload
+echo.
+echo ERROR: native binaries do not match the recorded source build.
+echo See binaries\README.md before packaging.
 exit /b 1
 
 :bad_ffmpeg_version

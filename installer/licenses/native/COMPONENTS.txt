@@ -1,0 +1,78 @@
+Native media components
+=======================
+
+FFmpeg and libmpv are built from retained sources for this AdTrim release.
+The matching source package and build instructions are available alongside the installer at:
+https://github.com/adtrim/adtrim/releases/tag/v1.1.0
+
+Archive: AdTrim-Media-Sources-v1.1.0.tar.gz
+The archive includes all listed source snapshots, headers and shader build inputs.
+
+FreeType is used under its GPL option. The combined FFmpeg/libmpv binaries are
+distributed under GPLv3; individual components retain their upstream notices.
+
+AMF
+https://codeload.github.com/GPUOpen-LibrariesAndSDKs/AMF/tar.gz/c35f613
+
+dav1d
+https://code.videolan.org/videolan/dav1d/-/archive/a34e0685/dav1d-a34e0685.tar.gz
+
+ffnvcodec
+https://codeload.github.com/FFmpeg/nv-codec-headers/tar.gz/eddcea9
+
+freetype
+https://codeload.github.com/freetype/freetype/tar.gz/VER-2-14-3
+
+fribidi
+https://codeload.github.com/fribidi/fribidi/tar.gz/c928e4c
+
+harfbuzz
+https://codeload.github.com/harfbuzz/harfbuzz/tar.gz/64e2b532
+
+lcms2
+https://codeload.github.com/mm2/Little-CMS/tar.gz/lcms2.16
+
+libass
+https://codeload.github.com/libass/libass/tar.gz/b2fe9d8
+
+libplacebo
+https://codeload.github.com/haasn/libplacebo/tar.gz/3330a51
+
+VPL
+https://codeload.github.com/intel/libvpl/tar.gz/v2.17.0
+
+x264
+https://code.videolan.org/videolan/x264/-/archive/0480cb0/x264-0480cb0.tar.gz
+
+ffmpeg
+https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/946fcce07b
+
+mpv
+https://codeload.github.com/mpv-player/mpv/tar.gz/3186d369f9
+
+shaderc
+https://codeload.github.com/google/shaderc/tar.gz/ba3e587dbc13d423c713e964ac08e094731a034d
+
+spirv-cross
+https://codeload.github.com/KhronosGroup/SPIRV-Cross/tar.gz/aa217aeb6c9f0ace7a0ab233b28807edf45eb165
+
+glad
+https://codeload.github.com/Dav1dde/glad/tar.gz/0a7cf1af9e25e02821587bd4095807fc90b6426a
+
+fast_float
+https://codeload.github.com/fastfloat/fast_float/tar.gz/9498cc361e081f46c85c936a0677e271c1930a45
+
+zlib
+https://codeload.github.com/madler/zlib/tar.gz/da607da739fa6047df13e66a2af6b8bec7c2a498
+
+glslang
+https://codeload.github.com/KhronosGroup/glslang/tar.gz/e1b562a8bed273a02f30b59b66a5d499793cede5
+
+spirv-headers
+https://codeload.github.com/KhronosGroup/SPIRV-Headers/tar.gz/04fd3caa1e8267e4d95c806cad901181728e1006
+
+spirv-tools
+https://codeload.github.com/KhronosGroup/SPIRV-Tools/tar.gz/ef96ed763b43b59b33b31b362f09a02b729fa1c9
+
+vulkan-headers
+https://codeload.github.com/KhronosGroup/Vulkan-Headers/tar.gz/c46850864f4661461b0f6cb9922c058ffea4915e

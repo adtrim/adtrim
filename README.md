@@ -4,7 +4,7 @@ A Windows desktop editor for trimming commercials out of recorded TV - designed 
 
 AdTrim is a *manual* editor: you mark the cut points, review transitions, and export. It does not auto-detect commercials. It's the tool you reach for when you want frame-accurate control over the output, or when an automatic tool got it 95% right and you want to clean up the last 5%.
 
-> **Status:** v1.0 - usable but rough. Built primarily for one person's workflow (mine). Released publicly because others may find it useful.
+> **Status:** v1.1 - usable but rough. Built primarily for one person's workflow (mine). Released publicly because others may find it useful.
 
 > **Repository:** [github.com/adtrim/adtrim](https://github.com/adtrim/adtrim). File issues and pull requests there.
 
@@ -71,15 +71,7 @@ New installations default to `%LOCALAPPDATA%\Programs\AdTrim`. Updates retain th
 
 - **.NET 10 SDK** - `dotnet --version` should report `10.x`.
 - **NSIS** (only needed to build the installer) - install from https://nsis.sourceforge.io/Download, or point `%ADTRIM_NSIS_DIR%` at the folder containing `makensis.exe`.
-- **The bundled runtime binaries** (`ffmpeg.exe`, `ffprobe.exe`, `libmpv-2.dll`) - these are gitignored and not in the repo. Fetch them:
-
-```pwsh
-git clone https://github.com/adtrim/adtrim.git
-cd adtrim
-.\fetch-binaries.cmd
-```
-
-`fetch-binaries.cmd` downloads, checksum-verifies, and drops the binaries into `binaries/` (see [binaries/README.md](binaries/README.md) for what it pulls and the manual fallback).
+- **The native media binaries** (`ffmpeg.exe`, `ffprobe.exe`, `libmpv-2.dll`) are gitignored. Use the matching release installer's binaries or build its separate media-source archive. See [binaries/README.md](binaries/README.md) for placement, source access and update instructions.
 
 ### Run from source (dev)
 
@@ -108,8 +100,8 @@ From the repo root:
 ### Troubleshooting
 
 - **`makensis.exe not found`** - NSIS isn't installed or isn't on the auto-detected path. Install it, or set `%ADTRIM_NSIS_DIR%` to the folder with `makensis.exe`.
-- **Gate fails: "non-release build" or "below 8.1.2"** - the bundled ffmpeg is stale, a nightly, or below the security floor. Run `.\fetch-binaries.cmd` to refresh it.
-- **Gate fails: "last security-reviewed ... days ago"** - the version gate nags for a security re-review every ~90 days, so an old checkout *will* hit this. Re-check the advisories the message links, then set `ReviewedDate` in [check-ffmpeg-version.ps1](check-ffmpeg-version.ps1) to today (or run `.\fetch-binaries.cmd` if a fix is actually due).
+- **Native payload or FFmpeg version gate fails** - use the matching release binaries or follow the native rebuild process in [binaries/README.md](binaries/README.md).
+- **Gate fails: "last security-reviewed ... days ago"** - the version gate nags for a security re-review every ~90 days, so an old checkout *will* hit this. Re-check the advisories the message links, then set `ReviewedDate` in [check-ffmpeg-version.ps1](check-ffmpeg-version.ps1) to today after following the native rebuild process if an update is needed.
 - **`publish folder not found`** - run `.\publish.cmd` before `.\installer.cmd`.
 
 ### Validation

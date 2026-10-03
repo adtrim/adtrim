@@ -1,0 +1,12 @@
+{
+  "source_archive": "AdTrim-Media-Sources-v1.1.0.tar.gz",
+  "source_archive_sha256": "2e3568ecf3cb721c3e927efe85271bc60a4e6276afef4770018194f71520098a",
+  "source_manifest_sha256": "f9b9448721146164b7de8bfcca660736a217189682c9a476778bd67300707595",
+  "ffmpeg_revision": "946fcce07b",
+  "mpv_revision": "3186d369f9",
+  "files": {
+    "ffmpeg/win-x64/ffmpeg.exe": "8ee02f94f80f3ed3f81f31daf181b49246c91322d5dc82112b91749d39f2fb6c",
+    "ffmpeg/win-x64/ffprobe.exe": "20b0775c67a0688ee968d483c4ec816ede6944fb2f6de24364943dae29701db7",
+    "mpv/win-x64/libmpv-2.dll": "b06698d62a5dd503c5c4789dbc224d3de83b464613d37a7eaf67f1270980207c"
+  }
+}

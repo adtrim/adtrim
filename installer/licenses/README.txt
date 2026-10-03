@@ -6,14 +6,15 @@ has a stable place for dependency license notices.
 
 Included components:
 
-- FFmpeg and ffprobe 9.0.2, Gyan full build (GPLv3), including x264.
-  License: LICENSE.FFmpeg.txt.
-  Build: https://github.com/GyanD/codexffmpeg/releases/tag/9.0.2
-  FFmpeg source: https://github.com/FFmpeg/FFmpeg/tree/n9.0.2
-- libmpv, shinchiro 20261001, mpv commit 3186d369f9.
-  License: LICENSE.libmpv.txt.
-  Build: https://github.com/shinchiro/mpv-winbuild-cmake/releases/tag/20261001
-  Source: https://github.com/mpv-player/mpv/tree/3186d369f9
+- FFmpeg and ffprobe 9.0.2, AdTrim source build (GPLv3).
+  FFmpeg revision: 946fcce07b. License: LICENSE.FFmpeg.txt.
+- libmpv, mpv revision 3186d369f9, linked with FFmpeg 9.0.2 (GPLv3 combined build).
+  Upstream mpv license: LICENSE.libmpv.txt; GPLv3: LICENSE.FFmpeg.txt.
+- Native dependencies, headers and shader build inputs:
+  See native/COMPONENTS.txt and the accompanying per-component notices.
+  Matching source archive: AdTrim-Media-Sources-v1.1.0.tar.gz
+  Download: https://github.com/adtrim/adtrim/releases/tag/v1.1.0
+  The archive includes source snapshots, hashes and build instructions.
 - Microsoft .NET 10.0.12.
   License: LICENSE.dotnet.txt; dependencies: ThirdPartyNotices.dotnet.txt.
   Source: https://github.com/dotnet/dotnet

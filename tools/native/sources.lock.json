@@ -1,0 +1,143 @@
+[
+  {
+    "name": "AMF",
+    "file": "AMF-c35f613.tar.gz",
+    "url": "https://codeload.github.com/GPUOpen-LibrariesAndSDKs/AMF/tar.gz/c35f613",
+    "sha256": "ce70fd8bd51d1418c5c1b8df38fce83407e158787475f4246e27b216b27197e1"
+  },
+  {
+    "name": "dav1d",
+    "file": "dav1d-a34e0685.tar.gz",
+    "url": "https://code.videolan.org/videolan/dav1d/-/archive/a34e0685/dav1d-a34e0685.tar.gz",
+    "sha256": "063cd017a27624ac9b505e394ac13a3ba4d5be37cbe1991a9a2de49542b03c91"
+  },
+  {
+    "name": "ffnvcodec",
+    "file": "ffnvcodec-eddcea9.tar.gz",
+    "url": "https://codeload.github.com/FFmpeg/nv-codec-headers/tar.gz/eddcea9",
+    "sha256": "069b81f333268de28c91d85276d0b9ded7bcaa9ba1fd3a03574ec98c875c2597"
+  },
+  {
+    "name": "freetype",
+    "file": "freetype-VER-2-14-3.tar.gz",
+    "url": "https://codeload.github.com/freetype/freetype/tar.gz/VER-2-14-3",
+    "sha256": "dc49de6b01a266eef4876a4dd34d9842c475d3e28ff2eff63bd2fb760ab56261"
+  },
+  {
+    "name": "fribidi",
+    "file": "fribidi-c928e4c.tar.gz",
+    "url": "https://codeload.github.com/fribidi/fribidi/tar.gz/c928e4c",
+    "sha256": "1558b708dee122ae3c88926d4d2ba4eb91fa3612af62cd6fe0ab07d623d09d8b"
+  },
+  {
+    "name": "harfbuzz",
+    "file": "harfbuzz-64e2b532.tar.gz",
+    "url": "https://codeload.github.com/harfbuzz/harfbuzz/tar.gz/64e2b532",
+    "sha256": "e20f69214884680a07e7ff91cb938ea161be9b93c381cea5cdbc2cbd8f08135f"
+  },
+  {
+    "name": "lcms2",
+    "file": "lcms2-lcms2.16.tar.gz",
+    "url": "https://codeload.github.com/mm2/Little-CMS/tar.gz/lcms2.16",
+    "sha256": "cb4bf968aa66e3d5d16d1f094a99595966d4330cbd6be46c66129f2747ad2b0d"
+  },
+  {
+    "name": "libass",
+    "file": "libass-b2fe9d8.tar.gz",
+    "url": "https://codeload.github.com/libass/libass/tar.gz/b2fe9d8",
+    "sha256": "6192ca22c747f23412cdebb6ed3abcc208e964fb87c0e25057b72af3deef14d5"
+  },
+  {
+    "name": "libplacebo",
+    "file": "libplacebo-3330a51.tar.gz",
+    "url": "https://codeload.github.com/haasn/libplacebo/tar.gz/3330a51",
+    "sha256": "d672b671a0fc10118b002cc3059d5d78f01423c3af0a7967a6757f58932bd089"
+  },
+  {
+    "name": "VPL",
+    "file": "VPL-2.17.tar.gz",
+    "url": "https://codeload.github.com/intel/libvpl/tar.gz/v2.17.0",
+    "sha256": "4de3e2faf1e8307fb282e4a43f443191810f6a6b0a484fffa7995ba1c814c6ec"
+  },
+  {
+    "name": "x264",
+    "file": "x264-source.tar.gz",
+    "url": "https://code.videolan.org/videolan/x264/-/archive/0480cb0/x264-0480cb0.tar.gz",
+    "sha256": "8f3073feb4b98eba64f0439621cde77192d44799fd04018edb1cce80d7322bb9"
+  },
+  {
+    "name": "ffmpeg",
+    "file": "ffmpeg-946fcce07b.tar.gz",
+    "url": "https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/946fcce07b",
+    "sha256": "86f82e82456005881d1b97e9ce02f8a40bf2d181c8c958f8ae736886fdba2a34"
+  },
+  {
+    "name": "mpv",
+    "file": "mpv-3186d369f9.tar.gz",
+    "url": "https://codeload.github.com/mpv-player/mpv/tar.gz/3186d369f9",
+    "sha256": "13522492003d23adb22172aff29388e0fd985601dea3ca467fa62e112f23a7d0"
+  },
+  {
+    "name": "shaderc",
+    "file": "shaderc-ba3e587dbc13d423c713e964ac08e094731a034d.tar.gz",
+    "url": "https://codeload.github.com/google/shaderc/tar.gz/ba3e587dbc13d423c713e964ac08e094731a034d",
+    "revision": "ba3e587dbc13d423c713e964ac08e094731a034d",
+    "sha256": "54e28bdaeec49b27eb6dd413872a7cb0117cf6ca440619549917798829073879"
+  },
+  {
+    "name": "spirv-cross",
+    "file": "spirv-cross-aa217aeb6c9f0ace7a0ab233b28807edf45eb165.tar.gz",
+    "url": "https://codeload.github.com/KhronosGroup/SPIRV-Cross/tar.gz/aa217aeb6c9f0ace7a0ab233b28807edf45eb165",
+    "revision": "aa217aeb6c9f0ace7a0ab233b28807edf45eb165",
+    "sha256": "b99db6ee6182dbeb102257e755bf6d4978c23dcfd3329033304779279bc27212"
+  },
+  {
+    "name": "glad",
+    "file": "glad-0a7cf1af9e25e02821587bd4095807fc90b6426a.tar.gz",
+    "url": "https://codeload.github.com/Dav1dde/glad/tar.gz/0a7cf1af9e25e02821587bd4095807fc90b6426a",
+    "revision": "0a7cf1af9e25e02821587bd4095807fc90b6426a",
+    "sha256": "4ba9160a405097528b6d308ecf57d4d69126624cadda3ea5f1778e431ce4a273"
+  },
+  {
+    "name": "fast_float",
+    "file": "fast_float-9498cc361e081f46c85c936a0677e271c1930a45.tar.gz",
+    "url": "https://codeload.github.com/fastfloat/fast_float/tar.gz/9498cc361e081f46c85c936a0677e271c1930a45",
+    "revision": "9498cc361e081f46c85c936a0677e271c1930a45",
+    "sha256": "9de2444e42b47e1f614f4f9f341b65742beed163099d8376560b76a6b5d9b755"
+  },
+  {
+    "name": "zlib",
+    "file": "zlib-da607da739fa6047df13e66a2af6b8bec7c2a498.tar.gz",
+    "url": "https://codeload.github.com/madler/zlib/tar.gz/da607da739fa6047df13e66a2af6b8bec7c2a498",
+    "revision": "da607da739fa6047df13e66a2af6b8bec7c2a498",
+    "sha256": "b9258cf6254e7f7c37f1cd61dba943a1c5ea3cff5718c789834dac359094f5f7"
+  },
+  {
+    "name": "glslang",
+    "file": "glslang-e1b562a8bed273a02f30b59b66a5d499793cede5.tar.gz",
+    "url": "https://codeload.github.com/KhronosGroup/glslang/tar.gz/e1b562a8bed273a02f30b59b66a5d499793cede5",
+    "revision": "e1b562a8bed273a02f30b59b66a5d499793cede5",
+    "sha256": "907174a24713c6202c146f164bf81783f1fbc79c8cb821a30f18f159eb980312"
+  },
+  {
+    "name": "spirv-headers",
+    "file": "spirv-headers-04fd3caa1e8267e4d95c806cad901181728e1006.tar.gz",
+    "url": "https://codeload.github.com/KhronosGroup/SPIRV-Headers/tar.gz/04fd3caa1e8267e4d95c806cad901181728e1006",
+    "revision": "04fd3caa1e8267e4d95c806cad901181728e1006",
+    "sha256": "392f4801409aad9c4f1b77745f179952fd6264e4c8bd0fc1bc45dfa6807bf6d0"
+  },
+  {
+    "name": "spirv-tools",
+    "file": "spirv-tools-ef96ed763b43b59b33b31b362f09a02b729fa1c9.tar.gz",
+    "url": "https://codeload.github.com/KhronosGroup/SPIRV-Tools/tar.gz/ef96ed763b43b59b33b31b362f09a02b729fa1c9",
+    "revision": "ef96ed763b43b59b33b31b362f09a02b729fa1c9",
+    "sha256": "82c62146083fd558735a3171cf97cfc47903ca7d368482e87f94bd44883c0f00"
+  },
+  {
+    "name": "vulkan-headers",
+    "file": "vulkan-headers-c46850864f4661461b0f6cb9922c058ffea4915e.tar.gz",
+    "url": "https://codeload.github.com/KhronosGroup/Vulkan-Headers/tar.gz/c46850864f4661461b0f6cb9922c058ffea4915e",
+    "revision": "c46850864f4661461b0f6cb9922c058ffea4915e",
+    "sha256": "539ff8eaa4abf22fddbd98225c68a0c5ddb940075a4048c8b7f5d04449070a4e"
+  }
+]

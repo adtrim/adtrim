@@ -1,0 +1,4 @@
+tools/native/* text eol=lf
+binaries/native-build.json text eol=lf
+# Preserve upstream notice text byte-for-byte.
+installer/licenses/native/** -text -whitespace

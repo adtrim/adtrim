@@ -20,7 +20,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$FfmpegDir,
     [string]$MinVersion = '9.0.2',
-    [string]$ReviewedDate = '2026-10-01',
+    [string]$ReviewedDate = '2026-10-03',
     [int]$MaxAgeDays = 90
 )
 
