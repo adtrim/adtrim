@@ -16,7 +16,11 @@ foreach ($relative in $required) {
     if ($expected -notmatch '^[0-9a-fA-F]{64}$') { throw "Missing native hash: $relative" }
     $path = Join-Path $BinariesDir $relative
     if (-not (Test-Path -LiteralPath $path)) { throw "Missing native binary: $relative" }
-    if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $expected) {
+    $stream = [IO.File]::OpenRead([IO.Path]::GetFullPath($path))
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $actual = [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '') }
+    finally { $sha.Dispose(); $stream.Dispose() }
+    if ($actual -ne $expected) {
         throw "Native binary does not match its recorded source build: $relative. See binaries/README.md."
     }
 }
