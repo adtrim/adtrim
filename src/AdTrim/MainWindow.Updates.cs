@@ -15,7 +15,8 @@ public partial class MainWindow
     {
         if (Application.Current is not App app) return;
         app.Updates.Changed += OnUpdatesChanged;
-        Closed += (_, _) => app.Updates.Changed -= OnUpdatesChanged;
+        app.UpdatePreferenceChanged += OnUpdatesChanged;
+        Closed += (_, _) => { app.Updates.Changed -= OnUpdatesChanged; app.UpdatePreferenceChanged -= OnUpdatesChanged; };
         PreviewMouseDown += (_, _) => app.UpdateStartupInterrupted = true;
         PreviewKeyDown += (_, _) => app.UpdateStartupInterrupted = true;
         PreviewMouseWheel += (_, _) => app.UpdateStartupInterrupted = true;
@@ -25,6 +26,8 @@ public partial class MainWindow
     private void OnUpdatesChanged(object? sender, EventArgs e)
     {
         var updates = ((App)Application.Current).Updates;
+        AutomaticUpdatesMenu.IsChecked = ((App)Application.Current).AutomaticUpdatesEnabled;
+        AutomaticUpdatesMenu.Icon = AutomaticUpdatesMenu.IsChecked ? "\u2713" : null;
         var notice = updates.Notice;
         var brush = (Brush)FindResource(notice is { Importance: not "regular" } ? "State.Warning" : "Accent.Base");
         UpdateHelpDot.Visibility = notice is null ? Visibility.Collapsed : Visibility.Visible;
@@ -43,6 +46,18 @@ public partial class MainWindow
         if (app.Updates.Notice is null) await app.Updates.CheckAsync();
         if (!IsLoaded) return;
         await ShowUpdateAsync();
+    }
+
+    private void OnAutomaticUpdates(object sender, RoutedEventArgs e)
+    {
+        var app = (App)Application.Current;
+        try { app.SetAutomaticUpdates(AutomaticUpdatesMenu.IsChecked); }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        {
+            AutomaticUpdatesMenu.IsChecked = app.AutomaticUpdatesEnabled;
+            MessageBox.Show(this, "The update preference could not be saved. Please try again.", "Update settings",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     public async Task ShowUpdateAsync()

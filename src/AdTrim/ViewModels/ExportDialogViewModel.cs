@@ -139,6 +139,8 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
         set
         {
             if (!Set(ref _outputFolder, value)) return;
+            OverwriteConfirmed = false;
+            RefreshDefaultOutputFilename();
             Notify(nameof(FullOutputPath));
             Notify(nameof(OutputFileExists));
             Notify(nameof(ExportButtonText));
@@ -152,6 +154,7 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
         set
         {
             if (!Set(ref _outputFilename, value)) return;
+            OverwriteConfirmed = false;
             Notify(nameof(FullOutputPath));
             Notify(nameof(OutputFileExists));
             Notify(nameof(ExportButtonText));
@@ -259,7 +262,16 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
         _project = project;
         _media = media;
         OutputFolder = DeriveDefaultFolder(project.SourcePath);
-        OutputFilename = ExportNaming.DeriveDefaultFilename(project.SourcePath);
+        RefreshDefaultOutputFilename();
+    }
+
+    private string _defaultOutputFilename = "";
+
+    public void RefreshDefaultOutputFilename()
+    {
+        if (OutputFilename != _defaultOutputFilename) return;
+        _defaultOutputFilename = ExportNaming.DeriveDefaultFilename(_project.SourcePath, OutputFolder);
+        OutputFilename = _defaultOutputFilename;
     }
 
     // -------- progress-view orchestration --------

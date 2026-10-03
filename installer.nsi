@@ -48,12 +48,46 @@ InstallDirRegKey HKCU "Software\${APPNAME}" "InstallDir"
 SetCompressor lzma
 
 !include "MUI2.nsh"
+!include "nsDialogs.nsh"
+!include "LogicLib.nsh"
+Var UpdateCheckbox
+Var AutomaticUpdates
+
+Function .onInit
+  StrCpy $AutomaticUpdates 1
+  IfFileExists "$LOCALAPPDATA\AdTrim\automatic-updates.txt" 0 updateDefaultDone
+  FileOpen $0 "$LOCALAPPDATA\AdTrim\automatic-updates.txt" r
+  IfErrors updateReadFailed
+  FileRead $0 $1 1
+  FileClose $0
+  StrCmp $1 "1" updateDefaultDone
+  updateReadFailed:
+  StrCpy $AutomaticUpdates 0
+  updateDefaultDone:
+FunctionEnd
+
+Function UpdateOptionsPage
+  !insertmacro MUI_HEADER_TEXT "Update notifications" "Choose whether AdTrim checks for new releases."
+  nsDialogs::Create 1018
+  Pop $0
+  ${NSD_CreateCheckbox} 0 8u 100% 14u "Automatically check for updates"
+  Pop $UpdateCheckbox
+  ${NSD_SetState} $UpdateCheckbox $AutomaticUpdates
+  ${NSD_CreateLabel} 0 32u 100% 62u "Checks GitHub Pages for new releases, including security updates. No recordings or usage analytics are uploaded. GitHub logs IP addresses for security.$\r$\n$\r$\nYou can change this later in AdTrim's Help menu. Manual checks remain available."
+  Pop $0
+  nsDialogs::Show
+FunctionEnd
+
+Function UpdateOptionsLeave
+  ${NSD_GetState} $UpdateCheckbox $AutomaticUpdates
+FunctionEnd
 
 !define MUI_ICON   "src\AdTrim\app.ico"
 !define MUI_UNICON "src\AdTrim\app.ico"
 
 ; Install pages
 !insertmacro MUI_PAGE_DIRECTORY
+Page custom UpdateOptionsPage UpdateOptionsLeave
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${EXE_NAME}"
 !define MUI_FINISHPAGE_RUN_TEXT "Launch ${APPNAME}"
@@ -76,6 +110,18 @@ Section "Install"
   ; preserves subfolder structure (binaries\ffmpeg\, binaries\mpv\,
   ; localization satellite dirs, etc.).
   File /r "${PUBLISH_DIR}\*.*"
+
+  CreateDirectory "$LOCALAPPDATA\AdTrim"
+  ClearErrors
+  FileOpen $0 "$LOCALAPPDATA\AdTrim\automatic-updates.txt" w
+  IfErrors updateSaveFailed
+  FileWrite $0 $AutomaticUpdates
+  FileClose $0
+  IfErrors updateSaveFailed updateSaveDone
+  updateSaveFailed:
+  MessageBox MB_OK|MB_ICONSTOP "The update preference could not be saved. Setup cannot finish safely."
+  Abort
+  updateSaveDone:
 
   ; --- Add/Remove Programs entry (per-user hive) ---
   !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"

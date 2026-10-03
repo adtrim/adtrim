@@ -29,17 +29,24 @@ public static class ExportNaming
     private static readonly Regex InvalidCharsRx = new(
         @"[<>:""/\\|?*\x00-\x1F]", RegexOptions.Compiled);
 
-    /// <summary>
-    /// Default filename:
-    ///   `{source base name with S00E00 lowercased}-ADT-{unix-timestamp}.mp4`.
-    /// </summary>
-    public static string DeriveDefaultFilename(string? sourcePath, long? unixTimestamp = null)
+    /// <summary>Choose an unused export name without changing the source file.</summary>
+    public static string DeriveDefaultFilename(string? sourcePath, string? outputFolder = null)
     {
-        if (string.IsNullOrEmpty(sourcePath)) return "export-ADT.mp4";
-        var name = Path.GetFileNameWithoutExtension(sourcePath);
+        var name = string.IsNullOrEmpty(sourcePath) ? "export" : Path.GetFileNameWithoutExtension(sourcePath);
         name = S00E00Rx.Replace(name, m => m.Value.ToLowerInvariant());
-        var ts = unixTimestamp ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        return $"{name}-ADT-{ts}.mp4";
+        name = Regex.Replace(name, @" \[AdTrim(?: \d+)?\]$", "", RegexOptions.IgnoreCase);
+        var folder = outputFolder ?? Path.GetDirectoryName(sourcePath);
+        for (int number = 1; ; number++)
+        {
+            var suffix = number == 1 ? "AdTrim" : $"AdTrim {number}";
+            var candidate = $"{name} [{suffix}].mp4";
+            if (string.IsNullOrEmpty(folder)) return candidate;
+            var path = Path.Combine(folder, candidate);
+            if (!File.Exists(path) && !Directory.Exists(path)
+                && (string.IsNullOrEmpty(sourcePath)
+                    || !string.Equals(path, sourcePath, StringComparison.OrdinalIgnoreCase)))
+                return candidate;
+        }
     }
 
     /// <summary>Returns true if the filename has no characters disallowed by Windows.</summary>

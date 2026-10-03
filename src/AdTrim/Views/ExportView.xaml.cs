@@ -103,6 +103,7 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
         if (_vm is null) { Outcome = ExportDialogOutcome.Cancelled; Close(); return; }
         if (!_vm.CanCheckHardware || IsExportInFlight) return;
 
+        _vm.RefreshDefaultOutputFilename();
         _vm.RefreshValidation();
         var blocking = _vm.ValidationIssues.Where(i => i.Kind == ExportValidationKind.Blocking).ToList();
 

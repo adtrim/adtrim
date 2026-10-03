@@ -26,6 +26,10 @@ AdTrim is a *manual* editor: you mark the cut points, review transitions, and ex
 - **Export** - produces an MP4 with libx264-encoded video (deinterlaced via bwdif) and AC3 audio stream-copied from the source.
 - **Source files are never modified.** All edits live in a `.adt.json` sidecar next to the recording. Delete the sidecar and you're back to the original.
 
+Exports default to the source folder with ` [AdTrim]` appended to the recording's
+name. If that name already exists, AdTrim uses ` [AdTrim 2]`, ` [AdTrim 3]`, and
+so on. You can choose a different filename or folder before exporting.
+
 Collapsed playback uses mpv's virtual timeline and bounded read-ahead, without rendering a preview file. It uses the existing hardware-decoding preference where supported. Transitions can still depend on the codec, disk, and decoder; this is a preview of the kept material, not a promise of gapless playback or an exact encoded-export preview. Exported audio still uses packet boundaries.
 
 Moving or refining a split preserves the adjacent exclusion decisions. Splitting an excluded scene leaves both pieces excluded. Deleting a boundary between a kept and excluded scene keeps the merged scene; Undo restores the original decision.

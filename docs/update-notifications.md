@@ -85,3 +85,21 @@ Losing or compromising the root requires a new app trust root and a separately
 trusted distribution/recovery process. Rotation does not revoke a stolen old key
 in already-installed offline clients; expiration and revision checks limit some
 replay, not all key-compromise attacks. This is not a full TUF implementation.
+# Automatic check preference
+
+Automatic checks default to on. Setup offers a checkbox before installation and
+preserves an existing choice during upgrades. Help > Automatically check for
+updates changes the same setting for every open window. Turning it off cancels
+a pending automatic check and prevents future startup checks, including security
+alerts. Manual checks remain available. Re-enabling takes effect at the next app
+launch; a manual check can be run immediately.
+
+The installer and app share `automatic-updates.txt` in the user's AdTrim settings
+directory: `1` enables checks and `0` disables them. This file is independent of
+window preferences and is retained on uninstall. An unreadable or invalid setting
+does not enable network access.
+
+Checks download release information and its signature from GitHub Pages. They do
+not upload recordings, filenames, hardware information, usage events, installation
+identifiers, or the installed version. GitHub Pages logs request IP addresses for
+security; see https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages#data-collection.

@@ -171,6 +171,9 @@
               </Grid>
             </MenuItem.Header>
             <MenuItem x:Name="CheckUpdatesMenu" Header="Check for updates…" Style="{StaticResource DropdownMenuItem}" Click="OnCheckUpdates"/>
+            <MenuItem x:Name="AutomaticUpdatesMenu" Header="Automatically check for updates" IsCheckable="True"
+                      Style="{StaticResource DropdownMenuItem}" Click="OnAutomaticUpdates"
+                      ToolTip="Checks GitHub Pages for releases, including security updates. Turn off to check manually instead."/>
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem Header="About AdTrim" Style="{StaticResource DropdownMenuItem}" Click="OnAbout"/>
           </MenuItem>
@@ -796,12 +799,8 @@
         </StackPanel>
         </Grid>
 
-        <!-- Right cluster: Zoom | Output | Version (file loaded), or just
-             Version (no file). Dividers match the left side's spec. -->
+        <!-- Right cluster: Zoom | Output | Version, followed by any available update. -->
         <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
-          <Button x:Name="UpdateStatusButton" Visibility="Collapsed" Click="OnCheckUpdates"
-                  Foreground="{StaticResource Accent.Base}" Padding="8,0" Margin="0,0,12,0" FontSize="12"
-                  AutomationProperties.Name="View available AdTrim update"/>
           <Button x:Name="StatusResetZoomButton" IsEnabled="{Binding CanInteract}" Content="{Binding ZoomFactor}" ContentStringFormat="Zoom {0:0.0}×" FontFamily="{StaticResource Font.Mono}"
                      Foreground="{StaticResource Text.Secondary}" FontSize="12" Padding="5,0"
                      ToolTip="Reset zoom to 1× (Ctrl+0)" AutomationProperties.Name="Reset zoom to 1×" Click="OnFitTimeline"
@@ -817,6 +816,9 @@
                      Visibility="{Binding IsFileLoaded, Converter={StaticResource Bool2Vis}}"/>
           <TextBlock Text="{x:Static app:AppVersion.Display}" FontFamily="{StaticResource Font.Mono}"
                      Foreground="{StaticResource Text.Tertiary}" FontSize="12"/>
+          <Button x:Name="UpdateStatusButton" Visibility="Collapsed" Click="OnCheckUpdates"
+                  Foreground="{StaticResource Accent.Base}" Padding="8,0" Margin="12,0,0,0" FontSize="12"
+                  AutomationProperties.Name="View available AdTrim update"/>
         </StackPanel>
       </Grid>
     </Border>

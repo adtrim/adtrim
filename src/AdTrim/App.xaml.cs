@@ -21,6 +21,16 @@ public partial class App : Application
     private Services.UpdateService? _updates;
     public bool UpdateStartupInterrupted { get; set; }
     public bool UpdateDialogOpen { get; set; }
+    private CancellationTokenSource? _automaticUpdateCts;
+    public bool AutomaticUpdatesEnabled => Services.UpdatePreferences.Load(Services.UserPreferences.DataDirectory);
+    public event EventHandler? UpdatePreferenceChanged;
+
+    public void SetAutomaticUpdates(bool enabled)
+    {
+        Services.UpdatePreferences.Save(Services.UserPreferences.DataDirectory, enabled);
+        if (!enabled) _automaticUpdateCts?.Cancel();
+        UpdatePreferenceChanged?.Invoke(this, EventArgs.Empty);
+    }
     public Services.UpdateService Updates
     {
         get
@@ -149,18 +159,24 @@ public partial class App : Application
 
     private async Task CheckUpdatesAtStartupAsync(MainWindow window, CancellationToken ct)
     {
+        using var automatic = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _automaticUpdateCts = automatic;
+        ct = automatic.Token;
         try
         {
+            if (!AutomaticUpdatesEnabled) return;
             await window.Ready.WaitAsync(ct);
             await Task.Delay(TimeSpan.FromSeconds(5), ct);
+            if (!AutomaticUpdatesEnabled) return;
             await Updates.CheckAsync(ct);
-            if (ct.IsCancellationRequested || UpdateStartupInterrupted || UpdateDialogOpen || !Updates.AnnouncementDue) return;
+            if (ct.IsCancellationRequested || !AutomaticUpdatesEnabled || UpdateStartupInterrupted || UpdateDialogOpen || !Updates.AnnouncementDue) return;
             var active = Windows.OfType<MainWindow>().FirstOrDefault(w => w.IsActive && w.CanAnnounceUpdate);
             if (active is not null && Windows.OfType<MainWindow>().All(w => w.CanAnnounceUpdate))
                 await active.ShowUpdateAsync();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex) { WriteCrashLog("Update check", ex); }
+        finally { _automaticUpdateCts = null; }
     }
 
     private async Task RecoverExportsAsync(MainWindow window, CancellationToken ct)

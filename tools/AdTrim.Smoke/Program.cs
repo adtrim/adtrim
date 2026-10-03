@@ -14,11 +14,12 @@ using AdTrim.Services;
 using AdTrim.Controls;
 using System.Runtime.InteropServices;
 
-internal static class Program
+internal static partial class Program
 {
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--website") return CaptureWebsite(args[1], args[2]);
         if (args.Length > 1) throw new ArgumentException("Pass no arguments to generate a fixture, or one disposable fixture path.");
         var source = args.Length == 0 ? PrepareFixture().GetAwaiter().GetResult() : Path.GetFullPath(args[0]);
         var directory = Path.Combine(Path.GetDirectoryName(source)!, "smoke-state");
@@ -35,8 +36,9 @@ internal static class Program
         var updateBytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(updateFeed,
             new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
         var updateSignature = updateKey.SignData(updateBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+        var updateHandler = new SmokeUpdateHandler(updateBytes, updateSignature);
         var updateService = new UpdateService(directory, updateKey.ExportSubjectPublicKeyInfoPem(),
-            new System.Net.Http.HttpClient(new SmokeUpdateHandler(updateBytes, updateSignature)));
+            new System.Net.Http.HttpClient(updateHandler));
         typeof(App).GetField("_updates", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(app, updateService);
         // The harness owns its windows; do not join the installed app's single-instance lifecycle.
         app.Startup -= (StartupEventHandler)Delegate.CreateDelegate(typeof(StartupEventHandler), app,
@@ -48,7 +50,17 @@ internal static class Program
         {
             try
             {
+                app.SetAutomaticUpdates(false);
+                await (Task)Invoke(app, "CheckUpdatesAtStartupAsync", window, CancellationToken.None)!;
+                Require(updateHandler.Requests == 0, "Installer opt-out prevents all startup update requests");
                 await updateService.CheckAsync();
+                Require(updateHandler.Requests == 2, "Manual update checking remains available when automatic checks are off");
+                app.SetAutomaticUpdates(true);
+                var delayedCheck = (Task)Invoke(app, "CheckUpdatesAtStartupAsync", window, CancellationToken.None)!;
+                app.SetAutomaticUpdates(false);
+                await delayedCheck;
+                Require(updateHandler.Requests == 2, "Turning checks off cancels the pending startup check");
+                app.SetAutomaticUpdates(true);
                 Require(updateService.Error is null && updateService.Notice is not null, "Signed update reaches the UI without a live network request");
                 Require(((Button)window.FindName("UpdateStatusButton")).Visibility == Visibility.Visible,
                     "Available update has a persistent status-bar link");
@@ -258,6 +270,20 @@ internal static class Program
                 var folderDialog = (AdTrim.Views.ExportView)((ContentControl)window.FindName("ExportHost")).Content;
                 var folderVm = (ExportDialogViewModel)folderDialog.DataContext;
                 Require(folderVm.OutputFolder == Path.GetDirectoryName(source), "Export ignores the previous recording's saved destination");
+                var firstSuggestedName = folderVm.OutputFilename;
+                Require(firstSuggestedName.EndsWith(" [AdTrim].mp4"), "Default export identifies the edited copy without a timestamp");
+                var firstSuggestedPath = folderVm.FullOutputPath;
+                File.WriteAllText(firstSuggestedPath, "existing export");
+                folderVm.RefreshDefaultOutputFilename();
+                Require(folderVm.OutputFilename.EndsWith(" [AdTrim 2].mp4") && !folderVm.OverwriteConfirmed,
+                    "A file created after opening export gets a new suggested name rather than overwrite permission");
+                Require(File.ReadAllText(firstSuggestedPath) == "existing export", "Choosing a new export name leaves the existing file untouched");
+                folderVm.OutputFolder = directory;
+                Require(folderVm.OutputFilename == firstSuggestedName, "Suggested names are resolved against the selected destination");
+                folderVm.OutputFilename = "my-custom-export.mp4";
+                folderVm.OutputFolder = Path.GetDirectoryName(source)!;
+                folderVm.RefreshDefaultOutputFilename();
+                Require(folderVm.OutputFilename == "my-custom-export.mp4", "Folder changes and export preparation preserve a manually chosen filename");
                 folderVm.OutputFolder = directory;
                 folderDialog.Close();
                 Invoke(window, "OnExport", window, new RoutedEventArgs());
@@ -538,6 +564,11 @@ internal static class Program
         await second.OpenFileAsync(source);
         Require(((MainViewModel)second.DataContext).SourcePath == secondSource, "Open inside a window cannot create a second editor for an owned file");
         var secondVm = (MainViewModel)second.DataContext;
+        app.SetAutomaticUpdates(false);
+        Require(!((MenuItem)original.FindName("AutomaticUpdatesMenu")).IsChecked
+            && !((MenuItem)second.FindName("AutomaticUpdatesMenu")).IsChecked,
+            "Update preference stays synchronized across recording windows");
+        app.SetAutomaticUpdates(true);
         secondVm.CommandStack.Execute(new AddSplitCommand(secondVm, 2_000_000, SplitSource.Manual));
         Require(((MainViewModel)original.DataContext).Markers.Count == 4, "Editing the second recording leaves the first timeline unchanged");
         await (Task)Invoke(second, "SavePreferencesAsync", secondVm)!;
@@ -785,9 +816,13 @@ internal static class Program
 
 internal sealed class SmokeUpdateHandler(byte[] feed, byte[] signature) : System.Net.Http.HttpMessageHandler
 {
+    public int Requests { get; private set; }
     protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request, CancellationToken ct)
-        => Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+    {
+        Requests++;
+        return Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
         { Content = new System.Net.Http.ByteArrayContent(request.RequestUri!.AbsolutePath.EndsWith(".sig") ? signature : feed) });
+    }
 }
 
 internal sealed class ImmediateExportProgress(Action<ExportProgress> report) : IProgress<ExportProgress>
