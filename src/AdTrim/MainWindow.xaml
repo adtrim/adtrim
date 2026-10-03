@@ -162,7 +162,16 @@
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem Header="Auto-confirm high-confidence" Style="{StaticResource DropdownMenuItem}" Click="OnAutoConfirmHighConfidence"/>
           </MenuItem>
-          <MenuItem Header="_Help" Style="{StaticResource MenuBarItem}">
+          <MenuItem Style="{StaticResource MenuBarItem}">
+            <MenuItem.Header>
+              <Grid>
+                <AccessText Text="_Help"/>
+                <Ellipse x:Name="UpdateHelpDot" Width="6" Height="6" Fill="{StaticResource Accent.Base}"
+                         HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-3,-6,0" Visibility="Collapsed"/>
+              </Grid>
+            </MenuItem.Header>
+            <MenuItem x:Name="CheckUpdatesMenu" Header="Check for updates…" Style="{StaticResource DropdownMenuItem}" Click="OnCheckUpdates"/>
+            <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem Header="About AdTrim" Style="{StaticResource DropdownMenuItem}" Click="OnAbout"/>
           </MenuItem>
         </Menu>
@@ -790,6 +799,9 @@
         <!-- Right cluster: Zoom | Output | Version (file loaded), or just
              Version (no file). Dividers match the left side's spec. -->
         <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+          <Button x:Name="UpdateStatusButton" Visibility="Collapsed" Click="OnCheckUpdates"
+                  Foreground="{StaticResource Accent.Base}" Padding="8,0" Margin="0,0,12,0" FontSize="12"
+                  AutomationProperties.Name="View available AdTrim update"/>
           <Button x:Name="StatusResetZoomButton" IsEnabled="{Binding CanInteract}" Content="{Binding ZoomFactor}" ContentStringFormat="Zoom {0:0.0}×" FontFamily="{StaticResource Font.Mono}"
                      Foreground="{StaticResource Text.Secondary}" FontSize="12" Padding="5,0"
                      ToolTip="Reset zoom to 1× (Ctrl+0)" AutomationProperties.Name="Reset zoom to 1×" Click="OnFitTimeline"

@@ -80,6 +80,7 @@ public partial class MainWindow : Window
         WireViewModelEvents((MainViewModel)DataContext);
 
         Loaded += OnLoaded;
+        InitializeUpdates();
         Closing += OnWindowClosing;
         Timeline.ReviewJoinRequested += (_, outputUs) =>
         {

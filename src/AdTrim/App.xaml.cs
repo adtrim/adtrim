@@ -18,6 +18,19 @@ public partial class App : Application
     private CancellationTokenSource? _pipeServerCts;
 
     private readonly Dictionary<Views.ExportView, Models.ExportPlan> _exports = new();
+    private Services.UpdateService? _updates;
+    public bool UpdateStartupInterrupted { get; set; }
+    public bool UpdateDialogOpen { get; set; }
+    public Services.UpdateService Updates
+    {
+        get
+        {
+            if (_updates is not null) return _updates;
+            using var stream = typeof(App).Assembly.GetManifestResourceStream("AdTrim.Services.update-public-key.pem")!;
+            using var reader = new StreamReader(stream);
+            return _updates = new Services.UpdateService(Services.UserPreferences.DataDirectory, reader.ReadToEnd());
+        }
+    }
 
     public string? ReserveExport(Views.ExportView view, Models.ExportPlan plan)
     {
@@ -131,6 +144,23 @@ public partial class App : Application
         // Open MainWindow - StartupUri is replaced because we want to control bootstrap order.
         var win = NewWindow(path);
         _ = Task.Run(() => RecoverExportsAsync(win, _pipeServerCts.Token));
+        _ = CheckUpdatesAtStartupAsync(win, _pipeServerCts.Token);
+    }
+
+    private async Task CheckUpdatesAtStartupAsync(MainWindow window, CancellationToken ct)
+    {
+        try
+        {
+            await window.Ready.WaitAsync(ct);
+            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+            await Updates.CheckAsync(ct);
+            if (ct.IsCancellationRequested || UpdateStartupInterrupted || UpdateDialogOpen || !Updates.AnnouncementDue) return;
+            var active = Windows.OfType<MainWindow>().FirstOrDefault(w => w.IsActive && w.CanAnnounceUpdate);
+            if (active is not null && Windows.OfType<MainWindow>().All(w => w.CanAnnounceUpdate))
+                await active.ShowUpdateAsync();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex) { WriteCrashLog("Update check", ex); }
     }
 
     private async Task RecoverExportsAsync(MainWindow window, CancellationToken ct)

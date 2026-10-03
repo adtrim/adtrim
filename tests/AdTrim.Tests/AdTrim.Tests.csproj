@@ -11,6 +11,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="..\..\src\AdTrim\Services\UpdateFeed.cs" Link="Services\UpdateFeed.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\UpdateService.cs" Link="Services\UpdateService.cs"/>
     <!-- Pinned (May 2026): xUnit 2.9.3 + AwesomeAssertions.
          xUnit v2 deliberately (not v3) for training-data depth.
          AwesomeAssertions is the Apache-2.0 fork of FluentAssertions v7

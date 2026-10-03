@@ -29,6 +29,15 @@ internal static class Program
         var hash = SHA256.HashData(File.ReadAllBytes(source));
         var app = new App();
         app.InitializeComponent();
+        using var updateKey = RSA.Create(3072);
+        var updateFeed = new UpdateFeed(1, 1, DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1),
+            "1.2.0", "Update notification smoke test.", []);
+        var updateBytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(updateFeed,
+            new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+        var updateSignature = updateKey.SignData(updateBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+        var updateService = new UpdateService(directory, updateKey.ExportSubjectPublicKeyInfoPem(),
+            new System.Net.Http.HttpClient(new SmokeUpdateHandler(updateBytes, updateSignature)));
+        typeof(App).GetField("_updates", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(app, updateService);
         // The harness owns its windows; do not join the installed app's single-instance lifecycle.
         app.Startup -= (StartupEventHandler)Delegate.CreateDelegate(typeof(StartupEventHandler), app,
             typeof(App).GetMethod("OnStartup", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)!);
@@ -39,6 +48,14 @@ internal static class Program
         {
             try
             {
+                await updateService.CheckAsync();
+                Require(updateService.Error is null && updateService.Notice is not null, "Signed update reaches the UI without a live network request");
+                Require(((Button)window.FindName("UpdateStatusButton")).Visibility == Visibility.Visible,
+                    "Available update has a persistent status-bar link");
+                Require(((System.Windows.Shapes.Ellipse)window.FindName("UpdateHelpDot")).Visibility == Visibility.Visible,
+                    "Help has an update indicator");
+                Require(((MenuItem)window.FindName("CheckUpdatesMenu")).Header.ToString()!.Contains("1.2.0"),
+                    "Help identifies the available version");
                 var about = new AdTrim.Views.AboutDialog { Owner = window, ShowActivated = false, ShowInTaskbar = false };
                 about.Show();
                 about.UpdateLayout();
@@ -56,6 +73,24 @@ internal static class Program
                     { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent };
                 about.RaiseEvent(escape);
                 Require(escape.Handled && !about.IsVisible, "Escape closes About");
+                foreach (var importance in new[] { "regular", "security", "urgent" })
+                {
+                    var notice = new UpdateNotice("1.2.0", importance,
+                        importance == "regular" ? "Clearer export details and improvements to reviewing your edits."
+                        : "This update fixes a vulnerability in video processing. Updating is recommended before opening videos from unfamiliar sources.",
+                        importance == "regular" ? [] : ["sample-advisory"]);
+                    var update = new AdTrim.Views.UpdateDialog(notice, reminder: importance != "regular")
+                        { Owner = window, ShowActivated = false, ShowInTaskbar = false };
+                    update.Show();
+                    update.UpdateLayout();
+                    Require(((TextBlock)update.FindName("Heading")).Text == notice.Title, "Update importance is prominent");
+                    Require(((TextBlock)update.FindName("Versions")).Text.Contains("1.2.0"), "Security update version remains visible");
+                    var action = (Button)update.FindName("ReleaseButton");
+                    Require(action.TransformToAncestor(update).TransformBounds(new Rect(action.RenderSize)).Bottom <= update.ActualHeight,
+                        "Update actions fit inside dialog");
+                    Capture(update, Path.Combine(directory, "update-" + importance + ".png"));
+                    update.Close();
+                }
                 var emptyView = new AdTrim.Views.EmptyStateView();
                 var dropBox = (Grid)((Grid)emptyView.Content).Children[0];
                 foreach (double height in new[] { 480.0, 630.0, 1000.0 })
@@ -746,6 +781,13 @@ internal static class Program
         => instance.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(instance, args);
     private static void Require(bool condition, string message)
     { if (!condition) throw new InvalidOperationException(message); Console.WriteLine("PASS: " + message); }
+}
+
+internal sealed class SmokeUpdateHandler(byte[] feed, byte[] signature) : System.Net.Http.HttpMessageHandler
+{
+    protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request, CancellationToken ct)
+        => Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        { Content = new System.Net.Http.ByteArrayContent(request.RequestUri!.AbsolutePath.EndsWith(".sig") ? signature : feed) });
 }
 
 internal sealed class ImmediateExportProgress(Action<ExportProgress> report) : IProgress<ExportProgress>

@@ -1,0 +1,35 @@
+<Window x:Class="AdTrim.Views.UpdateDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="AdTrim updates" Width="540" SizeToContent="Height" MaxHeight="620"
+        WindowStartupLocation="CenterOwner" WindowStyle="None" AllowsTransparency="True"
+        Background="Transparent" ResizeMode="NoResize" ShowInTaskbar="False"
+        FontFamily="{StaticResource Font.UI}" Foreground="{StaticResource Text.Primary}">
+  <Border Background="{StaticResource Bg.Surface}" BorderBrush="{StaticResource Border.Strong}" BorderThickness="1" CornerRadius="10">
+    <Grid>
+      <Grid.RowDefinitions><RowDefinition Height="36"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+      <Grid Background="Transparent" MouseLeftButtonDown="OnDrag">
+        <TextBlock Text="AdTrim updates" Margin="16,0" VerticalAlignment="Center" FontSize="12" Foreground="{StaticResource Text.Secondary}"/>
+        <Button Style="{StaticResource DialogCloseButton}" HorizontalAlignment="Right" Click="OnClose">
+          <Path Stroke="{StaticResource Text.Secondary}" StrokeThickness="1" Data="M0.5,0.5 L9.5,9.5 M9.5,0.5 L0.5,9.5"/>
+        </Button>
+      </Grid>
+      <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="480">
+        <StackPanel Margin="28,20,28,28">
+          <TextBlock x:Name="Heading" FontSize="25" FontWeight="SemiBold" TextWrapping="Wrap"/>
+          <TextBlock x:Name="Versions" Margin="0,10,0,0" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource Text.Secondary}" TextWrapping="Wrap"/>
+          <TextBlock x:Name="Explanation" Margin="0,24,0,0" FontSize="14" LineHeight="21" TextWrapping="Wrap"/>
+          <TextBlock x:Name="Reminder" Margin="0,16,0,0" FontSize="12" Foreground="{StaticResource Text.Secondary}" TextWrapping="Wrap" Visibility="Collapsed"/>
+          <TextBlock x:Name="ManualInstall" Margin="0,24,0,0" FontSize="12" Foreground="{StaticResource Text.Secondary}" TextWrapping="Wrap"
+                     Text="Download the installer from the GitHub release page, close AdTrim, and run it to update. Your settings and projects are kept."/>
+        </StackPanel>
+      </ScrollViewer>
+      <Border Grid.Row="2" BorderBrush="{StaticResource Border.Subtle}" BorderThickness="0,1,0,0" Padding="20,16">
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+          <Button x:Name="LaterButton" Content="Later" Click="OnClose" Padding="18,7" Margin="0,0,10,0"/>
+          <Button x:Name="ReleaseButton" Content="View release on GitHub" Style="{StaticResource Button.Primary}" Padding="18,7" Click="OnRelease"/>
+        </StackPanel>
+      </Border>
+    </Grid>
+  </Border>
+</Window>

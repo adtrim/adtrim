@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <AdTrimDisplayVersion>1.1.0</AdTrimDisplayVersion>
-    <AdTrimAssemblyVersion>1.1.0.0</AdTrimAssemblyVersion>
+    <AdTrimDisplayVersion>1.1.1</AdTrimDisplayVersion>
+    <AdTrimAssemblyVersion>1.1.1.0</AdTrimAssemblyVersion>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <RuntimeFrameworkVersion>10.0.12</RuntimeFrameworkVersion>
@@ -12,8 +12,8 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>AdTrim</RootNamespace>
     <AssemblyName>AdTrim</AssemblyName>
-    <Version>1.1.0</Version>
-    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <Version>1.1.1</Version>
+    <AssemblyVersion>1.1.1.0</AssemblyVersion>
     <FileVersion>$(AdTrimAssemblyVersion)</FileVersion>
     <ProductVersion>$(AdTrimDisplayVersion)</ProductVersion>
     <InformationalVersion>v$(AdTrimDisplayVersion)</InformationalVersion>
@@ -31,6 +31,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Services/update-public-key.pem" />
     <!-- LibVLCSharp was removed when we migrated the preview to libmpv.
          Reintroducing it would pull tens of
          MB of unused VLC binaries into the publish output. -->

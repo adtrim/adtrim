@@ -22,6 +22,7 @@ on:
 
 jobs:
   trigger-site:
+    if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     steps:
       - name: Dispatch to adtrim/adtrim.github.io
