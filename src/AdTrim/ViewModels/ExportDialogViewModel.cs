@@ -23,7 +23,7 @@ public enum ExportPartStatus { Queued, InProgress, Done, Failed }
 /// </summary>
 public sealed class ExportPartItem : INotifyPropertyChanged
 {
-    public int Index { get; init; }            // 1-based; 0 for the synthetic "Concat" tail item
+    public int Index { get; init; }            // 1-based segments; 0 for stitching; -1 for encoder evaluation
     public string Label { get; init; } = "";
     public string TimeRange { get; init; } = "";
 
@@ -287,8 +287,7 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
         Parts.Add(new ExportPartItem
         {
             Index = 0,
-            Label = "Concat",
-            TimeRange = $"Stitch parts → {Path.GetFileName(plan.OutputPath)}",
+            Label = "Stitch parts",
             Status = ExportPartStatus.Queued,
         });
 
@@ -300,6 +299,27 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
         _runTimer.Restart();
         StartTickTimer();
         Mode = ExportDialogMode.Exporting;
+        RefreshPresentation();
+    }
+
+    public void BeginEncoderEvaluation()
+    {
+        var step = Parts.FirstOrDefault(p => p.Index == -1);
+        if (step is null)
+        {
+            step = new ExportPartItem { Index = -1, Label = "Evaluate encoding options" };
+            Parts.Insert(0, step);
+        }
+        step.Status = ExportPartStatus.InProgress;
+        ProgressLine = "Evaluating encoding options...";
+        RefreshPresentation();
+    }
+
+    public void CompleteEncoderEvaluation(bool succeeded)
+    {
+        var step = Parts.FirstOrDefault(p => p.Index == -1);
+        if (step is null) return;
+        step.Status = succeeded ? ExportPartStatus.Done : ExportPartStatus.Failed;
         RefreshPresentation();
     }
 
@@ -355,16 +375,14 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
                 for (int i = 0; i < concatIndex; i++)
                 {
                     var part = Parts[i];
-                    if (i + 1 < p.CurrentSegment) part.Status = ExportPartStatus.Done;
-                    else if (i + 1 == p.CurrentSegment)
+                    if (part.Index > 0 && part.Index < p.CurrentSegment) part.Status = ExportPartStatus.Done;
+                    else if (part.Index == p.CurrentSegment)
                     {
                         part.Status = ExportPartStatus.InProgress;
                         part.Percent = Math.Clamp(p.SegmentPercent, 0, 1);
                     }
                 }
-                var seg = p.CurrentSegment >= 1 && p.CurrentSegment - 1 < Parts.Count
-                    ? Parts[p.CurrentSegment - 1]
-                    : null;
+                var seg = Parts.FirstOrDefault(part => part.Index > 0 && part.Index == p.CurrentSegment);
                 ProgressLine = seg is null
                     ? $"Encoding part {p.CurrentSegment}/{p.TotalSegments}"
                     : $"Encoding part {p.CurrentSegment}/{p.TotalSegments} · {seg.TimeRange}";

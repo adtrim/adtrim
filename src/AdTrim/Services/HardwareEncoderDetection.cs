@@ -21,7 +21,7 @@ public sealed class HardwareEncoderDetection(FfmpegRunner runner, string dataDir
     private sealed record Cache(string Key, DateTime CreatedUtc, EncoderCapability[] Results, double? SoftwareMilliseconds, string? SoftwareDetail = null);
     private static readonly SemaphoreSlim Gate = new(1, 1);
 
-    public async Task<EncoderDetection> DetectAsync(bool recheck = false, CancellationToken ct = default)
+    public async Task<EncoderDetection> DetectAsync(bool recheck = false, CancellationToken ct = default, Action? evaluationStarted = null)
     {
         await Gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -36,6 +36,7 @@ public sealed class HardwareEncoderDetection(FfmpegRunner runner, string dataDir
             bool cacheable = enumerationError is null && adapters.All(a => a.DriverVersion != "unknown");
             if (!recheck && cacheable && await ReadCacheAsync(key, ct).ConfigureAwait(false) is { } cached)
                 return cached;
+            evaluationStarted?.Invoke();
             var results = new List<EncoderCapability>();
             foreach (var adapter in adapters.Where(a => a.Encoder is not null))
             {

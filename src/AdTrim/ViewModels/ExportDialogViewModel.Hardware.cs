@@ -162,11 +162,14 @@ public sealed partial class ExportDialogViewModel
         IsCheckingHardware = true;
         try
         {
-            _detection = await detector.DetectAsync(recheck, ct);
+            var dispatcher = System.Windows.Threading.Dispatcher.CurrentDispatcher;
+            _detection = await detector.DetectAsync(recheck, ct,
+                () => dispatcher.Invoke(() => { if (IsExporting) BeginEncoderEvaluation(); }));
             ct.ThrowIfCancellationRequested();
             SetOptions(_detection.Results.Select(r => r.Adapter), preferredId);
             Notify(nameof(Evaluation));
             Notify(nameof(EvaluationReport));
+            if (IsExporting) CompleteEncoderEvaluation(_detection.Preferred is not null || _detection.SoftwareMilliseconds is not null);
         }
         finally { IsCheckingHardware = false; }
     }

@@ -461,7 +461,7 @@
                        Margin="0,4,18,0" VerticalAlignment="Center"/>
             <TextBlock x:Name="ExportMethodValue" Grid.Row="2" Grid.Column="1"
                        Text="{Binding ExportMethodLabel}" ToolTip="{Binding ActiveEncoder}"
-                       FontSize="13" Margin="0,4,0,0"
+                       FontFamily="{StaticResource Font.Mono}" FontSize="13" Margin="0,4,0,0"
                        Foreground="{StaticResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
           </Grid>
         </Border>
@@ -530,16 +530,16 @@
                        Foreground="{StaticResource Text.Tertiary}" FontSize="11"
                        Margin="0,0,0,8"/>
 
-            <ItemsControl Grid.Row="3" ItemsSource="{Binding Parts}">
+            <ItemsControl x:Name="ExportPartsList" Grid.Row="3" ItemsSource="{Binding Parts}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
                   <Grid Margin="0,3">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="22"/>
-                      <ColumnDefinition Width="80"/>
                       <ColumnDefinition Width="*"/>
-                      <ColumnDefinition Width="Auto"/>
-                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="220"/>
+                      <ColumnDefinition Width="76"/>
+                      <ColumnDefinition Width="80"/>
                     </Grid.ColumnDefinitions>
 
                     <!-- Status icon: queued = open circle, in-progress = filled
@@ -580,20 +580,21 @@
                           Data="M6,6 L18,18 M18,6 L6,18"
                           Visibility="{Binding IsFailed, Converter={StaticResource Bool2Vis}}"/>
 
-                    <TextBlock Grid.Column="1" Text="{Binding Label}"
+                    <TextBlock x:Name="PartName" Grid.Column="1" Text="{Binding Label}"
+                               TextTrimming="CharacterEllipsis" ToolTip="{Binding Label}"
                                Foreground="{StaticResource Text.Primary}" FontWeight="Medium"
-                               VerticalAlignment="Center" Margin="6,0,0,0"/>
-                    <TextBlock Grid.Column="2" Text="{Binding TimeRange}"
+                               VerticalAlignment="Center" Margin="8,0,16,0"/>
+                    <TextBlock x:Name="PartRange" Grid.Column="2" Text="{Binding TimeRange}"
                                FontFamily="{StaticResource Font.Mono}" FontSize="12"
                                Foreground="{StaticResource Text.Secondary}"
-                               VerticalAlignment="Center"
-                               TextTrimming="CharacterEllipsis"/>
+                               VerticalAlignment="Center" Margin="0,0,16,0"
+                               ToolTip="{Binding TimeRange}" TextTrimming="CharacterEllipsis"/>
                     <TextBlock Grid.Column="3" Text="{Binding ElapsedFormatted}"
                                FontFamily="{StaticResource Font.Mono}" FontSize="12"
                                VerticalAlignment="Center" Margin="12,0,0,0"
                                Foreground="{StaticResource Text.Secondary}"
-                               TextAlignment="Right" MinWidth="56"/>
-                    <TextBlock Grid.Column="4" Text="{Binding StatusText}"
+                               TextAlignment="Right"/>
+                    <TextBlock Grid.Column="4" Text="{Binding StatusText}" TextAlignment="Right"
                                FontFamily="{StaticResource Font.Mono}" FontSize="12"
                                VerticalAlignment="Center" Margin="12,0,0,0"
                                Foreground="{StaticResource Text.Tertiary}"/>

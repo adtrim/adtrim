@@ -265,6 +265,21 @@ internal static class Program
                 progressDialog.Bind(vm, media, "software");
                 var progressVm = (ExportDialogViewModel)progressDialog.DataContext;
                 progressVm.BeginExport(plan);
+                Require(progressVm.Parts.Last().Label == "Stitch parts" && progressVm.Parts.Last().TimeRange == "",
+                    "Final export row describes stitching without repeating the output filename");
+                Require(progressVm.Parts.All(p => p.Index >= 0), "Export has no evaluation step until tests actually start");
+                progressVm.BeginEncoderEvaluation();
+                Require(progressVm.Parts[0].Index == -1 && progressVm.Parts[0].IsInProgress,
+                    "Encoder evaluation appears first and active before encoding");
+                progressVm.CompleteEncoderEvaluation(true);
+                progressVm.UpdateProgress(new(ExportPhase.EncodingSegment, 1, plan.KeptSegments.Count, 0.1, 0.1, "Encoding"));
+                Require(progressVm.Parts[0].IsDone && progressVm.Parts.First(p => p.Index == 1).IsInProgress,
+                    "Evaluation row does not shift encoding progress to the wrong part");
+                progressVm.BeginExport(plan);
+                progressVm.BeginEncoderEvaluation();
+                progressVm.MarkCancelled();
+                Require(progressVm.Parts[0].IsFailed, "Cancellation stops the active evaluation row");
+                progressVm.BeginExport(plan);
                 var progressHost = ShowExportForTest(progressDialog, window);
                 Require(progressVm.ExportMethodLabel == "Choosing automatically...", "Automatic export does not claim a device before selection");
                 foreach (var encoder in new[] { "AMD Radeon RX 9060 XT (hardware H.264)", "Software (H.264)" })
@@ -298,7 +313,7 @@ internal static class Program
                 foreach (int count in new[] { 1, 12, 100 })
                 {
                     progressVm.Parts.Clear();
-                    for (int i = 0; i < count; i++) progressVm.Parts.Add(new ExportPartItem { Label = $"Part {i + 1}", TimeRange = "00:01 to 00:02" });
+                    for (int i = 0; i < count; i++) progressVm.Parts.Add(new ExportPartItem { Label = i % 2 == 0 ? $"Commercial {i + 1}" : "A very long chapter name that should fit without touching the source times", TimeRange = "1:23:18.55 → 1:34:42.71" });
                     progressDialog.UpdateLayout();
                     var scroll = (ScrollViewer)progressDialog.FindName("PartsScrollViewer");
                     var footer = (FrameworkElement)progressDialog.FindName("ProgressFooter");
@@ -325,6 +340,16 @@ internal static class Program
                             "Scrolling details moves destination information along with the parts list");
                     }
                 }
+                ((ScrollViewer)progressDialog.FindName("PartsScrollViewer")).ScrollToTop();
+                progressDialog.UpdateLayout();
+                var rows = (ItemsControl)progressDialog.FindName("ExportPartsList");
+                var row = (ContentPresenter)rows.ItemContainerGenerator.ContainerFromIndex(1);
+                var rowName = (TextBlock)row.ContentTemplate.FindName("PartName", row);
+                var rowRange = (TextBlock)row.ContentTemplate.FindName("PartRange", row);
+                var nameBounds = rowName.TransformToAncestor(row).TransformBounds(new Rect(rowName.RenderSize));
+                var rangeBounds = rowRange.TransformToAncestor(row).TransformBounds(new Rect(rowRange.RenderSize));
+                Require(rangeBounds.Left - nameBounds.Right >= 16 && rowName.ActualWidth >= 140,
+                    "Long chapter names retain readable width and a clear gap before source times");
                 Capture(progressDialog, Path.Combine(directory, "quiet-focus-details.png"));
                 var compactSummary = (TextBlock)progressDialog.FindName("PartsSummaryText");
                 Require(compactSummary.Text.Contains("parts kept ·") && !compactSummary.Text.Contains("final video"),
