@@ -7,7 +7,7 @@ using System.Text.RegularExpressions;
 namespace AdTrim.Services;
 
 public sealed record UpdateAdvisory(string Id, string AffectedFrom, string FixedIn, string Importance, string Summary);
-public sealed record UpdateFeed(int Schema, long Revision, DateTimeOffset PublishedAt, DateTimeOffset ExpiresAt,
+public sealed record UpdateFeed(int Schema, long Revision, DateTimeOffset PublishedAt, DateTimeOffset? ExpiresAt,
     string LatestVersion, string Summary, UpdateAdvisory[] Advisories);
 public sealed record UpdateNotice(string Version, string Importance, string Summary, string[] AdvisoryIds)
 {
@@ -74,8 +74,7 @@ public static class UpdateFeedReader
         RejectDuplicateProperties(document.RootElement);
         var feed = JsonSerializer.Deserialize<UpdateFeed>(bytes, Options) ?? throw new InvalidDataException("Empty update information.");
         if (feed.Schema != 1 || feed.Revision < Math.Max(1, minimumRevision)
-            || feed.PublishedAt > now.AddMinutes(5) || feed.ExpiresAt <= now
-            || feed.ExpiresAt <= feed.PublishedAt || feed.ExpiresAt - feed.PublishedAt > TimeSpan.FromDays(90))
+            || feed.PublishedAt == default || feed.PublishedAt > now.AddMinutes(5))
             throw new InvalidDataException("Update information is outdated or unsupported.");
         var latest = ParseVersion(feed.LatestVersion);
         ValidateText(feed.Summary, 1200);

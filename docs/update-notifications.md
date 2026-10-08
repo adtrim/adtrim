@@ -20,24 +20,29 @@ HTTPS redirects are rejected. The feed is limited to 64 KiB, its signature to
 navigation targets or HTML in the protocol. Versions must contain three decimal
 components; only the app constructs the release URL.
 
-Schema 1 fields: schema, revision, publishedAt, expiresAt, latestVersion, summary,
-advisories. Dates are UTC ISO 8601. Revision increases whenever any bytes change.
-Expiry is at most 90 days after publication. Advisories contain id, affectedFrom
+Schema 1 fields: schema, revision, publishedAt, latestVersion, summary,
+advisories, and optional legacy expiresAt. Dates are UTC ISO 8601. Revision
+increases whenever any bytes change. Starting with v1.1.6, announcements do not
+expire; expiresAt is accepted for compatibility but does not impose a deadline.
+Advisories contain id, affectedFrom
 (inclusive), fixedIn (exclusive), importance (security or urgent), and summary.
 Keep advisories that apply to supported older installations in later feeds.
 
 Sign the exact UTF-8 bytes using RSA-3072 PSS with SHA-256. The ordinary detached
 signature is 384 binary bytes. The embedded public key is the trust root; a
 checksum or a public key downloaded from the website is not a trust anchor.
-Duplicate fields, unsupported schemas, malformed values, expired information,
+Duplicate fields, unsupported schemas, malformed values, future publication dates,
 older revisions, and reused revisions with different bytes are rejected. A valid
-cached feed can survive a network failure until expiration. Failed checks never
+cached feed can survive a network failure regardless of its age. Failed checks never
 report that the installation is current.
 
 The per-user updates-state.json stores the last verified feed/signature, revision
 and bounded reminder history. It is not a defense against an attacker who already
 controls the local account. A first installation has no prior revision to compare;
-expiration bounds replay. Blocking the network can prevent checks. This protocol
+an attacker controlling delivery could replay an older signed announcement to it.
+There is no time limit on this replay risk. Previously observed revisions prevent
+rollback on returning installations. Signatures do not prove freshness. Blocking
+the network can prevent checks. This protocol
 does not authenticate installers or protect a compromised GitHub release account.
 
 ## Preparing a feed
@@ -60,10 +65,15 @@ and verifies those assets before deploying them together. Prereleases do not
 trigger website publication. The bootstrap v1.1.0 feed lives in the website source
 because that release predates the notification feature.
 The website deployment verifies signatures and the referenced public stable
-release. Its weekly health workflow fails within 14 days of expiry: maintainers
-must monitor failed-run notifications and renew by increasing revision, refreshing
-dates, and signing again. Replace only the signed announcement assets on the
-current release and redeploy the website; never replace installer assets.
+release. There is no scheduled expiration check or periodic announcement renewal.
+Publish a new signed announcement when release information changes; never replace
+installer assets.
+
+For the v1.1.6 transition, retain expiresAt within 90 days of publishedAt so
+v1.1.1 and v1.1.2 can discover the upgrade while their deadline is valid. Those
+older clients still enforce expiration and require a manual download if they miss
+that window. Future announcements may omit expiresAt. Existing signed feeds and
+caches are accepted by v1.1.6 even after their legacy deadline.
 No private signing key is kept by the website workflow.
 Do not classify a dependency refresh as a security emergency without reviewing
 whether the vulnerability affects this application's build and enabled features.
@@ -83,8 +93,10 @@ bytes. This authorizes the replacement without changing installed clients.
 
 Losing or compromising the root requires a new app trust root and a separately
 trusted distribution/recovery process. Rotation does not revoke a stolen old key
-in already-installed offline clients; expiration and revision checks limit some
-replay, not all key-compromise attacks. This is not a full TUF implementation.
+in already-installed offline clients. Revision checks limit rollback, not all
+key-compromise attacks. Delegated-key authorization expiry is still enforced;
+it is separate from announcement expiration. The current root-signed feed has
+no delegated authorization and needs no periodic key renewal. This is not a full TUF implementation.
 # Automatic check preference
 
 Automatic checks default to on. Setup offers a checkbox before installation and

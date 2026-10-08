@@ -166,6 +166,7 @@ public partial class MainWindow : Window
         var frameUs = FrameDurationUs(vm);
         var paneATimeUs = vm.PlayheadUs - frameUs;
         var needsOverlay = paneATimeUs < vm.FrameStartPhaseUs - (frameUs / 2);
+        NoFrameMessage.Text = "No frame available";
         var currentlyShown = NoFrameOverlay.Visibility == Visibility.Visible;
         if (needsOverlay == currentlyShown) return;
         NoFrameOverlay.Visibility = needsOverlay ? Visibility.Visible : Visibility.Collapsed;
@@ -357,13 +358,19 @@ public partial class MainWindow : Window
         if (target <= vm.FrameStartPhaseUs) return;
         if (_previewBefore.PreviousFrameTargetUs == target)
         {
+            if (_previewBefore.PositionUs < target - 2)
+            {
+                UpdateNoFrameOverlay(vm);
+                return;
+            }
             if (_previewBefore.PositionUs >= target - 2 && _frameRecovery is null)
             {
                 if (_failedFrameRecovery == (vm.SourcePath, target))
                 {
                     NoFrameOverlay.Visibility = Visibility.Visible;
+                    NoFrameMessage.Text = "Could not load the preceding frame";
                     MpvViewBefore.Visibility = Visibility.Collapsed;
-                    vm.StatusOverride = "Could not resolve the preceding frame at this position.";
+                    vm.StatusOverride = "Could not load the preceding frame. Try seeking again.";
                 }
                 else RecoverPreviousFrameAsync(vm, target);
             }
@@ -393,6 +400,7 @@ public partial class MainWindow : Window
             {
                 _failedFrameRecovery = (path, target);
                 NoFrameOverlay.Visibility = Visibility.Visible;
+                NoFrameMessage.Text = "Could not load the preceding frame";
                 MpvViewBefore.Visibility = Visibility.Collapsed;
                 vm.StatusOverride = "No preceding frame found within 60 seconds of this position.";
             }
@@ -403,13 +411,14 @@ public partial class MainWindow : Window
             {
                 _failedFrameRecovery = (path, target);
                 NoFrameOverlay.Visibility = Visibility.Visible;
+                NoFrameMessage.Text = "Could not load the preceding frame";
                 MpvViewBefore.Visibility = Visibility.Collapsed;
-                vm.StatusOverride = "Could not resolve the preceding frame at this position.";
+                vm.StatusOverride = "Could not load the preceding frame. Try seeking again.";
             }
         }
         finally
         {
-            _frameRecovery = null;
+            if (ReferenceEquals(_frameRecovery, cancellation)) _frameRecovery = null;
             if (!_allowClose && ReferenceEquals(DataContext, vm)) MaybeResyncPanes(vm);
         }
     }
@@ -1023,6 +1032,8 @@ public partial class MainWindow : Window
     /// +1s seek can't get rounded to the same keyframe in fast-seek mode.</param>
     private void SeekTo(MainViewModel vm, long timeUs, bool exact = true)
     {
+        _frameRecovery?.Cancel();
+        _failedFrameRecovery = null;
         if (vm.IsCollapsed)
         {
             if (vm.KeptTimeline.DurationUs == 0) return;
@@ -1564,7 +1575,8 @@ public partial class MainWindow : Window
 
     private void AddSplitAtPlayhead(MainViewModel vm)
     {
-        var timeUs = vm.PlayheadUs;
+        if (_previewAfter.IsSeeking || _previewAfter.IsLoading) return;
+        var timeUs = _previewAfter.PositionUs;
         var minDelta = FrameDurationUs(vm);
         if (!vm.Markers.Any(m => Math.Abs(m.TimeUs - timeUs) < minDelta))
             vm.CommandStack.Execute(new AddSplitCommand(vm, timeUs, SplitSource.Manual));
@@ -1841,6 +1853,7 @@ public partial class MainWindow : Window
 
     private void OnMoveSelectedToPlayhead(object sender, RoutedEventArgs e)
     {
+        if (_previewAfter.IsSeeking || _previewAfter.IsLoading) return;
         if (DataContext is not MainViewModel { CanEdit: true }) return;
         if (DataContext is not MainViewModel vm || vm.SelectedMarker is null) return;
         if (vm.IsBusy) return;
@@ -1853,7 +1866,8 @@ public partial class MainWindow : Window
         var idx = sorted.IndexOf(split);
         long minUs = idx > 0 ? sorted[idx - 1].TimeUs + 1 : 0;
         long maxUs = idx < sorted.Count - 1 ? sorted[idx + 1].TimeUs - 1 : vm.DurationUs;
-        var candidate = FrameSnap.SnapWithin(vm.PlayheadUs, vm.FrameRate, vm.FrameStartPhaseUs, minUs, maxUs) ?? split.TimeUs;
+        var candidate = _previewAfter.PositionUs;
+        if (candidate < minUs || candidate > maxUs) return;
         if (candidate == split.TimeUs) return;
         vm.CommandStack.Execute(new MoveSplitCommand(vm, split, split.TimeUs, candidate));
     }

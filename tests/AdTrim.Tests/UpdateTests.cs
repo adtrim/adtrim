@@ -28,12 +28,31 @@ public sealed class UpdateTests : IDisposable
     }
 
     [Fact]
-    public void ReplayExpirationAndFutureDatingAreRejected()
+    public void ReplayAndFutureDatingAreRejected()
     {
         Assert.Throws<InvalidDataException>(() => Verify(Bytes(Feed), minimum: 3));
-        Assert.Throws<InvalidDataException>(() => Verify(Bytes(Feed with { ExpiresAt = _now })));
+        Assert.Throws<InvalidDataException>(() => Verify(Bytes(Feed with { PublishedAt = default })));
         Assert.Throws<InvalidDataException>(() => Verify(Bytes(Feed with { PublishedAt = _now.AddHours(1) })));
-        Assert.Throws<InvalidDataException>(() => Verify(Bytes(Feed with { ExpiresAt = _now.AddDays(100) })));
+    }
+
+    [Fact]
+    public void SignedAnnouncementsRemainUsableAfterYearsWithoutMaintenance()
+    {
+        var bytes = Bytes(Feed);
+        var verified = UpdateFeedReader.Verify(bytes, Sign(bytes), _key.ExportSubjectPublicKeyInfoPem(), _now.AddYears(20), 2);
+        Assert.Equal("security", UpdateFeedReader.Select(verified, "1.1.0")!.Importance);
+        Assert.Throws<InvalidDataException>(() => UpdateFeedReader.Verify(bytes, Sign(bytes),
+            _key.ExportSubjectPublicKeyInfoPem(), _now.AddYears(20), 3));
+    }
+
+    [Fact]
+    public void AnnouncementsCanOmitLegacyExpiration()
+    {
+        var node = System.Text.Json.Nodes.JsonNode.Parse(Bytes(Feed))!.AsObject();
+        node.Remove("expiresAt");
+        var verified = Verify(System.Text.Encoding.UTF8.GetBytes(node.ToJsonString()));
+        Assert.Null(verified.ExpiresAt);
+        Assert.Equal(Feed.LatestVersion, verified.LatestVersion);
     }
 
     [Fact]
@@ -113,7 +132,7 @@ public sealed class UpdateTests : IDisposable
     [Fact]
     public async Task VerifiedCacheAndReminderSurviveRestartWithoutTrustingTamperedNetworkContent()
     {
-        var bytes = Bytes(Feed);
+        var bytes = Bytes(Feed with { PublishedAt = _now.AddYears(-10), ExpiresAt = _now.AddYears(-10).AddDays(30) });
         var handler = new ResponseHandler(bytes, Sign(bytes));
         var first = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler));
         await first.CheckAsync();

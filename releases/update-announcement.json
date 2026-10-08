@@ -1,5 +1,5 @@
 {
-  "version": "1.1.2",
-  "summary": "Choose whether AdTrim checks for updates in Setup or the Help menu. Exports now use a clear [AdTrim] filename label instead of a timestamp, with numbered copies when needed.",
+  "version": "1.1.6",
+  "summary": "More reliable frame previews and split placement, including frames immediately before keyframes. Hardware evaluation results stay aligned at the top of the export screen. Signed update announcements no longer require periodic renewal.",
   "advisories": []
 }

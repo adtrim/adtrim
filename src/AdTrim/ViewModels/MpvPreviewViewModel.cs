@@ -29,14 +29,14 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
     private volatile bool _loading;
     private int _audioStream = -1;
     private readonly object _seekLock = new();
-    private bool _stepBackAfterSeek;
+    private int _previousFrameSteps;
     private volatile bool _seeking;
     public bool IsSeeking => _seeking;
     public long? PreviousFrameTargetUs { get; private set; }
 
     private void BeginSeek()
     {
-        _stepBackAfterSeek = false;
+        _previousFrameSteps = 0;
         PreviousFrameTargetUs = null;
         _seeking = true;
     }
@@ -48,7 +48,6 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
             if (_ctx == IntPtr.Zero) return;
             BeginSeek();
             PreviousFrameTargetUs = timeUs;
-            _stepBackAfterSeek = knownPredecessorUs is null;
             Command(_ctx, "seek", ((knownPredecessorUs ?? timeUs) / 1_000_000m).ToString("0.######", CultureInfo.InvariantCulture), "absolute+exact");
         }
     }
@@ -76,7 +75,6 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
     {
         lock (_seekLock)
         {
-            _stepBackAfterSeek = false;
             PreviousFrameTargetUs = null;
             if (_ctx != IntPtr.Zero) Command(_ctx, "stop");
             _loading = false;
@@ -187,6 +185,9 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
         mpv_set_option_string(_ctx, "msg-level", "all=no");
         // Default to fast seek. Toggle via SetFastSeek for frame-precise work.
         mpv_set_option_string(_ctx, "hr-seek", _fastSeek ? "no" : "yes");
+        // MP4 keyframe indexes can seek past reordered frames just before a
+        // keyframe. Decode from earlier without changing the requested timestamp.
+        mpv_set_option_string(_ctx, "hr-seek-demuxer-offset", "1");
         // Keep last frame visible after seek/load instead of going black.
         mpv_set_option_string(_ctx, "keep-open", "yes");
         // Pause on load so the user sees the first frame without auto-playing.
@@ -266,15 +267,20 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
                         lock (_seekLock)
                         {
                             _loading = false;
-                            if (_stepBackAfterSeek)
+                            var hasPosition = mpv_get_property(_ctx, "time-pos", MpvFormat.Double, out double position) == 0
+                                && double.IsFinite(position);
+                            // An exact seek can land beyond the requested timestamp. Backstep
+                            // until we actually cross it, with a bound for damaged recordings.
+                            if (PreviousFrameTargetUs is { } target && hasPosition
+                                && (long)Math.Round(position * 1_000_000) >= target - 2
+                                && _previousFrameSteps < 3)
                             {
-                                _stepBackAfterSeek = false;
+                                _previousFrameSteps++;
                                 Command(_ctx, "frame-back-step");
                                 break;
                             }
                             _seeking = false;
-                            if (mpv_get_property(_ctx, "time-pos", MpvFormat.Double, out double position) == 0
-                                && double.IsFinite(position))
+                            if (hasPosition)
                                 PositionUs = (long)Math.Round(position * 1_000_000);
                             if (mpv_get_property(_ctx, "pause", MpvFormat.Flag, out int paused) == 0)
                                 IsPlaying = paused == 0;
@@ -339,7 +345,6 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
     {
         lock (_seekLock)
         {
-            _stepBackAfterSeek = false;
             PreviousFrameTargetUs = null;
             if (_ctx == IntPtr.Zero) return;
             int unpause = 0;
@@ -408,7 +413,6 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
     {
         lock (_seekLock)
         {
-            _stepBackAfterSeek = false;
             PreviousFrameTargetUs = null;
             _seeking = false;
             if (_ctx == IntPtr.Zero) return;

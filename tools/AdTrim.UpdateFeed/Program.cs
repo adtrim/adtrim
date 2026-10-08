@@ -9,7 +9,7 @@ try
 {
     var feed = UpdateFeedReader.Verify(File.ReadAllBytes(args[0]), File.ReadAllBytes(args[0] + ".sig"),
         File.ReadAllText(args[1]), DateTimeOffset.UtcNow, 0);
-    Console.WriteLine($"Verified revision {feed.Revision}, release v{feed.LatestVersion}, expires {feed.ExpiresAt:O}.");
+    Console.WriteLine($"Verified revision {feed.Revision}, release v{feed.LatestVersion}. Announcements do not expire.");
     return 0;
 }
 catch (Exception ex)

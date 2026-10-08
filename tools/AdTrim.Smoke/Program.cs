@@ -269,6 +269,21 @@ internal static partial class Program
                 Invoke(window, "OnExport", window, new RoutedEventArgs());
                 var folderDialog = (AdTrim.Views.ExportView)((ContentControl)window.FindName("ExportHost")).Content;
                 var folderVm = (ExportDialogViewModel)folderDialog.DataContext;
+                folderVm.ShowEvaluation = true;
+                var evaluation = (TextBox)folderDialog.FindName("EvaluationOutput");
+                evaluation.Text = "Graphics card\n1.29s - Passed\n\nSoftware\n1.76s - Passed";
+                foreach (var size in new[] { new Size(2560, 1390), new Size(1280, 720) })
+                {
+                    window.Width = size.Width;
+                    window.Height = size.Height;
+                    window.UpdateLayout();
+                    Require(evaluation.GetRectFromCharacterIndex(0).Top < 5,
+                        $"Evaluation results start at the top at {size}");
+                    Capture(window, Path.Combine(directory, $"evaluation-{size.Width}.png"));
+                }
+                window.Width = 1280;
+                window.Height = 720;
+                folderVm.ShowEvaluation = false;
                 Require(folderVm.OutputFolder == Path.GetDirectoryName(source), "Export ignores the previous recording's saved destination");
                 var firstSuggestedName = folderVm.OutputFilename;
                 Require(firstSuggestedName.EndsWith(" [AdTrim].mp4"), "Default export identifies the edited copy without a timestamp");
@@ -703,6 +718,26 @@ internal static partial class Program
             var vm = (MainViewModel)window.DataContext;
             var before = (MpvPreviewViewModel)typeof(MainWindow).GetField("_previewBefore", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
             var after = (MpvPreviewViewModel)typeof(MainWindow).GetField("_previewAfter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+            var keyframes = await runner.RunFfprobeAsync(new[] { "-v", "error", "-select_streams", "v:0",
+                "-read_intervals", "0%+12", "-show_entries", "frame=pts_time,key_frame", "-of", "json", path });
+            using var keyJson = System.Text.Json.JsonDocument.Parse(keyframes.Stdout);
+            foreach (var key in keyJson.RootElement.GetProperty("frames").EnumerateArray()
+                .Where(f => f.GetProperty("key_frame").GetInt32() == 1))
+            {
+                var keyUs = (long)Math.Round(double.Parse(key.GetProperty("pts_time").GetString()!,
+                    System.Globalization.CultureInfo.InvariantCulture) * 1_000_000);
+                var keyIndex = Array.FindIndex(frames, f => Math.Abs(f - keyUs) <= 2);
+                if (keyIndex < 2) continue;
+                var boundary = frames[keyIndex - 1];
+                for (int visit = 0; visit < 2; visit++)
+                {
+                    Invoke(window, "SeekTo", vm, boundary, true);
+                    await Task.Delay(500);
+                    for (int i = 0; i < 200 && (before.IsSeeking || after.IsSeeking); i++) await Task.Delay(20);
+                    Require(Math.Abs(after.PositionUs - boundary) <= 2 && Math.Abs(before.PositionUs - frames[keyIndex - 2]) <= 2,
+                        $"Revisiting a split immediately before a keyframe retains its frame pair: {boundary}");
+                }
+            }
             foreach (long target in new long[] { 2_100_000, 4_500_000, 5_050_000, 6_800_000, 7_200_000, 9_000_000 })
             {
                 Invoke(window, "SeekTo", vm, target, true);
@@ -713,6 +748,33 @@ internal static partial class Program
                     $"Actual predecessor at {target}: {before.PositionUs} -> {after.PositionUs} ({Path.GetFileName(path)})");
             }
             Require(hash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(path))), "Timing fixture unchanged");
+            var displayed = after.PositionUs;
+            before.SeekPreviousFrame(displayed, displayed + 1);
+            await Task.Delay(500);
+            for (int i = 0; i < 200 && before.IsSeeking; i++) await Task.Delay(20);
+            var displayedIndex = Array.FindIndex(frames, f => Math.Abs(f - displayed) <= 2);
+            Require(displayedIndex > 0 && Math.Abs(before.PositionUs - frames[displayedIndex - 1]) <= 2,
+                "Predecessor recovery crosses the target even when seeking overshoots");
+            vm.FrameRate = new(24, 1);
+            Invoke(window, "AddSplitAtPlayhead", vm);
+            var added = vm.Markers.Single(m => m.TimeUs == displayed);
+            Invoke(window, "SeekTo", vm, 6_800_000L, true);
+            await Task.Delay(700);
+            for (int i = 0; i < 200 && after.IsSeeking; i++) await Task.Delay(20);
+            vm.SelectMarker(added);
+            Invoke(window, "OnMoveSelectedToPlayhead", window, new RoutedEventArgs());
+            Require(added.TimeUs == after.PositionUs,
+                "Move split preserves the displayed timestamp despite a mismatched frame grid");
+            var savedBoundary = added.TimeUs;
+            Invoke(window, "SeekTo", vm, 0L, true);
+            await Task.Delay(300);
+            Invoke(window, "SeekTo", vm, savedBoundary, true);
+            await Task.Delay(700);
+            for (int i = 0; i < 200 && (before.IsSeeking || after.IsSeeking); i++) await Task.Delay(20);
+            var savedIndex = Array.FindIndex(frames, f => Math.Abs(f - savedBoundary) <= 2);
+            Require(savedIndex > 0 && Math.Abs(after.PositionUs - savedBoundary) <= 2
+                && Math.Abs(before.PositionUs - frames[savedIndex - 1]) <= 2,
+                "Returning to the moved split preserves the saved boundary and both displayed frames");
         }
     }
 

@@ -248,7 +248,7 @@
              MpvViewBefore is Collapsed (so the HWND isn't competing for the
              rect). Fills the whole pane. -->
         <Grid x:Name="NoFrameOverlay" Background="Black" Visibility="Collapsed">
-          <TextBlock Text="No frame available"
+          <TextBlock x:Name="NoFrameMessage" Text="No frame available"
                      HorizontalAlignment="Center" VerticalAlignment="Center"
                      Foreground="{StaticResource Text.Tertiary}" FontSize="14"/>
         </Grid>

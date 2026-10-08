@@ -110,7 +110,13 @@
                    IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                    VerticalContentAlignment="Top"
                    Background="Transparent" BorderThickness="0" Padding="0"
-                   Foreground="{StaticResource Text.Secondary}" FontSize="13"/>
+                   Foreground="{StaticResource Text.Secondary}" FontSize="13">
+            <TextBox.Template>
+              <ControlTemplate TargetType="TextBox">
+                <ScrollViewer x:Name="PART_ContentHost"/>
+              </ControlTemplate>
+            </TextBox.Template>
+          </TextBox>
         </DockPanel>
       </Border>
       <!-- ====================================================== -->
