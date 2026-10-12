@@ -357,6 +357,22 @@ internal static partial class Program
                 Require(progressVm.Parts[0].IsFailed, "Cancellation stops the active evaluation row");
                 progressVm.BeginExport(plan);
                 var progressHost = ShowExportForTest(progressDialog, window);
+                progressVm.UpdateProgress(new(ExportPhase.EncodingSegment, 1, 2, 1, 0.95, "Encoding"));
+                progressVm.UpdateProgress(new(ExportPhase.Concatenating, 2, 2, 0, 0.95, "Preparing parts…"));
+                Require(progressVm.RemainingFormatted == "" && progressVm.IsProgressIndeterminate,
+                    "Stitching preparation discards the encoding estimate");
+                progressVm.UpdateProgress(new(ExportPhase.Concatenating, 2, 2, 0.5, 0.965, "Stitching parts…", RemainingSeconds: 30));
+                var stitchEstimate = progressVm.RemainingFormatted;
+                await Task.Delay(2200);
+                await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
+                Require(progressVm.Parts.Last().Percent == 0.5 && progressVm.RemainingFormatted != stitchEstimate,
+                    $"Measured stitching progress drives its own countdown between callbacks ({stitchEstimate} -> {progressVm.RemainingFormatted}, {progressVm.Parts.Last().Percent})");
+                progressVm.UpdateProgress(new(ExportPhase.Finalizing, 2, 2, 1, 0.98, "Finalizing MP4…"));
+                Require(progressVm.RemainingFormatted == "" && progressVm.IsProgressIndeterminate
+                    && progressVm.TimeHeadline == "Finalizing MP4…", "MP4 finalization never shows a stale countdown");
+                progressDialog.UpdateLayout();
+                Capture(progressDialog, Path.Combine(directory, "finalizing-mp4.png"));
+                progressVm.BeginExport(plan);
                 Require(progressVm.ExportMethodLabel == "Choosing automatically...", "Automatic export does not claim a device before selection");
                 foreach (var encoder in new[] { "AMD Radeon RX 9060 XT (hardware H.264)", "Software (H.264)" })
                 {
@@ -459,7 +475,21 @@ internal static partial class Program
                 progressDialog.Close();
                 Require(plan.KeptSegments.Select(s => s.PartTitle).SequenceEqual(new[] { chapterName, "Final scene" }),
                     "Export plan retains names and omits excluded chapters");
-                await new ExportService(runner, new AdTrim.Encoders.LibX264EncoderStrategy()).RunExportAsync(plan);
+                var exportEvents = new System.Collections.Concurrent.ConcurrentQueue<ExportProgress>();
+                await new ExportService(runner, new AdTrim.Encoders.LibX264EncoderStrategy()).RunExportAsync(plan,
+                    new ImmediateExportProgress(exportEvents.Enqueue));
+                Require(exportEvents.Any(p => p.Phase == ExportPhase.Finalizing),
+                    "Real faststart pass reports an explicit finalization phase");
+                var finalizationIndex = Array.FindIndex(exportEvents.ToArray(), p => p.Phase == ExportPhase.Finalizing);
+                Require(!exportEvents.Skip(finalizationIndex + 1).Any(p => p.Phase == ExportPhase.Concatenating),
+                    "Delayed mux progress cannot restore a countdown after finalization starts");
+                var muxTimes = new System.Collections.Concurrent.ConcurrentQueue<string>();
+                var measuredMux = await runner.RunFfmpegAsync(new[] { "-v", "error", "-readrate", "5",
+                    "-i", plan.OutputPath, "-c", "copy", "-progress", "pipe:1", "-stats_period", "0.2",
+                    "-movflags", "+faststart", Path.Combine(directory, "measured-mux.mp4") }, line =>
+                    { if (line.StartsWith("out_time_us=", StringComparison.Ordinal)) muxTimes.Enqueue(line); });
+                Require(measuredMux.Success && muxTimes.Distinct().Count() > 1,
+                    "Stream-copy muxing emits continuing measurable progress when the operation lasts long enough");
                 var cleanupRegistry = Path.Combine(UserPreferences.DataDirectory, "export-cleanup");
                 Require(!Directory.EnumerateFiles(cleanupRegistry, "record.json", SearchOption.AllDirectories).Any(),
                     "Successful exports remove their temporary workspace records");

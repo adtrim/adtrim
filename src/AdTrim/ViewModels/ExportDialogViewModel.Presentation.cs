@@ -1,4 +1,5 @@
 using AdTrim.Services;
+using AdTrim.Models;
 
 namespace AdTrim.ViewModels;
 
@@ -17,11 +18,17 @@ public sealed partial class ExportDialogViewModel
         _ => "EXPORTING YOUR VIDEO",
     };
     public string ProgressCaption => IsCompleted ? "complete" : IsFailed ? "stopped" : "exported";
+    public bool IsProgressIndeterminate => IsExporting && (_progressPhase is ExportPhase.Planning or ExportPhase.Finalizing or ExportPhase.Validating
+        || _progressPhase == ExportPhase.Concatenating && string.IsNullOrEmpty(RemainingFormatted));
+    public double ProgressDialValue => IsProgressIndeterminate ? 0.08 : ProgressPercent;
     public string TimeHeadline => Mode switch
     {
         ExportDialogMode.Completed => "Your video is ready",
         ExportDialogMode.Cancelled => "Export cancelled",
         ExportDialogMode.Failed => "Export could not finish",
+        _ when _progressPhase == ExportPhase.Finalizing => "Finalizing MP4…",
+        _ when _progressPhase == ExportPhase.Validating => "Checking your video…",
+        _ when _progressPhase == ExportPhase.Concatenating && string.IsNullOrEmpty(RemainingFormatted) => ProgressLine,
         _ => string.IsNullOrEmpty(RemainingFormatted) ? "Estimating time remaining..." : RemainingFormatted,
     };
     public ExportPartItem? CurrentPart => IsExporting ? Parts.FirstOrDefault(p => p.IsInProgress) : null;
@@ -33,6 +40,8 @@ public sealed partial class ExportDialogViewModel
         Notify(nameof(ProgressHeading));
         Notify(nameof(ProgressCaption));
         Notify(nameof(TimeHeadline));
+        Notify(nameof(IsProgressIndeterminate));
+        Notify(nameof(ProgressDialValue));
         Notify(nameof(CurrentPart));
         Notify(nameof(CurrentPartHeading));
     }

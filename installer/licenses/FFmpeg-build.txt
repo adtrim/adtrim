@@ -8,7 +8,8 @@ use the same retained FFmpeg source revision.
 The complete configuration is in build.sh inside the matching media-source
 archive. All source inputs and their hashes are recorded in sources.lock.json.
 
-Source package: AdTrim-Media-Sources-v1.1.0.tar.gz
+Source package: Media-Sources-AdTrim-v1.1.0.tar.gz
+Original archive (same contents): AdTrim-Media-Sources-v1.1.0.tar.gz
 https://github.com/adtrim/adtrim/releases/tag/v1.1.0
 
 See native/COMPONENTS.txt for dependency sources and notices.

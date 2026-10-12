@@ -31,6 +31,7 @@ public enum ExportPhase
     Restarting,
     EncodingSegment,
     Concatenating,
+    Finalizing,
     Validating,
     Done,
     Failed,
@@ -44,4 +45,5 @@ public sealed record ExportProgress(
     double OverallPercent,        // 0.0..1.0
     string Message,
     string? EncoderName = null,
-    string? FallbackNotice = null);
+    string? FallbackNotice = null,
+    double? RemainingSeconds = null);

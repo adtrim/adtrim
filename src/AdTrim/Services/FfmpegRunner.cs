@@ -66,11 +66,13 @@ public sealed class FfmpegRunner
     /// diagnostics. Pass <c>null</c> for the legacy buffer-everything behaviour.
     /// </summary>
     public Task<FfmpegResult> RunFfmpegAsync(
-        IEnumerable<string> args, Action<string>? onStdoutLine, CancellationToken ct = default)
-        => RunAsync(FfmpegPath, args, onStdoutLine, ct);
+        IEnumerable<string> args, Action<string>? onStdoutLine, CancellationToken ct = default,
+        Action<string>? onStderrLine = null)
+        => RunAsync(FfmpegPath, args, onStdoutLine, ct, onStderrLine);
 
     public async Task<FfmpegResult> RunAsync(
-        string exe, IEnumerable<string> args, Action<string>? onStdoutLine, CancellationToken ct)
+        string exe, IEnumerable<string> args, Action<string>? onStdoutLine, CancellationToken ct,
+        Action<string>? onStderrLine = null)
     {
         ct.ThrowIfCancellationRequested();
         var psi = new ProcessStartInfo
@@ -97,6 +99,7 @@ public sealed class FfmpegRunner
         p.ErrorDataReceived += (_, e) =>
         {
             if (e.Data is null) return;
+            onStderrLine?.Invoke(e.Data);
             stderr.AppendLine(e.Data);
             if (stderr.Length > 1_048_576) stderr.Remove(0, stderr.Length - 524_288);
         };

@@ -5,7 +5,8 @@ FFmpeg and libmpv are built from retained sources for this AdTrim release.
 The matching source package and build instructions are available alongside the installer at:
 https://github.com/adtrim/adtrim/releases/tag/v1.1.0
 
-Archive: AdTrim-Media-Sources-v1.1.0.tar.gz
+Archive: Media-Sources-AdTrim-v1.1.0.tar.gz
+Original v1.1.0 asset (same contents): AdTrim-Media-Sources-v1.1.0.tar.gz
 The archive includes all listed source snapshots, headers and shader build inputs.
 
 FreeType is used under its GPL option. The combined FFmpeg/libmpv binaries are

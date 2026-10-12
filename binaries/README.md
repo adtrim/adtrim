@@ -4,7 +4,9 @@ AdTrim uses FFmpeg and ffprobe for analysis/export and libmpv for playback. Rele
 
 ## Obtain the binaries
 
-For an exact release build, use the binaries from the matching AdTrim installer, or build the matching `AdTrim-Media-Sources-v<version>.tar.gz` archive attached to the [release](https://github.com/adtrim/adtrim/releases). The archive includes source snapshots, build instructions and an input hash manifest. GitHub's automatic AdTrim source archive does not include these native sources.
+For an exact release build, use the binaries from the matching AdTrim installer, or build the matching `Media-Sources-AdTrim-v<version>.tar.gz` archive attached to the [release](https://github.com/adtrim/adtrim/releases). The archive includes source snapshots, build instructions and an input hash manifest. GitHub's automatic AdTrim source archive does not include these native sources.
+
+Older releases use the name `AdTrim-Media-Sources-v<version>.tar.gz`. The reused v1.1.0 source bundle has identical contents under either name.
 
 Place the three outputs here:
 

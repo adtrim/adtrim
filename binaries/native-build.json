@@ -1,5 +1,5 @@
 {
-  "source_archive": "AdTrim-Media-Sources-v1.1.0.tar.gz",
+  "source_archive": "Media-Sources-AdTrim-v1.1.0.tar.gz",
   "source_archive_sha256": "2e3568ecf3cb721c3e927efe85271bc60a4e6276afef4770018194f71520098a",
   "source_manifest_sha256": "f9b9448721146164b7de8bfcca660736a217189682c9a476778bd67300707595",
   "ffmpeg_revision": "946fcce07b",

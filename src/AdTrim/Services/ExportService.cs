@@ -160,7 +160,7 @@ public sealed class ExportService
             ct.ThrowIfCancellationRequested();
             progress?.Report(new ExportProgress(
                 ExportPhase.Concatenating, plan.KeptSegments.Count, plan.KeptSegments.Count,
-                0, 0.95, "Concatenating + writing chapters…"));
+                0, 0.95, "Preparing parts and chapters…"));
 
             var concatPath = Path.Combine(tempDir, "concat.txt");
             await WriteConcatListAsync(concatPath, intermediatePaths, ct).ConfigureAwait(false);
@@ -188,7 +188,7 @@ public sealed class ExportService
             var creationTime = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
             var muxArgs = new[]
             {
-                "-y", "-hide_banner", "-nostats",
+                "-y", "-hide_banner", "-nostats", "-progress", "pipe:1", "-stats_period", "0.2",
                 "-f", "concat", "-safe", "0", "-i", concatPath,
                 "-i", chapterPath,
                 "-map", "0", "-map_metadata", "1", "-map_chapters", "1",
@@ -198,7 +198,37 @@ public sealed class ExportService
                 "-movflags", "+faststart",
                 staging,
             };
-            var muxR = await _runner.RunFfmpegAsync(muxArgs, ct).ConfigureAwait(false);
+            var muxTimer = System.Diagnostics.Stopwatch.StartNew();
+            var muxLock = new object();
+            bool finalizing = false;
+            double muxPercent = 0;
+            void OnMuxProgress(string line)
+            {
+                var timeUs = TryParseProgressOutTimeUs(line);
+                if (timeUs is null) return;
+                lock (muxLock)
+                {
+                    if (finalizing) return;
+                    muxPercent = Math.Max(muxPercent, Math.Clamp(timeUs.Value / (double)Math.Max(1, cumulativeMs * 1000), 0, 1));
+                    double? remaining = muxPercent >= 0.01 && muxPercent < 1 && muxTimer.Elapsed.TotalSeconds >= 0.5
+                        ? muxTimer.Elapsed.TotalSeconds * (1 - muxPercent) / muxPercent : null;
+                    progress?.Report(new ExportProgress(ExportPhase.Concatenating, total, total,
+                        muxPercent, 0.95 + muxPercent * 0.03, "Stitching parts…", RemainingSeconds: remaining));
+                }
+            }
+            void OnMuxDiagnostic(string line)
+            {
+                if (!line.Contains("Starting second pass", StringComparison.Ordinal)
+                    || !line.Contains("moov", StringComparison.Ordinal)) return;
+                lock (muxLock)
+                {
+                    if (finalizing) return;
+                    finalizing = true;
+                    progress?.Report(new ExportProgress(ExportPhase.Finalizing, total, total,
+                        1, 0.98, "Finalizing MP4…"));
+                }
+            }
+            var muxR = await _runner.RunFfmpegAsync(muxArgs, OnMuxProgress, ct, OnMuxDiagnostic).ConfigureAwait(false);
             if (!muxR.Success)
                 throw new ExportException($"Concat mux failed (exit {muxR.ExitCode}):\n{Tail(muxR.Stderr, 1500)}");
 

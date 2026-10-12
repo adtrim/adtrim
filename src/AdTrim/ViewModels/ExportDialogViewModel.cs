@@ -85,11 +85,17 @@ public sealed class ExportPartItem : INotifyPropertyChanged
     public bool IsDone => Status == ExportPartStatus.Done;
     public bool IsFailed => Status == ExportPartStatus.Failed;
 
+    private string? _statusDetail;
+    public string? StatusDetail
+    {
+        get => _statusDetail;
+        set { _statusDetail = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusText))); }
+    }
     public string StatusText => Status switch
     {
         ExportPartStatus.Done => "done",
         ExportPartStatus.Queued => "queued",
-        ExportPartStatus.InProgress => $"{Percent * 100:0}%",
+        ExportPartStatus.InProgress => StatusDetail ?? $"{Percent * 100:0}%",
         ExportPartStatus.Failed => "stopped",
         _ => "",
     };
@@ -223,6 +229,7 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
         {
             if (!Set(ref _progressPercent, value)) return;
             Notify(nameof(ProgressPercentText));
+            Notify(nameof(ProgressDialValue));
         }
     }
     public string ProgressPercentText => $"{ProgressPercent * 100:0}%";
@@ -231,7 +238,17 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
     public string ElapsedFormatted { get => _elapsedFormatted; private set => Set(ref _elapsedFormatted, value); }
 
     private string _remainingFormatted = "";
-    public string RemainingFormatted { get => _remainingFormatted; private set { if (Set(ref _remainingFormatted, value)) Notify(nameof(TimeHeadline)); } }
+    public string RemainingFormatted
+    {
+        get => _remainingFormatted;
+        private set
+        {
+            if (!Set(ref _remainingFormatted, value)) return;
+            Notify(nameof(TimeHeadline));
+            Notify(nameof(IsProgressIndeterminate));
+            Notify(nameof(ProgressDialValue));
+        }
+    }
 
     private string _errorMessage = "";
     public string ErrorMessage { get => _errorMessage; private set => Set(ref _errorMessage, value); }
@@ -249,6 +266,8 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
     }
 
     private readonly Stopwatch _runTimer = new();
+    private ExportPhase _progressPhase = ExportPhase.Planning;
+    private TimeSpan? _stitchEstimateEnd;
 
     // Ticks the Elapsed / Remaining display while a long ffmpeg encode is in
     // flight. ExportService only reports progress on phase boundaries (≈ once
@@ -309,6 +328,8 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
         RemainingFormatted = "";
         ErrorMessage = "";
         _runTimer.Restart();
+        _progressPhase = ExportPhase.Planning;
+        _stitchEstimateEnd = null;
         StartTickTimer();
         Mode = ExportDialogMode.Exporting;
         RefreshPresentation();
@@ -347,11 +368,12 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
             {
                 Interval = TimeSpan.FromMilliseconds(500),
             };
-            // Tick refreshes Elapsed only - Remaining is computed from
-            // ProgressPercent, which only changes on real progress callbacks.
+            // Encoding estimates need new progress. Stitching has a measured
+            // completion estimate that can count down between callbacks.
             _tickTimer.Tick += (_, _) =>
             {
                 RefreshElapsed();
+                if (_progressPhase == ExportPhase.Concatenating) RefreshRemaining();
                 foreach (var part in Parts) part.TickElapsed();
             };
         }
@@ -371,6 +393,10 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
     {
         if (p.Phase == ExportPhase.Cleanup) { CleanupWarning = p.Message; return; }
         if (Mode != ExportDialogMode.Exporting) return;
+        _progressPhase = p.Phase;
+        _stitchEstimateEnd = p.Phase == ExportPhase.Concatenating && p.RemainingSeconds is { } seconds
+            && double.IsFinite(seconds) && seconds > 0
+            ? _runTimer.Elapsed + TimeSpan.FromSeconds(Math.Min(seconds, 86400)) : null;
         if (p.EncoderName is not null) ActiveEncoder = p.EncoderName;
         if (p.FallbackNotice is not null) FallbackNotice = p.FallbackNotice;
         ProgressPercent = Math.Clamp(p.OverallPercent, 0, 1);
@@ -400,13 +426,17 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
                     : $"Encoding part {p.CurrentSegment}/{p.TotalSegments} · {seg.TimeRange}";
                 break;
             case ExportPhase.Concatenating:
+            case ExportPhase.Finalizing:
             case ExportPhase.Validating:
                 for (int i = 0; i < concatIndex; i++) Parts[i].Status = ExportPartStatus.Done;
                 Parts[concatIndex].Status = ExportPartStatus.InProgress;
-                Parts[concatIndex].Percent = p.Phase == ExportPhase.Validating ? 0.95 : 0.5;
+                Parts[concatIndex].Percent = p.Phase == ExportPhase.Concatenating ? p.SegmentPercent : 1;
+                Parts[concatIndex].StatusDetail = p.Phase == ExportPhase.Finalizing ? "finalizing"
+                    : p.Phase == ExportPhase.Validating ? "checking"
+                    : p.SegmentPercent == 0 ? "preparing" : null;
                 ProgressLine = p.Phase == ExportPhase.Validating
                     ? "Validating output…"
-                    : "Concatenating + writing chapters…";
+                    : p.Phase == ExportPhase.Finalizing ? "Finalizing MP4…" : p.Message;
                 break;
             case ExportPhase.Done:
                 foreach (var part in Parts) part.Status = ExportPartStatus.Done;
@@ -435,16 +465,23 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Recompute the Remaining ETA. <b>Only call this when
-    /// <see cref="ProgressPercent"/> has actually changed</b> - recomputing
-    /// it on a wall-clock timer while pct is stale makes the ETA climb at
-    /// rate <c>(1 − pct)/pct</c> per real second (the formula extrapolates
-    /// "we are now overdue"). Once ffmpeg's `-progress` output drives
-    /// per-frame pct updates, this will refresh organically several times
-    /// per second.
+    /// Encoding estimates refresh on progress callbacks. Stitching counts down
+    /// to a measured completion estimate; unmeasured phases have no estimate.
     /// </summary>
     private void RefreshRemaining()
     {
+        if (_progressPhase == ExportPhase.Concatenating)
+        {
+            var remaining = _stitchEstimateEnd - _runTimer.Elapsed;
+            RemainingFormatted = remaining is { TotalSeconds: > 0 } estimate
+                ? $"Stitching: ~{FormatStopwatch(estimate)} remaining" : "";
+            return;
+        }
+        if (_progressPhase != ExportPhase.EncodingSegment)
+        {
+            RemainingFormatted = "";
+            return;
+        }
         if (ProgressPercent >= 0.01 && ProgressPercent < 1.0)
         {
             var remainingSec = _runTimer.Elapsed.TotalSeconds * (1 - ProgressPercent) / ProgressPercent;

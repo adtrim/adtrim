@@ -340,8 +340,25 @@
           <Grid Width="184" Height="184" Margin="0,28,0,24" HorizontalAlignment="Center"
                 AutomationProperties.Name="Overall export progress">
             <Ellipse Stroke="{StaticResource Bg.Lane}" StrokeThickness="8" Margin="4"/>
-            <Path x:Name="ProgressDial" Data="{Binding ProgressPercent, Converter={StaticResource ProgressRing}}"
-                  Stroke="{StaticResource Accent.Base}" StrokeThickness="8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+            <Path x:Name="ProgressDial" Data="{Binding ProgressDialValue, Converter={StaticResource ProgressRing}}"
+                  Stroke="{StaticResource Accent.Base}" StrokeThickness="8" StrokeStartLineCap="Round" StrokeEndLineCap="Round">
+              <Path.RenderTransform><RotateTransform CenterX="92" CenterY="92"/></Path.RenderTransform>
+              <Path.Style>
+                <Style TargetType="Path">
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsProgressIndeterminate}" Value="True">
+                      <DataTrigger.EnterActions>
+                        <BeginStoryboard x:Name="ActivitySpin">
+                          <Storyboard><DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                            From="0" To="360" Duration="0:0:1.2" RepeatBehavior="Forever"/></Storyboard>
+                        </BeginStoryboard>
+                      </DataTrigger.EnterActions>
+                      <DataTrigger.ExitActions><RemoveStoryboard BeginStoryboardName="ActivitySpin"/></DataTrigger.ExitActions>
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </Path.Style>
+            </Path>
             <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
               <TextBlock Text="{Binding ProgressPercentText}" FontSize="48" FontWeight="Medium" HorizontalAlignment="Center"/>
               <TextBlock Text="{Binding ProgressCaption}" Foreground="{StaticResource Text.Secondary}" HorizontalAlignment="Center"/>
