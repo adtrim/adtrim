@@ -1,5 +1,5 @@
 {
-  "version": "1.1.6",
-  "summary": "More reliable frame previews and split placement, including frames immediately before keyframes. Hardware evaluation results stay aligned at the top of the export screen. Signed update announcements no longer require periodic renewal.",
+  "version": "2.0.0",
+  "summary": "Ad break suggestions, a thumbnail strip and an audio waveform with silences marked on the timeline. Select several markers at once, move between markers from the keyboard, and press F1 for every shortcut. Marker options are now under Tools > Ad break detection.",
   "advisories": []
 }
