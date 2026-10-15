@@ -34,11 +34,18 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
     public bool IsSeeking => _seeking;
     public long? PreviousFrameTargetUs { get; private set; }
 
+    private static long s_lastSeekActivityMs;
+    /// <summary><see cref="Environment.TickCount64"/> when any preview in the process last
+    /// started or finished a seek or load. Background file reads yield until it is quiet.</summary>
+    public static long LastSeekActivityMs => Interlocked.Read(ref s_lastSeekActivityMs);
+    private static void NoteSeekActivity() => Interlocked.Exchange(ref s_lastSeekActivityMs, Environment.TickCount64);
+
     private void BeginSeek()
     {
         _previousFrameSteps = 0;
         PreviousFrameTargetUs = null;
         _seeking = true;
+        NoteSeekActivity();
     }
 
     public void SeekPreviousFrame(long timeUs, long? knownPredecessorUs = null)
@@ -266,6 +273,7 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
                     {
                         lock (_seekLock)
                         {
+                            bool wasLoading = _loading;
                             _loading = false;
                             var hasPosition = mpv_get_property(_ctx, "time-pos", MpvFormat.Double, out double position) == 0
                                 && double.IsFinite(position);
@@ -280,6 +288,9 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
                                 break;
                             }
                             _seeking = false;
+                            // A finished load is not part of a scrub burst; background reads need
+                            // not wait out the quiet period after it.
+                            if (!wasLoading) NoteSeekActivity();
                             if (hasPosition)
                                 PositionUs = (long)Math.Round(position * 1_000_000);
                             if (mpv_get_property(_ctx, "pause", MpvFormat.Flag, out int paused) == 0)
@@ -357,6 +368,13 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
         if (_ctx == IntPtr.Zero) return;
         int paused = 1;
         mpv_set_property(_ctx, "pause", MpvFormat.Flag, ref paused);
+    }
+
+    /// <summary>Playback rate (1 = normal); used by the L shuttle key.</summary>
+    public void SetSpeed(double speed)
+    {
+        if (_ctx == IntPtr.Zero) return;
+        mpv_set_property_string(_ctx, "speed", speed.ToString("0.###", CultureInfo.InvariantCulture));
     }
 
     public void PlayPause()

@@ -35,9 +35,10 @@
     <Compile Include="..\..\src\AdTrim\Models\MediaInfo.cs"   Link="Models\MediaInfo.cs"/>
     <Compile Include="..\..\src\AdTrim\Models\AdTrimProject.cs"  Link="Models\AdTrimProject.cs"/>
     <Compile Include="..\..\src\AdTrim\Models\Split.cs"       Link="Models\Split.cs"/>
+    <Compile Include="..\..\src\AdTrim\Models\KeyboardShortcuts.cs"       Link="Models\KeyboardShortcuts.cs"/>
     <Compile Include="..\..\src\AdTrim\Models\Segment.cs"     Link="Models\Segment.cs"/>
     <Compile Include="..\..\src\AdTrim\Models\StatusModel.cs" Link="Models\StatusModel.cs"/>
-    <Compile Include="..\..\src\AdTrim\Models\TimelineThumbnail.cs" Link="Models\TimelineThumbnail.cs"/>
+    <Compile Include="..\..\src\AdTrim\Models\ThumbnailStrip.cs" Link="Models\ThumbnailStrip.cs"/>
     <Compile Include="..\..\src\AdTrim\Models\RefineResult.cs" Link="Models\RefineResult.cs"/>
     <Compile Include="..\..\src\AdTrim\Models\ExportPlan.cs"  Link="Models\ExportPlan.cs"/>
     <Compile Include="..\..\src\AdTrim\Commands\CommandStack.cs" Link="Commands\CommandStack.cs"/>
@@ -48,10 +49,19 @@
     <Compile Include="..\..\src\AdTrim\Services\MediaProbeService.cs"     Link="Services\MediaProbeService.cs"/>
     <Compile Include="..\..\src\AdTrim\Services\ChapterImportService.cs"  Link="Services\ChapterImportService.cs"/>
     <Compile Include="..\..\src\AdTrim\Services\FrameCacheService.cs"     Link="Services\FrameCacheService.cs"/>
-    <Compile Include="..\..\src\AdTrim\Services\WaveformService.cs"       Link="Services\WaveformService.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\AudioLevelService.cs"     Link="Services\AudioLevelService.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\MediaCacheCleanup.cs"     Link="Services\MediaCacheCleanup.cs"/>
     <Compile Include="..\..\src\AdTrim\Services\ThumbnailService.cs"      Link="Services\ThumbnailService.cs"/>
     <Compile Include="..\..\src\AdTrim\Services\FrameSnap.cs"             Link="Services\FrameSnap.cs"/>
     <Compile Include="..\..\src\AdTrim\Services\RefineService.cs"         Link="Services\RefineService.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\CommercialBreakDetector.cs" Link="Services\CommercialBreakDetector.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\RecurringGraphic.cs" Link="Services\RecurringGraphic.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\SuggestionEvidence.cs" Link="Services\SuggestionEvidence.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\SuggestionEngine.cs" Link="Services\SuggestionEngine.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\ShowProfile.cs" Link="Services\ShowProfile.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\LogoFreeSegmenter.cs" Link="Services\LogoFreeSegmenter.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\MarkerSuggestionStore.cs" Link="Services\MarkerSuggestionStore.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\UserPreferences.cs" Link="Services\UserPreferences.cs"/>
     <Compile Include="..\..\src\AdTrim\Services\ProjectStore.cs"          Link="Services\ProjectStore.cs"/>
     <Compile Include="..\..\src\AdTrim\Services\ExportNaming.cs"          Link="Services\ExportNaming.cs"/>
     <Compile Include="..\..\src\AdTrim\Encoders\IEncoderStrategy.cs"      Link="Encoders\IEncoderStrategy.cs"/>
@@ -71,6 +81,5 @@
   <ItemGroup>
     <Compile Include="..\..\src\AdTrim\Services\ExportWorkspace.cs" Link="Services\ExportWorkspace.cs"/>
     <Compile Include="..\..\src\AdTrim\Services\ExportDiskGuard.cs" Link="Services\ExportDiskGuard.cs"/>
-    <Compile Include="..\..\src\AdTrim\Services\UserPreferences.cs" Link="Services\UserPreferences.cs"/>
   </ItemGroup>
 </Project>

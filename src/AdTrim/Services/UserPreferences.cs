@@ -3,13 +3,19 @@ using System.Text.Json;
 
 namespace AdTrim.Services;
 
+/// <summary>Markers a recording without a saved project starts with. Stored as a number:
+/// append new values, never reorder.</summary>
+public enum NewFileMarkerSource { Imported, AdTrim, None }
+
 public sealed record UserPreferences
 {
     private static readonly SemaphoreSlim SaveGate = new(1, 1);
 
-    public bool ShowWaveform { get; init; }
-    public bool ShowThumbnails { get; init; }
+    // New installs show both; a saved file keeps its own values.
+    public bool ShowWaveform { get; init; } = true;
+    public bool ShowThumbnails { get; init; } = true;
     public string ExportAcceleration { get; init; } = "automatic";
+    public NewFileMarkerSource NewFileMarkerSource { get; init; } = NewFileMarkerSource.Imported;
     public double Left { get; init; }
     public double Top { get; init; }
     public double Width { get; init; } = 1280;
@@ -27,7 +33,7 @@ public sealed record UserPreferences
         catch (IOException) { return new(); }
         catch (UnauthorizedAccessException) { return new(); }
     }
-    public async Task SaveChangesAsync(UserPreferences previous, string? source)
+    public async Task SaveChangesAsync(UserPreferences previous, string? source, bool saveMarkerSource = false)
     {
         await SaveGate.WaitAsync();
         try
@@ -45,6 +51,7 @@ public sealed record UserPreferences
                 ShowWaveform = ShowWaveform != previous.ShowWaveform ? ShowWaveform : latest.ShowWaveform,
                 ShowThumbnails = ShowThumbnails != previous.ShowThumbnails ? ShowThumbnails : latest.ShowThumbnails,
                 ExportAcceleration = ExportAcceleration != previous.ExportAcceleration ? ExportAcceleration : latest.ExportAcceleration,
+                NewFileMarkerSource = saveMarkerSource || NewFileMarkerSource != previous.NewFileMarkerSource ? NewFileMarkerSource : latest.NewFileMarkerSource,
                 Positions = positions,
             }).WriteAsync();
         }

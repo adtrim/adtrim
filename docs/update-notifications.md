@@ -2,8 +2,11 @@
 
 AdTrim checks for updates once per application session after startup settles.
 Recording windows share the check. Help provides a manual check. The app never
-downloads or installs an update; the release button opens the matching AdTrim
-GitHub release page. Notifications do not interrupt editing or exporting.
+downloads or installs an update; the release button opens the What's new page on
+adtrim.github.io, which lists the changes between the installed version and the
+new one and links to the installer. The two versions are passed in the URL
+fragment, which the browser does not send to the server. Notifications do not
+interrupt editing or exporting.
 
 Regular announcements appear once per release. Security reminders recur at a
 subsequent launch after seven days; urgent reminders recur after one day.

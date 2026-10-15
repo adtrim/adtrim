@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Shell;
 using System.Windows.Threading;
 using AdTrim.Commands;
 using AdTrim.Controls;
@@ -28,17 +30,22 @@ public partial class MainWindow : Window
     private MediaProbeService? _probe;
     private ChapterImportService? _chapters;
     private ProjectStore? _store;
-    private WaveformService? _waveform;
-    private CancellationTokenSource? _waveformCts;
+    private AudioLevelService? _audioLevels;
+    private AudioLevelPass? _audioPass;
     private ThumbnailService? _thumbnails;
-    private CancellationTokenSource? _thumbnailCts;
+    private ThumbnailLoader? _thumbnailLoader;
     private CancellationTokenSource? _refineCts;
+    private CancellationTokenSource? _commercialAnalysisCts;
+    private readonly MarkerSuggestionStore _suggestionStore = new();
+    private const long UncertainMarkerSpacingUs = 5_000_000;
+    private MarkerSetState? _importedMarkerSet;
     private MediaInfo? _media;
     private SourceFingerprint? _sourceFingerprint;
     private readonly ProjectSession _session = new();
     private bool _hydrating;
     private bool _allowClose;
     private bool _switching;
+    private bool _closeWhenSwitchCompletes;
     private bool _saveInProgress;
     private long? _playUntilUs;
 
@@ -70,6 +77,7 @@ public partial class MainWindow : Window
         // Runtime starts empty - the WPF designer uses the design-time
         // `<vm:MainViewModel/>` in XAML for live-preview only.
         DataContext = new MainViewModel();
+        Timeline.ThumbnailsNeeded += times => _thumbnailLoader?.Request(times);
 
         _autosaveTimer = new DispatcherTimer
         {
@@ -96,6 +104,8 @@ public partial class MainWindow : Window
             vm.Banner = new BannerInfo(StatusKind.Warning, "Preview unavailable.", message, Array.Empty<BannerAction>());
         }));
         PreviewKeyDown += OnPreviewKeyDown;
+        _askDiscardEdits = (text, title) => MessageBox.Show(this, text, title, MessageBoxButton.OKCancel, MessageBoxImage.Warning,
+            MessageBoxResult.Cancel, MessageBoxOptions.None) == MessageBoxResult.OK;
         // PreviewMouseWheel tunnels down before children handle the event -
         // necessary because the timeline's ScrollViewer would otherwise eat
         // every wheel event for horizontal scrolling, so Ctrl+Wheel zoom
@@ -116,16 +126,26 @@ public partial class MainWindow : Window
         {
             if (e.PropertyName == nameof(MainViewModel.ZoomFactor))
                 UpdateTimelineLayout(forceRecenter: true);
+            else if (e.PropertyName == nameof(MainViewModel.CanReplaceMarkers))
+                RefreshImportedMarkersItem(vm);
+            else if (e.PropertyName == nameof(MainViewModel.HasAdTrimAnalysis))
+            {
+                // A first analysis is the main action, so it gets the primary (blue) style;
+                // "Analyze ad breaks again" falls back to the plain button style.
+                if (vm.HasAdTrimAnalysis) AnalyzeAdBreaksButton.ClearValue(StyleProperty);
+                else AnalyzeAdBreaksButton.Style = (Style)FindResource("Button.Primary");
+            }
             else if (e.PropertyName == nameof(MainViewModel.ShowWaveform))
             {
                 if (vm.ShowWaveform)
                 {
                     if (vm.SourcePath is { } path && _media is not null)
-                        StartWaveformLoad(vm, path, _media);
+                        EnsureAudioPass(vm, path, _media);
                 }
-                else
+                else if (!vm.IsAnalyzingCommercials)
                 {
-                    CancelWaveformLoad(vm, clearPeaks: true);
+                    // Analysis still needs a running pass; the hidden graph just stops drawing.
+                    ReleaseAudioPass(vm);
                 }
             }
             else if (e.PropertyName == nameof(MainViewModel.ShowThumbnails))
@@ -526,7 +546,8 @@ public partial class MainWindow : Window
     private void PlayPauseBoth()
     {
         if (DataContext is not MainViewModel vm) return;
-        if (vm.IsBusy) return;
+        ResetShuttle();
+        if (vm.IsBusy && _commercialAnalysisCts is null) return;
         if (vm.IsCollapsed)
         {
             if (vm.KeptTimeline.DurationUs > 0 && !_previewAfter.IsLoading) _previewAfter.PlayPause();
@@ -654,11 +675,15 @@ public partial class MainWindow : Window
         }
 
         if (vm.IsCollapsed) SetCollapsed(vm, false);
+        var latestPreferences = await UserPreferences.LoadAsync();
+        _preferences = _preferences with { NewFileMarkerSource = latestPreferences.NewFileMarkerSource };
+        _savedPreferences = _savedPreferences with { NewFileMarkerSource = latestPreferences.NewFileMarkerSource };
+        RefreshDefaultMarkerSourceMenu();
         _switching = true;
         _hydrating = true;
         vm.IsBusy = true;
         vm.BusyOperation = "Opening";
-        CancelWaveformLoad(vm, clearPeaks: true);
+        ReleaseAudioPass(vm);
         CancelThumbnailLoad(vm, clearThumbnails: true);
         _refineCts?.Cancel();
         _autosaveTimer.Stop();
@@ -677,9 +702,26 @@ public partial class MainWindow : Window
             var probed = await _probe!.ProbeAsync(path);
             var fingerprint = ProjectStore.FingerprintOf(path, probed.DurationUs);
             var loadResult = await Task.Run(() => _store!.Load(path, probed));
-            IReadOnlyList<ChapterBoundary>? imported = null;
-            if (loadResult.Project is null)
+            IReadOnlyList<ChapterBoundary> imported = Array.Empty<ChapterBoundary>();
+            _importedMarkerSet = null;
+            try
+            {
                 imported = await _chapters!.ImportAsync(path, probed.DurationUs, includeStart: true);
+                _importedMarkerSet = StateFromChapters(imported, MarkerSetSource.Imported);
+            }
+            catch (Exception ex)
+            {
+                vm.Banner = new BannerInfo(StatusKind.Warning, "Imported markers are unavailable.",
+                    ex.Message, Array.Empty<BannerAction>());
+            }
+            // The recording being opened (vm.SourcePath still names the previous one here).
+            vm.HasAdTrimAnalysis = _suggestionStore.Load(_suggestionStore.Key(path, fingerprint), probed.DurationUs) is not null;
+            _importedMarkersAvailable = _importedMarkerSet is not null
+                && (_importedMarkerSet.Splits.Count > 0 || _importedMarkerSet.StartChapterTitle is not null);
+            UseOriginalImportedMarkersMenuItem.ToolTip = _importedMarkersAvailable
+                ? null : _importedMarkerSet is null ? "Imported markers could not be read from this recording."
+                    : "This recording has no imported chapter markers.";
+            RefreshImportedMarkersItem(vm);
             _media = probed;
             _sourceFingerprint = fingerprint;
             vm.SourceFingerprint = fingerprint;
@@ -693,6 +735,9 @@ public partial class MainWindow : Window
             vm.ZoomFactor = 1.0;   // start fully zoomed out - whole video visible
             vm.MediaInfoLine =
                 $"{_media.FrameRate.AsDouble:0.##} fps · {_media.Width}×{_media.Height} · {_media.VideoCodec}";
+            // The filmstrip goes first: it is the most visible and costs a few seeks, and the
+            // waveform's full read yields to it. Starting here keeps it ahead of any analysis.
+            if (vm.ShowThumbnails) StartThumbnailLoad(vm, path, _media);
 
             // Try sidecar hydration first.
             if (loadResult.Project is { } proj && loadResult.Status is SidecarLoadStatus.Loaded or SidecarLoadStatus.LoadedWithMtimeWarning)
@@ -714,7 +759,28 @@ public partial class MainWindow : Window
                         Array.Empty<BannerAction>());
                 }
                 vm.StatusOverride = "Importing chapters…";
-                HydrateFromChapters(vm, _media, imported!);
+                if (_preferences.NewFileMarkerSource == NewFileMarkerSource.AdTrim)
+                {
+                    HydrateBlank(vm, MarkerSetSource.AdTrim);
+                    vm.StatusOverride = "Analyzing ad breaks…";
+                    var initialKey = _suggestionStore.Key(path, fingerprint);
+                    var cached = _suggestionStore.Load(initialKey, probed.DurationUs);
+                    if (cached is not null) ApplyMarkerSet(vm, cached, "Load AdTrim suggested markers", confirm: false);
+                    else
+                    {
+                        var detected = await AnalyzeCommercialsAsync(vm, initialKey, cancellationToken: CancellationToken.None);
+                        if (detected is not null) ApplyMarkerSet(vm, detected, "Load AdTrim suggested markers", confirm: false);
+                        else
+                        {
+                            HydrateBlank(vm, MarkerSetSource.Blank);
+                            vm.StatusOverride = "Analysis did not finish. All video remains included.";
+                        }
+                    }
+                }
+                else if (_preferences.NewFileMarkerSource == NewFileMarkerSource.None)
+                    HydrateBlank(vm, MarkerSetSource.Blank);
+                else
+                    HydrateFromChapters(vm, _media, imported);
             }
 
             vm.CommandStack.Clear();
@@ -733,13 +799,11 @@ public partial class MainWindow : Window
             UpdateNoFrameOverlay(vm);
 
             if (vm.ShowWaveform)
-                StartWaveformLoad(vm, path, _media);
-            else
-                CancelWaveformLoad(vm, clearPeaks: true);
+                EnsureAudioPass(vm, path, _media);
+            else if (!vm.IsAnalyzingCommercials)
+                ReleaseAudioPass(vm);
 
-            if (vm.ShowThumbnails)
-                StartThumbnailLoad(vm, path, _media);
-            else
+            if (!vm.ShowThumbnails)
                 CancelThumbnailLoad(vm, clearThumbnails: true);
 
             // Clear our transient open-time status only if it's still showing -
@@ -760,102 +824,120 @@ public partial class MainWindow : Window
             else { _previewAfter.Stop(); _previewBefore.Stop(); }
             MessageBox.Show(this, ex.Message, "Failed to open", MessageBoxButton.OK, MessageBoxImage.Error);
         }
-        finally { _hydrating = false; _switching = false; vm.IsBusy = false; vm.BusyOperation = null; }
-    }
-
-    private void CancelWaveformLoad(MainViewModel vm, bool clearPeaks)
-    {
-        _waveformCts?.Cancel();
-        _waveformCts?.Dispose();
-        _waveformCts = null;
-        if (clearPeaks) vm.WaveformPeaks = null;
-    }
-
-    private void StartWaveformLoad(MainViewModel vm, string path, MediaInfo media)
-    {
-        // Cancel any previous extraction (user opened another file before this one finished).
-        CancelWaveformLoad(vm, clearPeaks: true);
-        _waveformCts = new CancellationTokenSource();
-        var ct = _waveformCts.Token;
-
-        if (media.PrimaryAudioIndex < 0) return;
-
-        _waveform ??= new WaveformService(_ffmpeg!);
-        var svc = _waveform;
-        var audioIdx = media.PrimaryAudioIndex;
-        var duration = media.DurationUs;
-
-        _ = Task.Run(async () =>
+        finally
         {
-            try
+            _hydrating = false;
+            _switching = false;
+            vm.IsBusy = false;
+            vm.BusyOperation = null;
+            if (_closeWhenSwitchCompletes)
             {
-                // Let open/hydration/rendering finish before starting a full-file
-                // ffmpeg read. Cached waveforms return quickly; misses happen off
-                // the UI thread and below normal priority inside the service.
-                await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle, ct);
-                var peaks = await svc.GetOrExtractPeaksAsync(path, audioIdx, duration, ct).ConfigureAwait(false);
-                if (ct.IsCancellationRequested) return;
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    if (!ct.IsCancellationRequested && vm.ShowWaveform) vm.WaveformPeaks = peaks;
-                });
+                _closeWhenSwitchCompletes = false;
+                _ = Dispatcher.BeginInvoke(new Action(Close));
             }
-            catch (OperationCanceledException) { /* superseded by a newer open */ }
-            catch (Exception ex)
+        }
+    }
+
+    /// <summary>Stops the recording's audio pass, if running, and clears the timeline graph.</summary>
+    private void ReleaseAudioPass(MainViewModel vm)
+    {
+        _audioPass?.Cancel();
+        _audioPass = null;
+        vm.AudioLoudness = null;
+    }
+
+    /// <summary>
+    /// The recording's shared audio pass. The timeline graph fills from it and ad-break analysis
+    /// joins it, so the audio is read once. Reuses a running or finished pass for the same file.
+    /// </summary>
+    private AudioLevelPass EnsureAudioPass(MainViewModel vm, string path, MediaInfo media)
+    {
+        if (_audioPass is { } current && current.SourcePath == path
+            && !current.Completion.IsCanceled && !current.Completion.IsFaulted) return current;
+        ReleaseAudioPass(vm);
+        _audioLevels ??= new AudioLevelService(_ffmpeg!, AudioLevelService.DefaultCacheRoot);
+        AudioLevelPass? pass = null;
+        pass = _audioLevels.Start(path, media, WaitForFullReadTurnAsync, partial => Dispatcher.InvokeAsync(() =>
+        {
+            if (ReferenceEquals(_audioPass, pass)) vm.AudioLoudness = partial;
+        }));
+        _audioPass = pass;
+        _ = ShowAudioLevelsAsync(vm, pass);
+        return pass;
+    }
+
+    private async Task ShowAudioLevelsAsync(MainViewModel vm, AudioLevelPass pass)
+    {
+        try
+        {
+            var levels = await pass.Completion;
+            if (ReferenceEquals(_audioPass, pass)) vm.AudioLoudness = levels.Loudness;
+        }
+        catch (OperationCanceledException) { /* superseded, closed or paused for export */ }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[audio levels] measurement failed: {ex.Message}");
+            if (ReferenceEquals(_audioPass, pass) && vm.ShowWaveform)
             {
-                System.Diagnostics.Debug.WriteLine($"[waveform] extraction failed: {ex.Message}");
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    if (!ct.IsCancellationRequested && vm.ShowWaveform)
-                    {
-                        vm.StatusKind = StatusKind.Warning;
-                        vm.StatusOverride = "Waveform failed to load.";
-                    }
-                });
+                vm.StatusKind = StatusKind.Warning;
+                vm.StatusOverride = "Waveform failed to load.";
             }
-        }, ct);
+        }
+    }
+
+    // Recordings usually sit on a spinning disk, where audio pass reads would
+    // otherwise compete with every scrub seek.
+    private async ValueTask WaitForPreviewIdleAsync(CancellationToken ct)
+    {
+        while (true)
+        {
+            bool inFlight = _previewAfter.IsSeeking || _previewAfter.IsLoading
+                || _previewBefore.IsSeeking || _previewBefore.IsLoading;
+            var sinceSeek = Environment.TickCount64 - MpvPreviewViewModel.LastSeekActivityMs;
+            if (!AudioLevelService.ShouldYieldToSeeks(sinceSeek, inFlight)) return;
+            await Task.Delay(50, ct).ConfigureAwait(false);
+        }
+    }
+
+    // Full-file reads (the waveform pass, analysis picture passes) wait for scrubbing and for
+    // filmstrip tiles: tiles are a few seeks and far more visible, so they go first.
+    private async ValueTask WaitForFullReadTurnAsync(CancellationToken ct)
+    {
+        while (true)
+        {
+            await WaitForPreviewIdleAsync(ct).ConfigureAwait(false);
+            if (_thumbnailLoader is not { IsBusy: true }) return;
+            await Task.Delay(50, ct).ConfigureAwait(false);
+        }
     }
 
     private void CancelThumbnailLoad(MainViewModel vm, bool clearThumbnails)
     {
-        _thumbnailCts?.Cancel();
-        _thumbnailCts?.Dispose();
-        _thumbnailCts = null;
-        if (clearThumbnails) vm.Thumbnails.Clear();
+        _thumbnailLoader?.Cancel();
+        _thumbnailLoader = null;
+        if (clearThumbnails) vm.ThumbnailTiles = ThumbnailStrip.Empty;
     }
 
+    /// <summary>Shows the recording's cached tiles at once; the timeline then asks for the
+    /// on-screen tiles it lacks (<see cref="Controls.TimelineView.ThumbnailsNeeded"/>).</summary>
     private void StartThumbnailLoad(MainViewModel vm, string path, MediaInfo media)
     {
         CancelThumbnailLoad(vm, clearThumbnails: true);
         if (_ffmpeg is null) return;
         _thumbnails ??= new ThumbnailService(_ffmpeg);
-        _thumbnailCts = new CancellationTokenSource();
-        var ct = _thumbnailCts.Token;
         var svc = _thumbnails;
-
-        _ = Task.Run(async () =>
-        {
-            try
+        var duration = media.DurationUs;
+        var cached = svc.LoadCached(path, duration);
+        ThumbnailLoader? loader = null;
+        loader = new ThumbnailLoader(cached.Times, time => ThumbnailService.Snap(time, duration),
+            (times, ct) => svc.ExtractAsync(path, duration, times, ct), WaitForPreviewIdleAsync,
+            tiles => Dispatcher.InvokeAsync(() =>
             {
-                await foreach (var thumb in svc.GetOrCreateStripAsync(path, media.DurationUs, ct: ct)
-                    .ConfigureAwait(false))
-                {
-                    if (ct.IsCancellationRequested) return;
-                    await Dispatcher.InvokeAsync(() =>
-                    {
-                        if (ct.IsCancellationRequested || !vm.ShowThumbnails) return;
-                        var existing = vm.Thumbnails.FirstOrDefault(t => t.Index == thumb.Index);
-                        if (existing is not null) vm.Thumbnails.Remove(existing);
-                        vm.Thumbnails.Add(thumb);
-                    });
-                }
-            }
-            catch (OperationCanceledException) { /* superseded */ }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[thumbnails] extraction failed: {ex.Message}");
-            }
-        }, ct);
+                if (ReferenceEquals(_thumbnailLoader, loader)) vm.ThumbnailTiles = vm.ThumbnailTiles.With(tiles);
+            }));
+        _thumbnailLoader = loader;
+        vm.ThumbnailTiles = cached;
+        Timeline.RefreshThumbnails();
     }
 
     private static void HydrateFromSidecar(MainViewModel vm, AdTrimProject proj)
@@ -864,6 +946,9 @@ public partial class MainWindow : Window
         vm.Markers.Clear();
         vm.Segments.Clear();
         vm.ExcludedSegmentIds.Clear();
+        vm.MarkerSetSource = proj.MarkerSetSource;
+        vm.MarkerBaselineId = proj.MarkerBaselineId?.StartsWith("v2:", StringComparison.Ordinal) == true
+            ? proj.MarkerBaselineId : null;
 
         // Add bookends + persisted internal splits.
         vm.Markers.Add(new Split { TimeUs = 0, Confidence = null, Confirmed = true, Label = "Start" });
@@ -908,7 +993,298 @@ public partial class MainWindow : Window
             });
         }
         vm.Markers.Add(new Split { TimeUs = media.DurationUs, Confidence = null, Confirmed = true, Label = "End" });
+        vm.MarkerSetSource = MarkerSetSource.Imported;
+        var state = StateFromChapters(chapters, MarkerSetSource.Imported);
+        vm.MarkerBaselineId = StateId(state);
         vm.RebuildSegmentsFromSplits();
+    }
+
+    private static MarkerSetState StateFromChapters(IReadOnlyList<ChapterBoundary> chapters, MarkerSetSource source)
+    {
+        var start = chapters.FirstOrDefault(c => c.TimeUs == 0)?.Title;
+        var splits = chapters.Where(c => c.TimeUs > 0).Select(c => new PersistedSplit(
+            Guid.NewGuid().ToString("N")[..12], c.TimeUs, SplitSource.Chapter, null, null, false, c.Title)).ToArray();
+        var preliminary = new MarkerSetState(splits, Array.Empty<string>(), start, source, null);
+        return preliminary with { BaselineId = StateId(preliminary) };
+    }
+
+    private static string StateId(MarkerSetState state)
+    {
+        return state.ContentId();
+    }
+
+    private static void HydrateBlank(MainViewModel vm, MarkerSetSource source)
+    {
+        vm.Markers.Clear();
+        vm.Segments.Clear();
+        vm.ExcludedSegmentIds.Clear();
+        vm.Markers.Add(new Split { TimeUs = 0, Confirmed = true, Label = "Start" });
+        vm.Markers.Add(new Split { TimeUs = vm.DurationUs, Confirmed = true, Label = "End" });
+        vm.MarkerSetSource = source;
+        vm.RebuildSegmentsFromSplits();
+        vm.MarkerBaselineId = vm.CurrentMarkerSetId();
+    }
+
+    private async Task<MarkerSetState?> AnalyzeCommercialsAsync(MainViewModel vm, string key,
+        CancellationToken cancellationToken)
+    {
+        if (_ffmpeg is null || _media is null || vm.SourcePath is not { } source || vm.SourceFingerprint is not { } fingerprint) return null;
+        var sourceAtStart = source;
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _commercialAnalysisCts?.Cancel();
+
+        _commercialAnalysisCts = linked;
+        var wasBusy = vm.IsBusy;
+        var previousOperation = vm.BusyOperation;
+        var previousProgress = vm.ProgressPercent;
+        vm.IsBusy = true;
+        vm.IsAnalyzingCommercials = true;
+        vm.BusyOperation = "Analyzing commercial breaks";
+        vm.StatusOverride = "Analyzing ad breaks…";
+        vm.AnalysisStage = "Starting analysis…";
+        vm.ProgressPercent = 0;
+        vm.AnalysisTimeLeft = null;
+        var taskbar = TaskbarItemInfo ??= new TaskbarItemInfo();
+        taskbar.ProgressState = TaskbarItemProgressState.Normal;
+        taskbar.ProgressValue = 0;
+        var total = Stopwatch.StartNew();
+        Stopwatch? working = null;
+        double workingFrom = 0;
+        try
+        {
+            var progress = new Progress<CommercialDetectionProgress>(p =>
+            {
+                if (ReferenceEquals(_commercialAnalysisCts, linked) && !linked.IsCancellationRequested
+                    && vm.SourcePath == sourceAtStart && p.DurationUs > 0)
+                {
+                    double fraction = Math.Clamp(p.TimeUs / (double)p.DurationUs, 0, 1);
+                    // Steps report overall progress; never let the bar move backward.
+                    if (!p.Queued) fraction = Math.Max(fraction, vm.ProgressPercentValue);
+                    vm.ProgressPercent = fraction;
+                    taskbar.ProgressState = p.Queued ? TaskbarItemProgressState.Paused : TaskbarItemProgressState.Normal;
+                    taskbar.ProgressValue = fraction;
+                    vm.AnalysisStage = p.Queued ? "Waiting for another recording to finish analysis…" : p.Stage ?? "Analyzing ad breaks…";
+                    if (p.Queued) return;
+                    if (working is null) { working = Stopwatch.StartNew(); workingFrom = fraction; }
+                    vm.AnalysisTimeLeft = TimeLeftText(working.Elapsed, fraction - workingFrom, 1 - fraction);
+                }
+            });
+            var media = _media;
+            // Join the recording's audio pass (the timeline graph's) rather than reading the audio again.
+            var result = await new SuggestionEngine(_ffmpeg).AnalyzeAsync(source, media, progress, linked.Token,
+                (stage, ct) => Dispatcher.Invoke(() => EnsureAudioPass(vm, sourceAtStart, media)).JoinAsync(stage, ct),
+                WaitForFullReadTurnAsync);
+            if (linked.IsCancellationRequested || vm.SourcePath != sourceAtStart || vm.SourceFingerprint != fingerprint) return null;
+            var splits = new List<PersistedSplit>();
+            var exclusions = new List<string>();
+            foreach (var proposal in result.Breaks.OrderBy(b => b.StartUs))
+            {
+                if (proposal.StartUs <= 0 || proposal.EndUs >= _media.DurationUs || proposal.EndUs <= proposal.StartUs
+                    || splits.Any(s => s.TimeUs >= proposal.StartUs && s.TimeUs < proposal.EndUs)) continue;
+                var startId = Guid.NewGuid().ToString("N")[..12];
+                var endId = Guid.NewGuid().ToString("N")[..12];
+                splits.Add(new PersistedSplit(startId, proposal.StartUs, SplitSource.Manual, null,
+                    proposal.EndpointConfidence, false, "Possible commercial break"));
+                splits.Add(new PersistedSplit(endId, proposal.EndUs, SplitSource.Manual, null,
+                    proposal.EndpointConfidence, false, null));
+                if (proposal.AutoExclude) exclusions.Add($"segment-{proposal.StartUs}-{proposal.EndUs}");
+            }
+            // Uncertain candidates appear as low-confidence (red) markers, unless they overlap a
+            // suggested break or a more confident marker is already within a few seconds.
+            var confident = splits.Select(s => s.TimeUs).ToList();
+            foreach (var candidate in result.UncertainBreaks.OrderBy(b => b.StartUs))
+            {
+                if (candidate.EndpointConfidence != Confidence.Low || candidate.EndUs <= candidate.StartUs
+                    || result.Breaks.Any(b => b.StartUs < candidate.EndUs && candidate.StartUs < b.EndUs)) continue;
+                foreach (var (time, isStart) in new[] { (candidate.StartUs, true), (candidate.EndUs, false) })
+                {
+                    if (time <= 0 || time >= _media.DurationUs || confident.Any(t => Math.Abs(t - time) <= UncertainMarkerSpacingUs)
+                        || splits.Any(s => s.TimeUs == time)) continue;
+                    splits.Add(new PersistedSplit(Guid.NewGuid().ToString("N")[..12], time, SplitSource.Manual, null,
+                        Confidence.Low, false, isStart ? "Possible commercial break (uncertain)" : null));
+                }
+            }
+            splits.Sort((a, b) => a.TimeUs.CompareTo(b.TimeUs));
+            var provisional = new MarkerSetState(splits, exclusions, null, MarkerSetSource.AdTrim, null);
+            var state = provisional with { BaselineId = StateId(provisional) };
+            vm.HasAdTrimAnalysis = true;
+            var (breaks, uncertain) = SuggestionCounts(state);
+            vm.Banner = new BannerInfo(StatusKind.Success, $"Ad-break analysis finished in {ElapsedText(total.Elapsed)}.",
+                $"Found {Plural(breaks, "ad break")} and {Plural(uncertain, "uncertain red marker")}. Nothing was excluded; "
+                + "review each break and exclude the ones you want removed.", Array.Empty<BannerAction>());
+            try { _suggestionStore.Save(key, state); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            { vm.Banner = new BannerInfo(StatusKind.Warning, "Suggestions could not be cached.", ex.Message, Array.Empty<BannerAction>()); }
+            return state;
+        }
+        catch (OperationCanceledException) { return null; }
+        catch (Exception ex)
+        {
+            vm.Banner = new BannerInfo(StatusKind.Warning, "Commercial analysis did not finish.",
+                ex.Message, Array.Empty<BannerAction>());
+            return null;
+        }
+        finally
+        {
+            taskbar.ProgressState = TaskbarItemProgressState.None;
+            vm.AnalysisTimeLeft = null;
+            vm.IsAnalyzingCommercials = false;
+            if (ReferenceEquals(_commercialAnalysisCts, linked)) _commercialAnalysisCts = null;
+            // Nothing else wants an unfinished pass once analysis stops with the graph hidden.
+            if (!vm.ShowWaveform && _audioPass is { Completion.IsCompleted: false }) ReleaseAudioPass(vm);
+            vm.IsBusy = wasBusy;
+            vm.BusyOperation = previousOperation;
+            vm.ProgressPercent = previousProgress;
+        }
+    }
+
+    private void ApplyMarkerSet(MainViewModel vm, MarkerSetState state, string action, bool confirm)
+    {
+        if (confirm && !ConfirmDiscardEdits(vm, state.Source)) return;
+        if (vm.IsCollapsed) SetCollapsed(vm, false);
+        vm.CommandStack.Execute(new ReplaceMarkerSetCommand(vm, state, action));
+        var (breaks, uncertain) = SuggestionCounts(state);
+        vm.StatusOverride = state.Source == MarkerSetSource.AdTrim
+            ? $"{Plural(breaks, "possible ad break")}, {Plural(uncertain, "uncertain red marker")}. All video remains included; review before excluding."
+            : action;
+        vm.StatusKind = StatusKind.Info;
+    }
+
+    /// <summary>Suggested breaks (each starts with a labeled marker) and uncertain red markers in a set.</summary>
+    private static (int Breaks, int Uncertain) SuggestionCounts(MarkerSetState state) =>
+        (state.Splits.Count(s => s.Confidence != Confidence.Low && s.ChapterTitle is not null),
+         state.Splits.Count(s => s.Confidence == Confidence.Low));
+
+    private static string Plural(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
+
+    private static string ElapsedText(TimeSpan elapsed) => elapsed.TotalMinutes >= 1
+        ? $"{(int)elapsed.TotalMinutes} min {elapsed.Seconds} s"
+        : $"{Math.Max(1, (int)Math.Round(elapsed.TotalSeconds))} s";
+
+    /// <summary>Rough time left from the rate so far; null until there is enough progress to estimate.</summary>
+    internal static string? TimeLeftText(TimeSpan elapsed, double done, double remaining)
+    {
+        if (elapsed < TimeSpan.FromSeconds(5) || done < .03) return null;
+        double seconds = elapsed.TotalSeconds * remaining / done;
+        return seconds < 60 ? "Less than a minute left" : $"About {(int)Math.Ceiling(seconds / 60)} min left";
+    }
+
+    /// <summary>Asks before edits are replaced by <paramref name="destination"/> markers. True when there
+    /// are no edits to lose or the user agrees. Ask before any analysis work, not after.</summary>
+    private bool ConfirmDiscardEdits(MainViewModel vm, MarkerSetSource destination)
+    {
+        if (!vm.IsTimelineEdited) return true;
+        var sourceName = vm.MarkerSetSource switch
+        {
+            MarkerSetSource.Imported => "imported markers",
+            MarkerSetSource.AdTrim => "AdTrim suggested markers",
+            _ => "current markings",
+        };
+        var target = destination == MarkerSetSource.Imported ? "the original imported markers" : "the original AdTrim suggested markers";
+        var confirmationTitle = vm.MarkerSetSource switch
+        {
+            MarkerSetSource.Imported => "Discard edits to imported markers?",
+            MarkerSetSource.AdTrim => "Discard edits to AdTrim suggested markers?",
+            _ => "Discard current edits?",
+        };
+        return _askDiscardEdits(
+            $"This discards your edits to {sourceName}, including split positions, section names, and exclusions, then loads {target}.",
+            confirmationTitle);
+    }
+
+    // Replaceable so the smoke check can answer it and see when it was asked.
+    private Func<string, string, bool> _askDiscardEdits;
+
+    /// <summary>The toolbar's Analyze ad breaks / Analyze ad breaks again button.</summary>
+    private void OnAnalyzeAdBreaks(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm) return;
+        if (vm.HasAdTrimAnalysis) OnAnalyzeCommercialsAgain(sender, e);
+        else OnUseAdTrimSuggestions(sender, e);
+    }
+
+    private bool _importedMarkersAvailable;
+
+    // The Ad break detection menu stays enabled (for the starting-markers preference), so this
+    // item needs both conditions itself: the recording has chapters, and markers can change now.
+    private void RefreshImportedMarkersItem(MainViewModel vm)
+        => UseOriginalImportedMarkersMenuItem.IsEnabled = _importedMarkersAvailable && vm.CanReplaceMarkers;
+
+    private void OnOpenMarkersMenu(object sender, RoutedEventArgs e)
+    {
+        MarkersPopupImported.IsEnabled = UseOriginalImportedMarkersMenuItem.IsEnabled;
+        MarkersPopupImported.ToolTip = UseOriginalImportedMarkersMenuItem.ToolTip;
+        MarkersPopup.PlacementTarget = MarkersButton;
+        MarkersPopup.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        MarkersPopup.IsOpen = true;
+    }
+
+    private void OnCancelCommercialAnalysis(object sender, RoutedEventArgs e)
+    {
+        _commercialAnalysisCts?.Cancel();
+        if (DataContext is MainViewModel vm) vm.StatusOverride = "Cancelling commercial analysis...";
+    }
+
+    private void OnUseImportedMarkers(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm || !vm.CanReplaceMarkers || _importedMarkerSet is null) return;
+        ApplyMarkerSet(vm, _importedMarkerSet, "Revert to original imported markers", confirm: true);
+    }
+
+    private async void OnUseAdTrimSuggestions(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm || !vm.CanReplaceMarkers || vm.SourcePath is null || vm.SourceFingerprint is null) return;
+        var source = vm.SourcePath;
+        var key = _suggestionStore.Key(source, vm.SourceFingerprint);
+        var state = _suggestionStore.Load(key, vm.DurationUs);
+        bool confirmed = false;
+        if (state is null)
+        {
+            // Analysis takes minutes: ask before doing the work, not after.
+            if (!ConfirmDiscardEdits(vm, MarkerSetSource.AdTrim)) return;
+            confirmed = true;
+            state = await AnalyzeCommercialsAsync(vm, key, CancellationToken.None);
+        }
+        if (state is null)
+        {
+            vm.StatusOverride = "AdTrim suggested markers are unavailable; current markings were kept.";
+            return;
+        }
+        if (vm.SourcePath != source || vm.SourceFingerprint is null
+            || !StringComparer.Ordinal.Equals(key, _suggestionStore.Key(vm.SourcePath, vm.SourceFingerprint))) return;
+        ApplyMarkerSet(vm, state, "Revert to original AdTrim suggested markers", confirm: !confirmed);
+    }
+
+    private async void OnAnalyzeCommercialsAgain(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm || !vm.CanReplaceMarkers || vm.SourcePath is null || vm.SourceFingerprint is null) return;
+        var source = vm.SourcePath;
+        var key = _suggestionStore.Key(source, vm.SourceFingerprint);
+        // Ask before the analysis work; markers are locked while it runs, so the answer stays valid.
+        if (!ConfirmDiscardEdits(vm, MarkerSetSource.AdTrim)) return;
+        var state = await AnalyzeCommercialsAsync(vm, key, CancellationToken.None);
+        if (state is null)
+        {
+            vm.StatusOverride = "Analysis did not finish; current markings were kept.";
+            return;
+        }
+        if (vm.SourcePath == source && vm.SourceFingerprint is not null
+            && StringComparer.Ordinal.Equals(key, _suggestionStore.Key(vm.SourcePath, vm.SourceFingerprint)))
+            ApplyMarkerSet(vm, state, "Analyze ad breaks again", confirm: false);
+    }
+
+    private void OnClearAllMarkings(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm || !vm.CanReplaceMarkers) return;
+        var hasMarkings = vm.HasWorkingMarkings;
+        if (!hasMarkings) return;
+        if (MessageBox.Show(this,
+                "This deletes all splits, section names, and exclusions. The entire video will be included.",
+                "Delete all markings", MessageBoxButton.OKCancel, MessageBoxImage.Warning,
+                MessageBoxResult.Cancel, MessageBoxOptions.None) != MessageBoxResult.OK) return;
+        if (vm.IsCollapsed) SetCollapsed(vm, false);
+        vm.CommandStack.Execute(new ClearAllMarkingsCommand(vm));
+        vm.StatusOverride = "All markings deleted. The entire video is included. Undo restores the previous markings.";
     }
 
     private async void OnAutosaveTick(object? sender, EventArgs e)
@@ -927,7 +1303,8 @@ public partial class MainWindow : Window
         var snapshot = new AdTrimProject(AdTrimProject.CurrentSchemaVersion, source, _sourceFingerprint, _media,
             vm.Markers.Where(m => !m.IsBookend).Select(m => new PersistedSplit(m.Id, m.TimeUs,
                 m.Source, m.OriginalTimeUs, m.Confidence, m.Confirmed, m.ChapterTitle)).ToList(),
-            vm.ExcludedSegmentIds.ToList(), SidecarLocation.NextToSource, vm.Markers.FirstOrDefault()?.ChapterTitle);
+            vm.ExcludedSegmentIds.ToList(), SidecarLocation.NextToSource, vm.Markers.FirstOrDefault()?.ChapterTitle,
+            vm.MarkerSetSource, vm.MarkerBaselineId);
         _saveInProgress = true;
         vm.SaveStatus = "Saving";
         try
@@ -984,7 +1361,17 @@ public partial class MainWindow : Window
             return;
         }
         e.Cancel = true;
-        if (_closingExport || _switching || DataContext is not MainViewModel vm) return;
+        if (_commercialAnalysisCts is { } analysis)
+        {
+            analysis.Cancel();
+            while (ReferenceEquals(_commercialAnalysisCts, analysis)) await Task.Delay(50);
+        }
+        if (_switching)
+        {
+            _closeWhenSwitchCompletes = true;
+            return;
+        }
+        if (_closingExport || DataContext is not MainViewModel vm) return;
         if (_activeExportDialog is { } export)
         {
             if (export.IsExportInFlight)
@@ -1002,7 +1389,7 @@ public partial class MainWindow : Window
         if (await FlushBeforeLeavingAsync(vm))
         {
             _refineCts?.Cancel();
-            CancelWaveformLoad(vm, false);
+            ReleaseAudioPass(vm);
             CancelThumbnailLoad(vm, false);
             _allowClose = true;
             Close();
@@ -1068,13 +1455,24 @@ public partial class MainWindow : Window
 
         var ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
         var shift = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+        if (e.Key == Key.F1 && Keyboard.Modifiers == ModifierKeys.None)
+        { OnShowShortcuts(this, new RoutedEventArgs()); e.Handled = true; return; }
 
         if (e.Key == Key.Escape)
         {
             if (vm.IsBusy && vm.BusyOperation == "Refining") CancelRefine();
+            else if (vm.IsBusy && vm.BusyOperation == "Analyzing commercial breaks")
+            {
+                _commercialAnalysisCts?.Cancel();
+                vm.StatusOverride = "Cancelling commercial analysis…";
+            }
+            else if (!vm.IsBusy && vm.SelectionKind != SelectionKind.None) vm.ClearSelection();
             e.Handled = true;
             return;
         }
+
+        if (_commercialAnalysisCts is not null && e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None)
+        { PlayPauseBoth(); e.Handled = true; return; }
 
         if (vm.IsBusy)
         {
@@ -1094,6 +1492,8 @@ public partial class MainWindow : Window
             e.Handled = true;
             return;
         }
+        if (Keyboard.Modifiers == ModifierKeys.None && e.Key is Key.J or Key.K or Key.L && vm.IsFileLoaded)
+        { Shuttle(vm, e.Key); e.Handled = true; return; }
         if (ctrl && e.Key == Key.D0) { OnFitTimeline(this, new RoutedEventArgs()); e.Handled = true; return; }
         if (ctrl && (e.Key == Key.OemPlus || e.Key == Key.Add)) { OnZoomIn(this, new RoutedEventArgs()); e.Handled = true; return; }
         if (ctrl && (e.Key == Key.OemMinus || e.Key == Key.Subtract)) { OnZoomOut(this, new RoutedEventArgs()); e.Handled = true; return; }
@@ -1122,6 +1522,16 @@ public partial class MainWindow : Window
             return;
         }
         if (e.Key == Key.C && shift && !ctrl) { OnConfirmAndNext(this, new RoutedEventArgs()); e.Handled = true; return; }
+        bool typing = Keyboard.FocusedElement is TextBox;
+        if (ctrl && shift && e.Key == Key.A && !typing) { OnSelectRedMarkers(this, new RoutedEventArgs()); e.Handled = true; return; }
+        // With Alt held, WPF reports the letter as a system key.
+        if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Alt) && (e.Key == Key.A || e.Key == Key.System && e.SystemKey == Key.A) && !typing)
+        { OnSelectVisibleMarkers(this, new RoutedEventArgs()); e.Handled = true; return; }
+        if (e.Key == Key.F2 && Keyboard.Modifiers == ModifierKeys.None) { OnRenameSelectedSegment(this, new RoutedEventArgs()); e.Handled = true; return; }
+        if (e.Key == Key.System && Keyboard.Modifiers == ModifierKeys.Alt && e.SystemKey is Key.Left or Key.Right)
+        { JumpToMarker(vm, e.SystemKey == Key.Right ? 1 : -1); e.Handled = true; return; }
+        if (ctrl && !shift && e.Key == Key.A && !typing) { OnSelectAllMarkers(this, new RoutedEventArgs()); e.Handled = true; return; }
+        if (ctrl && e.Key == Key.Delete && !typing) { OnClearAllMarkings(this, new RoutedEventArgs()); e.Handled = true; return; }
         // Undo / redo
         if (ctrl && !shift && e.Key == Key.Z) { vm.CommandStack.Undo(); e.Handled = true; return; }
         if (ctrl && (e.Key == Key.Y || (shift && e.Key == Key.Z))) { vm.CommandStack.Redo(); e.Handled = true; return; }
@@ -1130,7 +1540,7 @@ public partial class MainWindow : Window
         if (ctrl && e.Key == Key.W) { OnCloseProject(this, new RoutedEventArgs()); e.Handled = true; return; }
         if (ctrl && e.Key == Key.R) { OnRefineAll(this, new RoutedEventArgs()); e.Handled = true; return; }
         if (ctrl && shift && e.Key == Key.C) { OnConfirmAllRemaining(this, new RoutedEventArgs()); e.Handled = true; return; }
-        if (!ctrl && e.Key == Key.R && vm.SelectedMarker is not null)
+        if (!ctrl && e.Key == Key.R && vm.SelectedMarkers.Count > 0)
         { OnRefineSelected(this, new RoutedEventArgs()); e.Handled = true; return; }
 
         // Frame step (`,` / `.`). Both route through SeekTo so chained taps
@@ -1212,7 +1622,7 @@ public partial class MainWindow : Window
         }
 
         // Move selected split to playhead (M)
-        if (e.Key == Key.M && !ctrl && vm.SelectedMarker is not null)
+        if (e.Key == Key.M && !ctrl && vm.SelectedMarkers.Count > 0)
         {
             OnMoveSelectedToPlayhead(this, new RoutedEventArgs());
             e.Handled = true;
@@ -1220,6 +1630,8 @@ public partial class MainWindow : Window
         }
 
         // Confirm split (C)
+        if (e.Key == Key.C && !ctrl && vm.SelectionKind == SelectionKind.Markers)
+        { OnConfirmSelectedSplit(this, new RoutedEventArgs()); e.Handled = true; return; }
         if (e.Key == Key.C && !ctrl && vm.SelectedMarker is { } sel)
         {
             if (sel.Confirmed && !ConfirmUnconfirm(sel)) { e.Handled = true; return; }
@@ -1247,6 +1659,12 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 return;
             }
+            if (vm.SelectionKind == SelectionKind.Markers)
+            {
+                OnDeleteSelectedSplit(this, new RoutedEventArgs());
+                e.Handled = true;
+                return;
+            }
             if (vm.SelectedMarker is { } delMarker && !delMarker.IsBookend)
             {
                 vm.CommandStack.Execute(new DeleteSplitCommand(vm, delMarker));
@@ -1254,6 +1672,14 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 return;
             }
+        }
+
+        // Previous unconfirmed (Shift+N)
+        if (e.Key == Key.N && shift && !ctrl)
+        {
+            OnJumpPreviousUnconfirmed(this, new RoutedEventArgs());
+            e.Handled = true;
+            return;
         }
 
         // Next unconfirmed (N)
@@ -1494,7 +1920,7 @@ public partial class MainWindow : Window
         finally { _switching = false; }
         if (!flushed) return;
         SetCollapsed(vm, false);
-        CancelWaveformLoad(vm, clearPeaks: true);
+        ReleaseAudioPass(vm);
         CancelThumbnailLoad(vm, clearThumbnails: true);
         _refineCts?.Cancel();
         _autosaveTimer.Stop();
@@ -1505,6 +1931,7 @@ public partial class MainWindow : Window
         vm.Segments.Clear();
         vm.ExcludedSegmentIds.Clear();
         vm.SourcePath = null;
+        vm.HasAdTrimAnalysis = false;
         vm.FileName = null;
         vm.DurationUs = 0;
         vm.MediaInfoLine = "";
@@ -1517,6 +1944,9 @@ public partial class MainWindow : Window
         _previewBefore.Stop();
         _media = null;
         _sourceFingerprint = null;
+        _importedMarkerSet = null;
+        vm.MarkerSetSource = MarkerSetSource.Unknown;
+        vm.MarkerBaselineId = null;
         vm.SourceFingerprint = null;
         vm.SaveStatus = "";
         vm.CommandStack.Clear();
@@ -1565,6 +1995,17 @@ public partial class MainWindow : Window
     private void OnFitTimeline(object sender, RoutedEventArgs e)
     {
         if (DataContext is MainViewModel { CanInteract: true } vm) vm.ZoomFactor = 1.0;
+    }
+
+    // Status-bar shortcuts with the same effect as View > Show thumbnails / Show waveform.
+    private void OnShowThumbnailsFromStatus(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel vm) vm.ShowThumbnails = true;
+    }
+
+    private void OnShowWaveformFromStatus(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel vm) vm.ShowWaveform = true;
     }
 
     private void OnAddSplitAtPlayhead(object sender, RoutedEventArgs e)
@@ -1695,7 +2136,9 @@ public partial class MainWindow : Window
 
         _previewAfter.Pause();
         _previewBefore.Pause();
-        CancelWaveformLoad(vm, false);
+        // Export needs the disk. A finished audio pass costs nothing and stays; the graph keeps
+        // what a running one measured, and the pass starts over when the editor returns.
+        if (_audioPass is { Completion.IsCompleted: false } running) { running.Cancel(); _audioPass = null; }
         CancelThumbnailLoad(vm, false);
         var dlg = new ExportView();
         _activeExportDialog = dlg;
@@ -1716,7 +2159,7 @@ public partial class MainWindow : Window
                 ExportHost.Visibility = Visibility.Collapsed;
                 EditorWorkspace.Visibility = Visibility.Visible;
                 vm.IsExportScreen = false;
-                if (vm.ShowWaveform && vm.SourcePath is { } waveformPath && _media is not null) StartWaveformLoad(vm, waveformPath, _media);
+                if (vm.ShowWaveform && vm.SourcePath is { } waveformPath && _media is not null) EnsureAudioPass(vm, waveformPath, _media);
                 if (vm.ShowThumbnails && vm.SourcePath is { } thumbnailPath && _media is not null) StartThumbnailLoad(vm, thumbnailPath, _media);
             }
         };
@@ -1812,11 +2255,166 @@ public partial class MainWindow : Window
         vm.CommandStack.Execute(new ToggleExcludedCommand(vm, seg));
     }
 
+    private void OnSelectRedMarkers(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel { CanEdit: true } vm || vm.IsBusy) return;
+        vm.SelectMarkersWhere(m => m.Confidence == Confidence.Low);
+        int count = vm.SelectedMarkerCount;
+        Notice(vm, StatusKind.Info, count == 0 ? "There are no red (uncertain) markers."
+            : count == 1 ? "1 red (uncertain) marker selected."
+            : $"{count} red (uncertain) markers selected. Del deletes them; C confirms them. Esc clears the selection.");
+    }
+
+    /// <summary>Ctrl+Alt+A: selects the markers in the part of the timeline currently on screen.</summary>
+    private void OnSelectVisibleMarkers(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel { CanEdit: true } vm || vm.IsBusy || vm.IsCollapsed) return;
+        var (from, to) = VisibleTimelineRange(vm);
+        vm.SelectMarkersWhere(m => m.TimeUs >= from && m.TimeUs <= to);
+        int count = vm.SelectedMarkerCount;
+        Notice(vm, StatusKind.Info, count == 0 ? "There are no markers in the visible part of the timeline."
+            : count == 1 ? "1 visible marker selected."
+            : $"{count} visible markers selected ({FormatTimeMs(from)} to {FormatTimeMs(to)}). Esc clears the selection.");
+    }
+
+    /// <summary>Source-time range of the timeline currently scrolled into view.</summary>
+    private (long From, long To) VisibleTimelineRange(MainViewModel vm)
+    {
+        double width = Timeline.ActualWidth;
+        if (width <= 0 || vm.TimelineDurationUs <= 0) return (0, vm.DurationUs);
+        double left = Math.Clamp(TimelineScroll.HorizontalOffset, 0, width);
+        double right = Math.Clamp(left + TimelineScroll.ViewportWidth, left, width);
+        long Time(double x) => vm.ToSourceTime((long)Math.Round(x / width * vm.TimelineDurationUs));
+        return (Time(left), Time(right));
+    }
+
+    private void OnRenameSelectedSegment(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel { CanEdit: true } vm || vm.IsBusy) return;
+        // A selected segment, or the segment that starts at the selected marker.
+        var segment = vm.SelectedSegment
+            ?? (vm.SelectedMarker is { } m ? vm.Segments.FirstOrDefault(s => s.StartUs == m.TimeUs) : null);
+        if (segment is null) { Notice(vm, StatusKind.Info, "Select a segment (or the marker where it starts) to rename it."); return; }
+        var dialog = new RenameSegmentDialog(segment.Label ?? "") { Owner = this };
+        if (dialog.ShowDialog() == true && dialog.SegmentName != segment.Label)
+            vm.CommandStack.Execute(new RenameSegmentCommand(vm, segment, dialog.SegmentName));
+    }
+
+    private void OnShowShortcuts(object sender, RoutedEventArgs e) => new ShortcutsDialog { Owner = this }.ShowDialog();
+
+    private void OnJumpPreviousUnconfirmed(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel { CanEdit: true } vm) return;
+        var previous = vm.Markers.Where(m => !m.IsBookend && !m.Confirmed && m.TimeUs < vm.PlayheadUs)
+            .OrderByDescending(m => m.TimeUs).FirstOrDefault();
+        if (previous is null) { Notice(vm, StatusKind.Info, "No unconfirmed split before the playhead."); return; }
+        vm.SelectMarker(previous);
+        SeekTo(vm, previous.TimeUs);
+    }
+
+    private void OnPreviousMarker(object sender, RoutedEventArgs e) { if (DataContext is MainViewModel vm) JumpToMarker(vm, -1); }
+    private void OnNextMarker(object sender, RoutedEventArgs e) { if (DataContext is MainViewModel vm) JumpToMarker(vm, 1); }
+
+    /// <summary>Alt+Left / Alt+Right: select and go to the previous or next marker.</summary>
+    private void JumpToMarker(MainViewModel vm, int direction)
+    {
+        if (!vm.CanEdit || vm.IsCollapsed) return;
+        var target = direction > 0
+            ? vm.Markers.Where(m => !m.IsBookend && m.TimeUs > vm.PlayheadUs).OrderBy(m => m.TimeUs).FirstOrDefault()
+            : vm.Markers.Where(m => !m.IsBookend && m.TimeUs < vm.PlayheadUs).OrderByDescending(m => m.TimeUs).FirstOrDefault();
+        if (target is null) { Notice(vm, StatusKind.Info, direction > 0 ? "No marker after the playhead." : "No marker before the playhead."); return; }
+        vm.SelectMarker(target);
+        SeekTo(vm, target.TimeUs);
+    }
+
+    // J / K / L shuttle. Positive: forward playback rate; negative: rewind rate.
+    private int _shuttle;
+    private DispatcherTimer? _rewindTimer;
+    private const int RewindTickMs = 100;
+
+    private void Shuttle(MainViewModel vm, Key key)
+    {
+        if (vm.IsBusy && _commercialAnalysisCts is null) return;
+        if (key == Key.K)
+        {
+            ResetShuttle();
+            _previewAfter.Pause();
+            _previewBefore.Pause();
+            Notice(vm, StatusKind.Info, "Paused.");
+            return;
+        }
+        if (key == Key.L)
+        {
+            bool rewinding = _shuttle < 0;
+            StopRewind();
+            if (_previewAfter.IsPlaying && !rewinding)
+                _shuttle = Math.Min(4, Math.Max(1, _shuttle) * 2); // Space playback counts as 1×
+            else
+            {
+                if (!_previewAfter.IsPlaying) PlayPauseBoth();
+                _shuttle = 1;
+            }
+            _previewAfter.SetSpeed(_shuttle);
+            _previewBefore.SetSpeed(_shuttle);
+            Notice(vm, StatusKind.Info, $"Playing {_shuttle}×. K pauses.");
+            return;
+        }
+        // J: rewind by stepping the playhead backward (mpv has no cheap reverse playback).
+        if (_previewAfter.IsPlaying) { _previewAfter.Pause(); _previewBefore.Pause(); }
+        _previewAfter.SetSpeed(1);
+        _previewBefore.SetSpeed(1);
+        _shuttle = _shuttle < 0 ? Math.Max(-4, _shuttle * 2) : -1;
+        _rewindTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(RewindTickMs), DispatcherPriority.Input, (_, _) => RewindTick(), Dispatcher);
+        _rewindTimer.Start();
+        Notice(vm, StatusKind.Info, $"Rewinding {-_shuttle}×. K stops.");
+    }
+
+    private void RewindTick()
+    {
+        if (DataContext is not MainViewModel vm || _shuttle >= 0) { StopRewind(); return; }
+        long step = RewindTickMs * 1_000L * -_shuttle;
+        long position = vm.IsCollapsed ? vm.TimelinePositionUs : vm.PlayheadUs;
+        if (position <= 0) { ResetShuttle(); Notice(vm, StatusKind.Info, "Reached the start."); return; }
+        long target = Math.Max(0, position - step);
+        SeekTo(vm, vm.IsCollapsed ? vm.KeptTimeline.ToSource(target) : target, exact: false);
+    }
+
+    private void StopRewind()
+    {
+        _rewindTimer?.Stop();
+        if (_shuttle < 0) _shuttle = 0;
+    }
+
+    private void ResetShuttle()
+    {
+        StopRewind();
+        if (_shuttle > 1) { _previewAfter.SetSpeed(1); _previewBefore.SetSpeed(1); }
+        _shuttle = 0;
+    }
+
+    private void OnSelectAllMarkers(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel { CanEdit: true } vm || vm.IsBusy) return;
+        vm.SelectAllMarkers();
+        int count = vm.SelectedMarkerCount;
+        Notice(vm, StatusKind.Info, count == 0 ? "There are no markers to select."
+            : count == 1 ? "1 marker selected."
+            : $"{count} markers selected. R refines, C confirms, Del deletes them. Esc clears the selection.");
+    }
+
     private void OnDeleteSelectedSplit(object sender, RoutedEventArgs e)
     {
         if (DataContext is not MainViewModel { CanEdit: true }) return;
         if (DataContext is not MainViewModel vm) return;
         if (vm.IsBusy) return;
+        if (vm.SelectionKind == SelectionKind.Markers)
+        {
+            var selected = vm.SelectedMarkers.ToList();
+            vm.ClearSelection();
+            vm.CommandStack.Execute(new DeleteSplitsCommand(vm, selected));
+            Notice(vm, StatusKind.Info, $"Deleted {selected.Count} markers. Ctrl+Z restores them.");
+            return;
+        }
         var marker = vm.SelectedMarker;
         if (marker is null || marker.IsBookend) return;
         vm.CommandStack.Execute(new DeleteSplitCommand(vm, marker));
@@ -1826,6 +2424,14 @@ public partial class MainWindow : Window
     private void OnConfirmSelectedSplit(object sender, RoutedEventArgs e)
     {
         if (DataContext is not MainViewModel { CanEdit: true }) return;
+        if (DataContext is MainViewModel { SelectionKind: SelectionKind.Markers, IsBusy: false } many)
+        {
+            var open = many.SelectedMarkers.Where(m => !m.Confirmed).ToList();
+            if (open.Count == 0) { Notice(many, StatusKind.Info, "All selected markers are already confirmed."); return; }
+            many.CommandStack.Execute(new SetConfirmedCommand(open, confirmed: true));
+            Notice(many, StatusKind.Info, $"Confirmed {open.Count} markers.");
+            return;
+        }
         if (DataContext is not MainViewModel vm || vm.SelectedMarker is null) return;
         if (vm.IsBusy) return;
         if (vm.SelectedMarker.Confirmed && !ConfirmUnconfirm(vm.SelectedMarker)) return;
@@ -1851,13 +2457,18 @@ public partial class MainWindow : Window
     private void OnNudgeSelectedPlus(object sender, RoutedEventArgs e)
         => NudgeSelected(+1);
 
-    private void OnMoveSelectedToPlayhead(object sender, RoutedEventArgs e)
+    private async void OnMoveSelectedToPlayhead(object sender, RoutedEventArgs e)
     {
-        if (_previewAfter.IsSeeking || _previewAfter.IsLoading) return;
-        if (DataContext is not MainViewModel { CanEdit: true }) return;
-        if (DataContext is not MainViewModel vm || vm.SelectedMarker is null) return;
-        if (vm.IsBusy) return;
-        var split = vm.SelectedMarker;
+        if (DataContext is not MainViewModel { CanEdit: true } vm || vm.IsBusy) return;
+        if (vm.SelectionKind == SelectionKind.Markers)
+        { Notice(vm, StatusKind.Warning, "Select a single marker to move it to the playhead."); return; }
+        if (vm.SelectedMarker is not { } split) return;
+        // An arrow key or click may still be seeking the preview: wait briefly for the frame
+        // the marker will land on instead of silently ignoring the key.
+        for (int i = 0; i < 75 && (_previewAfter.IsSeeking || _previewAfter.IsLoading); i++) await Task.Delay(20);
+        if (_previewAfter.IsSeeking || _previewAfter.IsLoading)
+        { Notice(vm, StatusKind.Warning, "The preview is still moving to the playhead. Press M again in a moment."); return; }
+        if (!ReferenceEquals(vm.SelectedMarker, split) || vm.IsBusy) return;
         if (split.Confirmed && !ConfirmUnconfirm(split)) return;
         if (split.Confirmed)
             vm.CommandStack.Execute(new ToggleConfirmedCommand(split));
@@ -1867,9 +2478,19 @@ public partial class MainWindow : Window
         long minUs = idx > 0 ? sorted[idx - 1].TimeUs + 1 : 0;
         long maxUs = idx < sorted.Count - 1 ? sorted[idx + 1].TimeUs - 1 : vm.DurationUs;
         var candidate = _previewAfter.PositionUs;
-        if (candidate < minUs || candidate > maxUs) return;
-        if (candidate == split.TimeUs) return;
-        vm.CommandStack.Execute(new MoveSplitCommand(vm, split, split.TimeUs, candidate));
+        if (candidate < minUs || candidate > maxUs)
+        { Notice(vm, StatusKind.Warning, "The playhead is past a neighboring marker; a marker cannot move across another one."); return; }
+        if (candidate == split.TimeUs)
+        { Notice(vm, StatusKind.Info, "The marker is already at the playhead."); return; }
+        long from = split.TimeUs;
+        vm.CommandStack.Execute(new MoveSplitCommand(vm, split, from, candidate));
+        Notice(vm, StatusKind.Success, $"Moved marker from {FormatTimeMs(from)} to {FormatTimeMs(candidate)}. Ctrl+Z undoes it.");
+    }
+
+    private static void Notice(MainViewModel vm, StatusKind kind, string message)
+    {
+        vm.StatusKind = kind;
+        vm.StatusOverride = message;
     }
 
     private void NudgeSelected(int directionFrames)
@@ -2091,8 +2712,10 @@ public partial class MainWindow : Window
 
     private async void OnRefineSelected(object sender, RoutedEventArgs e)
     {
-        if (DataContext is not MainViewModel vm || vm.SelectedMarker is null) return;
-        await RefineMarkersAsync(vm, new[] { vm.SelectedMarker });
+        if (DataContext is not MainViewModel vm) return;
+        var selected = vm.SelectedMarkers.Where(m => !m.IsBookend).ToList();
+        if (selected.Count == 0) return;
+        await RefineMarkersAsync(vm, selected);
     }
 
     private void OnTimelineNudgeRequested(object? sender, (Split split, int direction) e)

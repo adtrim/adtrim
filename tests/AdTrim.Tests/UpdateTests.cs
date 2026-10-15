@@ -11,6 +11,8 @@ public sealed class UpdateTests : IDisposable
     private readonly RSA _key = RSA.Create(3072);
     private readonly DateTimeOffset _now = DateTimeOffset.UtcNow;
     private readonly string _directory = Path.Combine(AppContext.BaseDirectory, "AdTrim-update-tests-" + Guid.NewGuid());
+    // Service tests run as an older installed version, independent of the app's own version.
+    private const string Installed = "1.1.0";
     private UpdateFeed Feed => new(1, 2, _now.AddMinutes(-1), _now.AddDays(30), "1.2.1", "Editing improvements.",
         [new("video-decoder", "1.0.0", "1.2.0", "security", "Fixes a video decoder vulnerability.")]);
     private static byte[] Bytes(UpdateFeed feed) => JsonSerializer.SerializeToUtf8Bytes(feed, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
@@ -103,7 +105,8 @@ public sealed class UpdateTests : IDisposable
         var feed = Verify(Bytes(Feed));
         var affected = UpdateFeedReader.Select(feed, "1.1.0")!;
         Assert.Equal("security", affected.Importance);
-        Assert.Equal("https://github.com/adtrim/adtrim/releases/tag/v1.2.1", affected.ReleaseUri.AbsoluteUri);
+        // The What's new page lists every release between the installed version and the new one.
+        Assert.Equal("https://adtrim.github.io/whats-new/#from=1.1.0&to=1.2.1", affected.ReleaseUri.AbsoluteUri);
         Assert.Equal("regular", UpdateFeedReader.Select(feed, "1.2.0")!.Importance);
         Assert.Null(UpdateFeedReader.Select(feed, "1.2.1"));
         Assert.Null(UpdateFeedReader.Select(feed, "2.0.0"));
@@ -134,19 +137,53 @@ public sealed class UpdateTests : IDisposable
     {
         var bytes = Bytes(Feed with { PublishedAt = _now.AddYears(-10), ExpiresAt = _now.AddYears(-10).AddDays(30) });
         var handler = new ResponseHandler(bytes, Sign(bytes));
-        var first = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler));
+        var first = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler), Installed);
         await first.CheckAsync();
         Assert.Null(first.Error);
         Assert.NotNull(first.Notice);
         await first.AcknowledgeAsync();
         handler.Feed = Bytes(Feed with { Summary = "Tampered" });
-        var second = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler));
+        var second = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler), Installed);
         await second.CheckAsync();
         Assert.NotNull(second.Error);
         Assert.Equal(first.Notice!.Version, second.Notice!.Version);
         Assert.Equal(first.Notice.Summary, second.Notice.Summary);
         Assert.Equal(first.Notice.AdvisoryIds, second.Notice.AdvisoryIds);
         Assert.False(second.AnnouncementDue);
+    }
+
+    [Fact]
+    public async Task LastVerifiedAnnouncementShowsAtStartupWithoutWaitingForTheNetwork()
+    {
+        // Startup shows the saved result at once; the fresh check follows in the background.
+        var bytes = Bytes(Feed);
+        var handler = new ResponseHandler(bytes, Sign(bytes));
+        await new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler), Installed).CheckAsync();
+        int requests = handler.Requests;
+
+        var restarted = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler), Installed);
+        await restarted.LoadCachedAsync();
+
+        Assert.Equal(requests, handler.Requests);
+        Assert.Equal("1.2.1", restarted.Notice!.Version);
+        Assert.Null(restarted.Error);
+        Assert.False(restarted.IsChecking);
+    }
+
+    [Fact]
+    public async Task SavedAnnouncementIsReverifiedBeforeItIsShown()
+    {
+        var bytes = Bytes(Feed);
+        await new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(new ResponseHandler(bytes, Sign(bytes))), Installed).CheckAsync();
+        var path = Path.Combine(_directory, "updates-state.json");
+        var state = JsonSerializer.Deserialize<UpdateService.UpdateState>(await File.ReadAllTextAsync(path))!;
+        state.Feed = Bytes(Feed with { Summary = "Tampered on disk" });
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(state));
+
+        var restarted = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(new ResponseHandler([], [])), Installed);
+        await restarted.LoadCachedAsync();
+
+        Assert.Null(restarted.Notice);
     }
 
     [Theory]
@@ -156,7 +193,7 @@ public sealed class UpdateTests : IDisposable
     public async Task FailedOrRedirectedChecksNeverReportUpToDate(int status)
     {
         var handler = new ResponseHandler([], []) { Status = (HttpStatusCode)status };
-        var service = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler));
+        var service = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler), Installed);
         await service.CheckAsync();
         Assert.NotNull(service.Error);
         Assert.Null(service.Notice);
@@ -166,7 +203,7 @@ public sealed class UpdateTests : IDisposable
     public async Task OversizedResponseDoesNotProduceAnAnnouncement()
     {
         var handler = new ResponseHandler(new byte[UpdateFeedReader.MaximumBytes + 1], []);
-        var service = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler));
+        var service = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler), Installed);
         await service.CheckAsync();
         Assert.NotNull(service.Error);
         Assert.Null(service.Notice);
@@ -177,7 +214,7 @@ public sealed class UpdateTests : IDisposable
     {
         var original = Bytes(Feed);
         var handler = new ResponseHandler(original, Sign(original));
-        var service = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler));
+        var service = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler), Installed);
         await service.CheckAsync();
         handler.Feed = Bytes(Feed with { LatestVersion = "1.3.0" });
         handler.Signature = Sign(handler.Feed);
@@ -191,7 +228,7 @@ public sealed class UpdateTests : IDisposable
     {
         var bytes = Bytes(Feed);
         var handler = new ResponseHandler(bytes, Sign(bytes)) { Pause = new(TaskCreationOptions.RunContinuationsAsynchronously) };
-        var service = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler));
+        var service = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler), Installed);
         var first = service.CheckAsync();
         await service.CheckAsync();
         Assert.True(service.IsChecking);

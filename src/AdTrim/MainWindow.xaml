@@ -26,6 +26,18 @@
   <Window.Resources>
     <conv:TimeFormatConverter x:Key="TimeFmt"/>
     <conv:EnumEqualsVisibilityConverter x:Key="EnumEqVis"/>
+    <conv:FractionOfElementWidthConverter x:Key="AnalysisProgressWidth"/>
+    <Style x:Key="FrostedWhileAnalyzing" TargetType="FrameworkElement">
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding IsAnalyzingCommercials}" Value="True">
+          <Setter Property="Effect">
+            <Setter.Value>
+              <BlurEffect Radius="6"/>
+            </Setter.Value>
+          </Setter>
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
     <conv:EnumNotEqualsVisibilityConverter x:Key="EnumNeVis"/>
     <conv:BoolToVisibilityConverter x:Key="Bool2Vis"/>
     <conv:BoolToCollapsedConverter x:Key="Bool2Collapse"/>
@@ -113,7 +125,7 @@
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
 
-        <Menu Grid.Column="0" VerticalAlignment="Stretch" Padding="4,0">
+        <Menu x:Name="MainMenu" Grid.Column="0" VerticalAlignment="Stretch" Padding="4,0">
           <MenuItem Header="_File" Style="{StaticResource MenuBarItem}">
             <MenuItem Header="New window" InputGestureText="Ctrl+N" Style="{StaticResource DropdownMenuItem}" Click="OnNewWindow"/>
             <MenuItem Header="Open…"             InputGestureText="Ctrl+O"        Style="{StaticResource DropdownMenuItem}" Click="OnOpenFile" IsEnabled="{Binding CanInteract}"/>
@@ -131,21 +143,26 @@
             <MenuItem Header="Redo"                       InputGestureText="Ctrl+Y"        Style="{StaticResource DropdownMenuItem}" Click="OnRedo"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem Header="Add split at playhead"      InputGestureText="S"             Style="{StaticResource DropdownMenuItem}" Click="OnAddSplitAtPlayhead"/>
-            <MenuItem Header="Delete selected split"      InputGestureText="Del"           Style="{StaticResource DropdownMenuItem}" Click="OnDeleteSelectedSplit"/>
+            <MenuItem Header="Select all markers"         InputGestureText="Ctrl+A"        Style="{StaticResource DropdownMenuItem}" Click="OnSelectAllMarkers"/>
+            <MenuItem Header="Select red markers"         InputGestureText="Ctrl+Shift+A"  Style="{StaticResource DropdownMenuItem}" Click="OnSelectRedMarkers"/>
+            <MenuItem Header="Select visible markers"     InputGestureText="Ctrl+Alt+A"    Style="{StaticResource DropdownMenuItem}" Click="OnSelectVisibleMarkers"/>
+            <MenuItem Header="Delete selected markers"    InputGestureText="Del"           Style="{StaticResource DropdownMenuItem}" Click="OnDeleteSelectedSplit"/>
+            <MenuItem Header="Delete all markings"        InputGestureText="Ctrl+Del"      Style="{StaticResource DropdownMenuItem}" Click="OnClearAllMarkings" IsEnabled="{Binding CanReplaceMarkers}"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem Header="Confirm split"              InputGestureText="C"             Style="{StaticResource DropdownMenuItem}" Click="OnConfirmSelectedSplit"/>
             <MenuItem Header="Confirm and next" InputGestureText="Shift+C" Style="{StaticResource DropdownMenuItem}" Click="OnConfirmAndNext"/>
             <MenuItem Header="Confirm all remaining"      InputGestureText="Ctrl+Shift+C"  Style="{StaticResource DropdownMenuItem}" Click="OnConfirmAllRemaining"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem Header="Mark segment as excluded"   InputGestureText="X"             Style="{StaticResource DropdownMenuItem}" Click="OnToggleExcluded"/>
+            <MenuItem Header="Rename segment"             InputGestureText="F2"            Style="{StaticResource DropdownMenuItem}" Click="OnRenameSelectedSegment"/>
           </MenuItem>
           <MenuItem Header="_View" Style="{StaticResource MenuBarItem}" IsEnabled="{Binding CanInteract}">
             <MenuItem Header="Zoom in"        InputGestureText="Ctrl+="  Style="{StaticResource DropdownMenuItem}" Click="OnZoomIn"/>
             <MenuItem Header="Zoom out"       InputGestureText="Ctrl+−"  Style="{StaticResource DropdownMenuItem}" Click="OnZoomOut"/>
             <MenuItem Header="Fit timeline"   InputGestureText="Ctrl+0"  Style="{StaticResource DropdownMenuItem}" Click="OnFitTimeline"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
-            <MenuItem Header="Show waveform"   IsCheckable="True" IsChecked="{Binding ShowWaveform, Mode=TwoWay}" Style="{StaticResource DropdownMenuItem}"/>
             <MenuItem Header="Show thumbnails" IsCheckable="True" IsChecked="{Binding ShowThumbnails, Mode=TwoWay}" Style="{StaticResource DropdownMenuItem}"/>
+            <MenuItem Header="Show waveform"   IsCheckable="True" IsChecked="{Binding ShowWaveform, Mode=TwoWay}" Style="{StaticResource DropdownMenuItem}"/>
             <MenuItem Header="Show ruler ticks" IsCheckable="True" IsChecked="{Binding ShowRulerTicks, Mode=TwoWay}" Style="{StaticResource DropdownMenuItem}"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem x:Name="FrameAccurateSeekMenuItem"
@@ -155,12 +172,48 @@
                       Click="OnToggleFrameAccurateSeek"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem Header="Jump to next unconfirmed split" InputGestureText="N" IsEnabled="{Binding CanEdit}" Style="{StaticResource DropdownMenuItem}" Click="OnJumpNextUnconfirmed"/>
+            <MenuItem Header="Jump to previous unconfirmed split" InputGestureText="Shift+N" IsEnabled="{Binding CanEdit}" Style="{StaticResource DropdownMenuItem}" Click="OnJumpPreviousUnconfirmed"/>
+            <MenuItem Header="Previous marker" InputGestureText="Alt+←" IsEnabled="{Binding CanEdit}" Style="{StaticResource DropdownMenuItem}" Click="OnPreviousMarker"/>
+            <MenuItem Header="Next marker" InputGestureText="Alt+→" IsEnabled="{Binding CanEdit}" Style="{StaticResource DropdownMenuItem}" Click="OnNextMarker"/>
           </MenuItem>
-          <MenuItem Header="_Tools" Style="{StaticResource MenuBarItem}" IsEnabled="{Binding CanEdit}">
-            <MenuItem Header="Refine all splits"          InputGestureText="Ctrl+R" Style="{StaticResource DropdownMenuItem}" Click="OnRefineAll"/>
-            <MenuItem Header="Refine selected split"      InputGestureText="R"      Style="{StaticResource DropdownMenuItem}" Click="OnRefineSelected"/>
+          <!-- Tools stays enabled so "Starting markers for new files" is reachable with no file
+               open; each action below carries its own enabled state. -->
+          <MenuItem Header="_Tools" Style="{StaticResource MenuBarItem}">
+            <MenuItem Header="Refine all splits"          InputGestureText="Ctrl+R" Style="{StaticResource DropdownMenuItem}" Click="OnRefineAll" IsEnabled="{Binding CanEdit}"/>
+            <MenuItem Header="Refine selected splits"     InputGestureText="R"      Style="{StaticResource DropdownMenuItem}" Click="OnRefineSelected" IsEnabled="{Binding CanEdit}"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
-            <MenuItem Header="Auto-confirm high-confidence" Style="{StaticResource DropdownMenuItem}" Click="OnAutoConfirmHighConfidence"/>
+            <MenuItem Header="Auto-confirm high-confidence" Style="{StaticResource DropdownMenuItem}" Click="OnAutoConfirmHighConfidence" IsEnabled="{Binding CanEdit}"/>
+            <Separator Background="{StaticResource Border.Subtle}"/>
+            <MenuItem x:Name="AdBreakDetectionMenu" Header="Ad break detection" InputGestureText="▸" Style="{StaticResource DropdownMenuItem}">
+              <MenuItem x:Name="UseOriginalImportedMarkersMenuItem" Header="Revert to original imported markers" Style="{StaticResource DropdownMenuItem}" Click="OnUseImportedMarkers"/>
+              <MenuItem Header="AdTrim suggested markers" InputGestureText="▸" Style="{StaticResource DropdownMenuItem}" IsEnabled="{Binding CanReplaceMarkers}">
+                <!-- "Revert" needs an analysis to revert to; until then, Analyze is the way in. -->
+                <MenuItem Header="Revert to original AdTrim suggested markers" Click="OnUseAdTrimSuggestions"
+                          IsEnabled="{Binding HasAdTrimAnalysis}" Style="{StaticResource DropdownMenuItem}"/>
+                <MenuItem x:Name="AnalyzeAdBreaksMenuItem" Click="OnAnalyzeAdBreaks">
+                  <MenuItem.Style>
+                    <Style TargetType="MenuItem" BasedOn="{StaticResource DropdownMenuItem}">
+                      <Setter Property="Header" Value="Analyze ad breaks"/>
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding HasAdTrimAnalysis}" Value="True">
+                          <Setter Property="Header" Value="Analyze ad breaks again"/>
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </MenuItem.Style>
+                </MenuItem>
+              </MenuItem>
+              <MenuItem x:Name="StartingMarkersMenu" Header="Starting markers for new files" InputGestureText="▸" Style="{StaticResource DropdownMenuItem}">
+                <MenuItem x:Name="DefaultImportedMarkers" Header="Imported markers" IsCheckable="True"
+                          Style="{StaticResource DropdownMenuItem}" Click="OnDefaultMarkerSource" Tag="Imported"/>
+                <MenuItem x:Name="DefaultAdTrimMarkers" Header="AdTrim suggested markers" IsCheckable="True"
+                          Style="{StaticResource DropdownMenuItem}" Click="OnDefaultMarkerSource" Tag="AdTrim"/>
+                <MenuItem x:Name="DefaultNoMarkers" Header="None" IsCheckable="True"
+                          Style="{StaticResource DropdownMenuItem}" Click="OnDefaultMarkerSource" Tag="None"/>
+              </MenuItem>
+              <Separator Background="{StaticResource Border.Subtle}"/>
+              <MenuItem Header="Delete all markings" InputGestureText="Ctrl+Del" Style="{StaticResource DropdownMenuItem}" Click="OnClearAllMarkings" IsEnabled="{Binding CanReplaceMarkers}"/>
+            </MenuItem>
           </MenuItem>
           <MenuItem Style="{StaticResource MenuBarItem}">
             <MenuItem.Header>
@@ -170,6 +223,8 @@
                          HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-3,-6,0" Visibility="Collapsed"/>
               </Grid>
             </MenuItem.Header>
+            <MenuItem Header="Keyboard shortcuts" InputGestureText="F1" Style="{StaticResource DropdownMenuItem}" Click="OnShowShortcuts"/>
+            <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem x:Name="CheckUpdatesMenu" Header="Check for updates…" Style="{StaticResource DropdownMenuItem}" Click="OnCheckUpdates"/>
             <MenuItem x:Name="AutomaticUpdatesMenu" Header="Automatically check for updates" IsCheckable="True"
                       Style="{StaticResource DropdownMenuItem}" Click="OnAutomaticUpdates"
@@ -209,7 +264,8 @@
         <RowDefinition Height="Auto"/>
         <RowDefinition Height="56"/>
         <RowDefinition Height="40"/>
-        <RowDefinition Height="182"/>
+        <!-- Timeline (175) + top margin (8) + the zoom scrollbar (10), so zooming in never covers the waveform. -->
+        <RowDefinition Height="193"/>
       </Grid.RowDefinitions>
     <DockPanel Grid.Row="0">
     <Grid Background="Black">
@@ -513,10 +569,10 @@
     <!-- =============================================================== -->
     <!-- TIMELINE TOOLBAR                                                -->
     <!-- =============================================================== -->
-    <Border Grid.Row="3" Background="{StaticResource Bg.Surface}"
+    <Border Grid.Row="3" Background="{StaticResource Bg.Surface}" ClipToBounds="True"
             BorderBrush="{StaticResource Border.Subtle}" BorderThickness="0,1,0,0"
             Visibility="{Binding IsFileLoaded, Converter={StaticResource Bool2Vis}}">
-      <Grid x:Name="TimelineToolbar" Margin="16,0" IsEnabled="{Binding CanEdit}">
+      <Grid x:Name="TimelineToolbar" Margin="16,0" IsEnabled="{Binding CanEdit}" Style="{StaticResource FrostedWhileAnalyzing}">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="Auto"/>
           <ColumnDefinition Width="*"/>
@@ -588,6 +644,30 @@
               </TextBlock>
             </StackPanel>
           </Button>
+          <!-- Several markers selected (Ctrl+A): actions apply to all of them. -->
+          <StackPanel Orientation="Horizontal"
+                      Visibility="{Binding SelectionKind, Converter={StaticResource EnumEqVis}, ConverterParameter=Markers}">
+            <TextBlock Text="{Binding SelectedMarkerCount, StringFormat={}{0} markers selected}" VerticalAlignment="Center"
+                       Foreground="{StaticResource Text.Secondary}" Margin="10,0,6,0"/>
+            <Button Padding="10,4" Margin="4,0,0,0" Click="OnRefineSelected">
+              <TextBlock>
+                <Run Text="Refine selected"/>
+                <Run Text=" (R)" Foreground="{StaticResource Text.Tertiary}"/>
+              </TextBlock>
+            </Button>
+            <Button Style="{StaticResource Button.Primary}" Padding="10,4" Margin="4,0,0,0" Click="OnConfirmSelectedSplit">
+              <TextBlock Foreground="White">
+                Confirm
+                <Run Text=" (C)" Foreground="#8CFFFFFF"/>
+              </TextBlock>
+            </Button>
+            <Button Style="{StaticResource Button.Danger}" Padding="10,4" Margin="4,0,0,0" Click="OnDeleteSelectedSplit">
+              <TextBlock Foreground="White">
+                Delete
+                <Run Text=" (Del)" Foreground="#8CFFFFFF"/>
+              </TextBlock>
+            </Button>
+          </StackPanel>
         </StackPanel>
 
         <!-- Right actions - global (not tied to any selection). -->
@@ -604,16 +684,47 @@
                        FontFamily="{StaticResource Font.Mono}"
                        Foreground="{StaticResource Text.Secondary}"/>
           </Border>
-          <Button x:Name="RefineAllButton" Padding="10,5" Click="OnRefineAll">
+          <!-- Shows which marker set the timeline came from; the menu switches sets. -->
+          <Button x:Name="MarkersButton" Content="{Binding MarkerSetLabel}" ContentStringFormat="{}{0} ▾" Click="OnOpenMarkersMenu"
+                  IsEnabled="{Binding CanReplaceMarkers}" Padding="10,5" Margin="0,0,8,0"
+                  AutomationProperties.Name="Marker set" ToolTip="Switch between imported markers and AdTrim suggested markers.">
+            <Button.ContextMenu>
+              <ContextMenu x:Name="MarkersPopup">
+                <MenuItem x:Name="MarkersPopupImported" Header="Revert to original imported markers" Click="OnUseImportedMarkers"/>
+                <MenuItem Header="Revert to original AdTrim suggested markers" Click="OnUseAdTrimSuggestions" IsEnabled="{Binding HasAdTrimAnalysis}"/>
+              </ContextMenu>
+            </Button.ContextMenu>
+          </Button>
+          <!-- Refine all splits stays in Tools and on Ctrl+R. -->
+          <!-- Primary (blue) until the recording has an analysis; "again" is a plain button.
+               MainWindow swaps the style when HasAdTrimAnalysis changes. -->
+          <Button x:Name="AnalyzeAdBreaksButton" Style="{StaticResource Button.Primary}" Padding="10,5" Click="OnAnalyzeAdBreaks" IsEnabled="{Binding CanReplaceMarkers}"
+                  ToolTip="Find ad breaks and suggest markers. Asks before replacing your edits.">
             <StackPanel Orientation="Horizontal">
-              <Path Fill="{StaticResource Accent.Base}" Width="13" Height="13" Stretch="Uniform"
+              <Path Width="13" Height="13" Stretch="Uniform"
                     Data="M12,3 L13.4,7.2 L17.6,8.6 L13.4,10 L12,14.2 L10.6,10 L6.4,8.6 L10.6,7.2 Z M18,14 L18.7,16.1 L20.8,16.8 L18.7,17.5 L18,19.6 L17.3,17.5 L15.2,16.8 L17.3,16.1 Z"
-                    Margin="0,0,6,0"/>
-              <TextBlock>
-                <Run Text="Refine all splits"/>
-                <Run Text=" (Ctrl+R)" Foreground="{StaticResource Text.Tertiary}"/>
-              </TextBlock>
+                    Margin="0,0,6,0">
+                <Path.Style>
+                  <Style TargetType="Path">
+                    <Setter Property="Fill" Value="White"/>
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding HasAdTrimAnalysis}" Value="True">
+                        <Setter Property="Fill" Value="{StaticResource Accent.Base}"/>
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </Path.Style>
+              </Path>
+              <TextBlock Text="Analyze ad breaks" Visibility="{Binding HasAdTrimAnalysis, Converter={StaticResource Bool2Collapse}}"/>
+              <TextBlock Text="Analyze ad breaks again" Visibility="{Binding HasAdTrimAnalysis, Converter={StaticResource Bool2Vis}}"/>
             </StackPanel>
+          </Button>
+          <Button x:Name="ClearAllMarkingsButton" Padding="10,5" Margin="8,0,0,0" Click="OnClearAllMarkings"
+                  IsEnabled="{Binding CanReplaceMarkers}" ToolTip="Remove every split, section name and exclusion (asks first; undoable).">
+            <TextBlock>
+              <Run Text="Delete all markings"/>
+              <Run Text=" (Ctrl+Del)" Foreground="{StaticResource Text.Tertiary}"/>
+            </TextBlock>
           </Button>
         </StackPanel>
 
@@ -656,15 +767,16 @@
           </StackPanel>
         </Grid>
       </Grid>
+
     </Border>
 
     <!-- =============================================================== -->
     <!-- TIMELINE STRIP                                                   -->
     <!-- =============================================================== -->
-    <Border Grid.Row="4" Background="{StaticResource Bg.Surface}"
+    <Border Grid.Row="4" Background="{StaticResource Bg.Surface}" ClipToBounds="True"
             BorderBrush="{StaticResource Border.Subtle}" BorderThickness="0,1,0,0"
             Visibility="{Binding IsFileLoaded, Converter={StaticResource Bool2Vis}}">
-      <ScrollViewer x:Name="TimelineScroll"
+      <ScrollViewer x:Name="TimelineScroll" Style="{StaticResource FrostedWhileAnalyzing}"
                     Margin="16,8,16,0"
                     HorizontalScrollBarVisibility="Auto"
                     VerticalScrollBarVisibility="Disabled"
@@ -680,6 +792,70 @@
                             SeekRequested="OnTimelineSeekRequested"/>
       </ScrollViewer>
     </Border>
+
+    <!-- Ad-break analysis: progress over the frosted, dimmed toolbar and timeline (both locked while
+         it runs; their blur is set by FrostedWhileAnalyzing). Outside the toolbar, so Cancel always
+         works; the dimming also blocks clicks. Dimming is densest behind the text and lighter at both
+         ends; an accent hairline marks the top edge. -->
+    <Grid x:Name="AnalysisPanel" Grid.Row="3" Grid.RowSpan="2" ClipToBounds="True"
+          Visibility="{Binding IsAnalyzingCommercials, Converter={StaticResource Bool2Vis}}">
+      <Rectangle>
+        <Rectangle.Fill>
+          <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+            <GradientStop Offset="0" Color="#9916161A"/>
+            <GradientStop Offset="0.28" Color="#E016161A"/>
+            <GradientStop Offset="0.72" Color="#E016161A"/>
+            <GradientStop Offset="1" Color="#9916161A"/>
+          </LinearGradientBrush>
+        </Rectangle.Fill>
+      </Rectangle>
+      <Rectangle Height="1" VerticalAlignment="Top" IsHitTestVisible="False">
+        <Rectangle.Fill>
+          <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+            <GradientStop Offset="0" Color="#004F8CFF"/>
+            <GradientStop Offset="0.5" Color="#CC4F8CFF"/>
+            <GradientStop Offset="1" Color="#004F8CFF"/>
+          </LinearGradientBrush>
+        </Rectangle.Fill>
+      </Rectangle>
+      <!-- Large percentage floats left of the step, bar and time left; Cancel sits on its own line.
+           The percentage column has a fixed width so the text beside it never shifts. -->
+      <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="132"/>
+          <ColumnDefinition Width="560"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <TextBlock x:Name="AnalysisPercentText" FontSize="48" FontWeight="SemiBold" Margin="0,0,20,0"
+                   HorizontalAlignment="Right" VerticalAlignment="Center"
+                   Foreground="{StaticResource Text.Primary}" Text="{Binding ProgressPercentValue, StringFormat={}{0:P0}}"/>
+        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+          <TextBlock x:Name="AnalysisStageText" Text="{Binding AnalysisStage}" FontSize="14" FontWeight="SemiBold"
+                     Foreground="{StaticResource Text.Primary}" TextTrimming="CharacterEllipsis"/>
+          <Grid Margin="0,10,0,8">
+            <Border x:Name="AnalysisTrack" Height="8" CornerRadius="4" Background="{StaticResource Bg.Lane}"/>
+            <Border Height="8" CornerRadius="4" HorizontalAlignment="Left"
+                    Width="{Binding ProgressPercentValue, Converter={StaticResource AnalysisProgressWidth}, ConverterParameter={x:Reference AnalysisTrack}}">
+              <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                  <GradientStop Offset="0" Color="{StaticResource Accent.Press.Color}"/>
+                  <GradientStop Offset="1" Color="{StaticResource Accent.Hover.Color}"/>
+                </LinearGradientBrush>
+              </Border.Background>
+            </Border>
+          </Grid>
+          <TextBlock Foreground="{StaticResource Text.Secondary}">
+            <Run x:Name="AnalysisTimeLeftText" Text="{Binding AnalysisTimeLeft, TargetNullValue='', Mode=OneWay}"/>
+          </TextBlock>
+        </StackPanel>
+        <Button x:Name="CancelCommercialAnalysisButton" Grid.Row="1" Grid.Column="1" Margin="0,20,0,0"
+                HorizontalAlignment="Left" Padding="10,5" Content="Cancel analysis" ToolTip="Esc"
+                Click="OnCancelCommercialAnalysis"/>
+      </Grid>
+    </Grid>
 
     </Grid>
     <!-- =============================================================== -->
@@ -731,8 +907,8 @@
         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
                     HorizontalAlignment="Left"
                     Background="Transparent"
-                    Cursor="Hand"
-                    Visibility="{Binding HasStatusOverride, Converter={StaticResource Bool2Vis}}">
+                    Cursor="Hand" x:Name="StatusOverridePanel"
+                    Visibility="{Binding ShowsStatusOverride, Converter={StaticResource Bool2Vis}}">
           <TextBlock Text="{Binding StatusOverride}" FontSize="12"
                      Foreground="{Binding StatusKind, Converter={StaticResource StatusKindBrush}}"/>
           <Border Width="60" Height="4" Background="{StaticResource Bg.Lane}" CornerRadius="2"
@@ -747,7 +923,7 @@
 
         <!-- Selection-aware default group - collapsed when override is set -->
         <Grid Grid.Column="2"
-              Visibility="{Binding HasStatusOverride, Converter={StaticResource Bool2Collapse}}">
+              Visibility="{Binding ShowsStatusOverride, Converter={StaticResource Bool2Collapse}}">
         <!-- Default: confirm-progress chip (only when a file is loaded
              AND no marker/segment selection is active) -->
         <Grid Visibility="{Binding IsFileLoaded, Converter={StaticResource Bool2Vis}}">
@@ -801,6 +977,18 @@
 
         <!-- Right cluster: Zoom | Output | Version, followed by any available update. -->
         <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+          <!-- Shown only while a timeline lane is off, so people who upgraded with them off
+               can find them; a click does what the View menu item does. -->
+          <StackPanel Orientation="Horizontal" Visibility="{Binding IsFileLoaded, Converter={StaticResource Bool2Vis}}">
+            <Button x:Name="ThumbnailsOffButton" Content="Thumbnails off" FontSize="12" Padding="5,0" Margin="0,0,8,0"
+                    Foreground="{StaticResource Text.Secondary}" Click="OnShowThumbnailsFromStatus"
+                    Visibility="{Binding ShowThumbnails, Converter={StaticResource Bool2Collapse}}"
+                    ToolTip="Show the thumbnail strip (View > Show thumbnails)" AutomationProperties.Name="Show thumbnails"/>
+            <Button x:Name="WaveformOffButton" Content="Waveform off" FontSize="12" Padding="5,0" Margin="0,0,8,0"
+                    Foreground="{StaticResource Text.Secondary}" Click="OnShowWaveformFromStatus"
+                    Visibility="{Binding ShowWaveform, Converter={StaticResource Bool2Collapse}}"
+                    ToolTip="Show the waveform (View > Show waveform)" AutomationProperties.Name="Show waveform"/>
+          </StackPanel>
           <Button x:Name="StatusResetZoomButton" IsEnabled="{Binding CanInteract}" Content="{Binding ZoomFactor}" ContentStringFormat="Zoom {0:0.0}×" FontFamily="{StaticResource Font.Mono}"
                      Foreground="{StaticResource Text.Secondary}" FontSize="12" Padding="5,0"
                      ToolTip="Reset zoom to 1× (Ctrl+0)" AutomationProperties.Name="Reset zoom to 1×" Click="OnFitTimeline"

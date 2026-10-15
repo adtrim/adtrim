@@ -191,3 +191,17 @@ public sealed class TimeFormatConverter : IValueConverter
     public object ConvertBack(object value, Type targetType, object? parameter, CultureInfo culture)
         => throw new NotSupportedException();
 }
+
+/// <summary>Width for a progress fill: the bound fraction (0-1) of the parameter element's width.</summary>
+public sealed class FractionOfElementWidthConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        double fraction = value is double d ? Math.Clamp(d, 0, 1) : 0;
+        double width = parameter is FrameworkElement element ? element.ActualWidth : 0;
+        return fraction * width;
+    }
+
+    public object ConvertBack(object value, Type targetType, object? parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}

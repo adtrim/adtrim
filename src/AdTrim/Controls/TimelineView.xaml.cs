@@ -1,5 +1,6 @@
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -21,9 +22,13 @@ public partial class TimelineView : UserControl
     {
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
+        Loaded += (_, _) => AttachScrollViewer();
     }
 
     private MainViewModel? _vm;
+
+    /// <summary>Source times of on-screen filmstrip tiles that have no close-enough frame yet.</summary>
+    public event Action<IReadOnlyList<long>>? ThumbnailsNeeded;
 
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
@@ -31,7 +36,6 @@ public partial class TimelineView : UserControl
         {
             _vm.Markers.CollectionChanged -= OnCollectionChanged;
             _vm.Segments.CollectionChanged -= OnCollectionChanged;
-            _vm.Thumbnails.CollectionChanged -= OnCollectionChanged;
             _vm.PropertyChanged -= OnVmPropertyChanged;
         }
         _vm = DataContext as MainViewModel;
@@ -39,10 +43,27 @@ public partial class TimelineView : UserControl
         {
             _vm.Markers.CollectionChanged += OnCollectionChanged;
             _vm.Segments.CollectionChanged += OnCollectionChanged;
-            _vm.Thumbnails.CollectionChanged += OnCollectionChanged;
             _vm.PropertyChanged += OnVmPropertyChanged;
         }
         Redraw();
+    }
+
+    // The filmstrip draws and fetches only around what the zoomed timeline shows.
+    private ScrollViewer? _scroll;
+
+    private void AttachScrollViewer()
+    {
+        if (_scroll is not null) return;
+        for (DependencyObject? node = VisualTreeHelper.GetParent(this); node is not null; node = VisualTreeHelper.GetParent(node))
+            if (node is ScrollViewer scroll)
+            {
+                _scroll = scroll;
+                _scroll.ScrollChanged += (_, e) =>
+                {
+                    if (e.HorizontalChange != 0 || e.ViewportWidthChange != 0) DrawThumbnails(LayoutRoot.ActualWidth);
+                };
+                return;
+            }
     }
 
     private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -68,7 +89,7 @@ public partial class TimelineView : UserControl
             Redraw();
             return;
         }
-        if (e.PropertyName == nameof(MainViewModel.WaveformPeaks))
+        if (e.PropertyName == nameof(MainViewModel.AudioLoudness))
         {
             DrawWaveform(LayoutRoot.ActualWidth);
             return;
@@ -78,7 +99,7 @@ public partial class TimelineView : UserControl
             DrawWaveform(LayoutRoot.ActualWidth);
             return;
         }
-        if (e.PropertyName == nameof(MainViewModel.ShowThumbnails))
+        if (e.PropertyName is nameof(MainViewModel.ShowThumbnails) or nameof(MainViewModel.ThumbnailTiles))
         {
             DrawThumbnails(LayoutRoot.ActualWidth);
             return;
@@ -95,13 +116,6 @@ public partial class TimelineView : UserControl
         if (_vm is null) return;
         var width = LayoutRoot.ActualWidth;
         if (double.IsNaN(width) || width <= 0) return;
-
-        if (ReferenceEquals(sender, _vm.Thumbnails))
-        {
-            if (_vm.Thumbnails.Count == 0) _thumbnailBrushCache.Clear();
-            DrawThumbnails(width);
-            return;
-        }
 
         if (_redrawPending) return;
         _redrawPending = true;
@@ -130,88 +144,97 @@ public partial class TimelineView : UserControl
     private long TimeOfX(double x, double width)
         => _vm!.TimelineDurationUs == 0 ? 0 : _vm.ToSourceTime((long)Math.Round((x / width) * _vm.TimelineDurationUs));
 
+    /// <summary>Redraws the filmstrip, asking again for any on-screen tiles still missing.</summary>
+    public void RefreshThumbnails() => DrawThumbnails(LayoutRoot.ActualWidth);
+
+    private const double ThumbLaneHeight = 56;
+    // Tiles keep the video's shape; learned from the first decoded tile.
+    private double _thumbAspect = 16.0 / 9.0;
+
+    /// <summary>
+    /// Filmstrip: back-to-back tiles at the video's own shape, each showing the frame at its
+    /// centre. Draws one screen either side of the visible area and asks for frames only for
+    /// on-screen tiles; until a close-enough frame arrives, the nearest one fetched stands in.
+    /// </summary>
     private void DrawThumbnails(double width)
     {
         ThumbCanvas.Children.Clear();
-        if (_vm is null || !_vm.ShowThumbnails) return;
+        if (_vm is null || !_vm.ShowThumbnails || _vm.TimelineDurationUs <= 0 || width <= 0) return;
 
-        var thumbnails = _vm.Thumbnails.OrderBy(t => t.Index).ToList();
-        var thumbnailByIndex = new Dictionary<int, TimelineThumbnail>();
-        foreach (var thumbnail in thumbnails)
-            thumbnailByIndex[thumbnail.Index] = thumbnail;
-        var tiles = thumbnails.Count > 0 ? Math.Max(1, thumbnails.Max(t => t.Total)) : ThumbnailService.DefaultTileCount;
-        var tw = width / tiles;
-        var laneBrush = (Brush)(Application.Current.TryFindResource("Bg.Lane") ?? Brushes.Black);
-        var border = (Brush)(Application.Current.TryFindResource("Border.Subtle") ?? Brushes.DimGray);
+        var strip = _vm.ThumbnailTiles;
+        double tileWidth = ThumbLaneHeight * _thumbAspect;
+        var (viewLeft, viewRight) = VisibleRange(width);
+        double reach = viewRight - viewLeft;
+        int first = Math.Max(0, (int)Math.Floor((viewLeft - reach) / tileWidth));
+        int last = Math.Min((int)Math.Ceiling(width / tileWidth) - 1, (int)Math.Floor((viewRight + reach) / tileWidth));
+        var needed = new List<long>();
 
-        for (int i = 0; i < tiles; i++)
+        for (int i = first; i <= last; i++)
         {
-            var sampleUs = _vm.ToSourceTime((long)((i + 0.5) / tiles * _vm.TimelineDurationUs));
-            int sourceTile = _vm.DurationUs > 0 ? Math.Clamp((int)(sampleUs * tiles / _vm.DurationUs), 0, tiles - 1) : i;
-            thumbnailByIndex.TryGetValue(sourceTile, out var thumb);
-            Brush fill = laneBrush;
-            if (thumb is not null)
-            {
-                try
-                {
-                    fill = GetThumbnailBrush(thumb.ImagePath);
-                }
-                catch
-                {
-                    fill = laneBrush;
-                }
-            }
+            double left = i * tileWidth, right = Math.Min(width, left + tileWidth);
+            long centre = TimeOfX((left + right) / 2, width);
+            // A frame within half a tile of the centre already shows this tile's content.
+            long tolerance = Math.Max(ThumbnailService.TimeStepUs, (TimeOfX(right, width) - TimeOfX(left, width)) / 2);
+            var nearest = strip.Nearest(centre);
+            if ((nearest is null || Math.Abs(nearest.Value.TimeUs - centre) > tolerance) && right > viewLeft && left < viewRight)
+                needed.Add(centre);
+            if (nearest is null || GetThumbnailBrush(nearest.Value.Path) is not { } brush) continue;
 
-            var rect = new Rectangle
-            {
-                Width = Math.Ceiling(tw),
-                Height = 56,
-                Fill = fill,
-            };
-            Canvas.SetLeft(rect, i * tw);
-            Canvas.SetTop(rect, 0);
+            var rect = new Rectangle { Width = right - left, Height = ThumbLaneHeight, Fill = brush };
+            Canvas.SetLeft(rect, left);
             ThumbCanvas.Children.Add(rect);
-
-            if (i < tiles - 1)
-            {
-                var div = new Rectangle
-                {
-                    Width = 1, Height = 56,
-                    Fill = border,
-                };
-                Canvas.SetLeft(div, (i + 1) * tw - 0.5);
-                Canvas.SetTop(div, 0);
-                ThumbCanvas.Children.Add(div);
-            }
         }
-        var v = new Rectangle
+        var shade = new Rectangle
         {
-            Width = width, Height = 56,
+            Width = width, Height = ThumbLaneHeight,
             Fill = new LinearGradientBrush(
                 Color.FromArgb(0x0A, 0xFF, 0xFF, 0xFF),
                 Color.FromArgb(0x40, 0, 0, 0),
                 new Point(0, 0), new Point(0, 1)),
             IsHitTestVisible = false,
         };
-        ThumbCanvas.Children.Add(v);
+        ThumbCanvas.Children.Add(shade);
+        if (needed.Count > 0) ThumbnailsNeeded?.Invoke(needed);
     }
 
-    private readonly Dictionary<string, ImageBrush> _thumbnailBrushCache = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>The horizontal range of this control the timeline's scroll viewer shows.</summary>
+    private (double Left, double Right) VisibleRange(double width)
+    {
+        if (_scroll is null || _scroll.ViewportWidth <= 0) return (0, width);
+        double left = -LayoutRoot.TransformToAncestor(_scroll).Transform(new Point(0, 0)).X;
+        return (Math.Max(0, left), Math.Min(width, left + _scroll.ViewportWidth));
+    }
 
-    private ImageBrush GetThumbnailBrush(string imagePath)
+    private readonly Dictionary<string, ImageBrush?> _thumbnailBrushCache = new(StringComparer.OrdinalIgnoreCase);
+
+    private ImageBrush? GetThumbnailBrush(string imagePath)
     {
         if (_thumbnailBrushCache.TryGetValue(imagePath, out var cached))
             return cached;
+        // Bounded: deep zoom across a whole show can visit thousands of tiles.
+        if (_thumbnailBrushCache.Count >= 600) _thumbnailBrushCache.Clear();
 
-        var bitmap = new BitmapImage();
-        bitmap.BeginInit();
-        bitmap.CacheOption = BitmapCacheOption.OnLoad;
-        bitmap.UriSource = new Uri(imagePath, UriKind.Absolute);
-        bitmap.EndInit();
-        bitmap.Freeze();
-
-        var brush = new ImageBrush(bitmap) { Stretch = Stretch.UniformToFill };
-        brush.Freeze();
+        ImageBrush? brush = null;
+        try
+        {
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.UriSource = new Uri(imagePath, UriKind.Absolute);
+            bitmap.EndInit();
+            bitmap.Freeze();
+            if (bitmap.PixelHeight > 0 && Math.Abs(bitmap.PixelWidth / (double)bitmap.PixelHeight - _thumbAspect) > 0.01)
+            {
+                _thumbAspect = bitmap.PixelWidth / (double)bitmap.PixelHeight;
+                Dispatcher.BeginInvoke(new Action(() => DrawThumbnails(LayoutRoot.ActualWidth)));
+            }
+            brush = new ImageBrush(bitmap) { Stretch = Stretch.UniformToFill };
+            brush.Freeze();
+        }
+        catch (Exception ex) when (ex is IOException or FormatException or NotSupportedException or UnauthorizedAccessException)
+        {
+            // A damaged cache file shows as an empty tile rather than failing the timeline.
+        }
         _thumbnailBrushCache[imagePath] = brush;
         return brush;
     }
@@ -257,18 +280,13 @@ public partial class TimelineView : UserControl
         }
     }
 
-    // Pixel columns whose peak is below this fraction of full scale are
-    // flagged as "quiet". Contiguous runs get a yellow background tint so
-    // silences (commercial transitions, dialogue gaps) pop visually. Tuned
-    // by eye - roughly -26 dB.
-    private const double QuietThreshold = 0.05;
     // Lane is 38 px tall (Grid row 5). Envelope is vertically centered.
     private const double WaveformLaneHeight = 38;
 
     // Memoize the last draw. Redraw() is called on many unrelated events
     // (selection, marker drag, segment edit); each one would otherwise
     // rebuild a 40k-vertex geometry and turn the UI thread into molasses.
-    private float[]? _waveformPeaksCache;
+    private byte[]? _waveformLoudnessCache;
     private double _waveformWidthCache = -1;
 
     private void DrawWaveform(double width)
@@ -276,36 +294,38 @@ public partial class TimelineView : UserControl
         if (_vm is null) return;
         if (!_vm.ShowWaveform)
         {
-            _waveformPeaksCache = null;
+            _waveformLoudnessCache = null;
             _waveformWidthCache = -1;
             WaveformCanvas.Children.Clear();
             return;
         }
-        var peaks = _vm.WaveformPeaks;
+        var loudness = _vm.AudioLoudness;
 
-        // Skip when neither peaks nor width changed - Redraw() fires for
+        // Skip when neither the levels nor width changed - Redraw() fires for
         // selection/marker/segment changes which don't affect the waveform.
-        if (ReferenceEquals(peaks, _waveformPeaksCache)
+        if (ReferenceEquals(loudness, _waveformLoudnessCache)
             && Math.Abs(width - _waveformWidthCache) < 0.5)
         {
             return;
         }
-        _waveformPeaksCache = peaks;
+        _waveformLoudnessCache = loudness;
         _waveformWidthCache = width;
 
         WaveformCanvas.Children.Clear();
 
-        // Still extracting (or no audio stream) - leave the lane blank rather
+        // Still measuring (or no audio stream) - leave the lane blank rather
         // than show fake data. Drawing nothing is the honest signal.
-        if (peaks is null || peaks.Length == 0) return;
+        if (loudness is null || loudness.Length == 0) return;
 
         int columns = (int)Math.Floor(width);
         if (columns < 2) return;
 
-        // Per-pixel-column peak: take the max across the peak bins that map
-        // into this column. When zoomed in, each column covers <1 bin and we
-        // just sample.
-        var colPeaks = new float[columns];
+        // Mean loudness (dB) of the values that map into each pixel column.
+        // Averaging in dB lets a brief silence notch the graph; a column's peak
+        // would hide it under any sound nearby. Values map by time, so a partial
+        // array (still measuring) covers only the left part of the lane.
+        var colLevels = new double[columns];
+        int loadedColumns = columns;
         for (int x = 0; x < columns; x++)
         {
             long start = TimeOfX(x, width);
@@ -315,78 +335,64 @@ public partial class TimelineView : UserControl
                 var span = _vm.KeptTimeline.Spans.FirstOrDefault(s => start >= s.StartUs && start < s.EndUs);
                 if (span is not null) end = Math.Min(end, span.EndUs);
             }
-            int startIdx = Math.Clamp((int)(start * peaks.Length / Math.Max(1, _vm.DurationUs)), 0, peaks.Length - 1);
-            int endIdx = (int)(end * peaks.Length / Math.Max(1, _vm.DurationUs));
+            long startIndex = start * AudioLevelService.LoudnessPerSecond / 1_000_000;
+            if (startIndex >= loudness.Length) { loadedColumns = x; break; }
+            int startIdx = (int)Math.Max(0, startIndex);
+            int endIdx = (int)Math.Min(loudness.Length, end * AudioLevelService.LoudnessPerSecond / 1_000_000);
             if (endIdx <= startIdx) endIdx = startIdx + 1;
-            if (endIdx > peaks.Length) endIdx = peaks.Length;
-            float pk = 0f;
-            for (int k = startIdx; k < endIdx; k++)
-                if (peaks[k] > pk) pk = peaks[k];
-            colPeaks[x] = pk;
+            long sum = 0;
+            for (int k = startIdx; k < endIdx; k++) sum += loudness[k];
+            colLevels[x] = sum / (double)(endIdx - startIdx) - 120;
         }
+        // Unloaded columns stay blank rather than drawn as silence.
+        columns = loadedColumns;
+        if (columns < 2) return;
 
         var lineBrush = (Brush)(Application.Current.TryFindResource("Text.Secondary") ?? Brushes.DimGray);
         var fillBrush = (Brush)(Application.Current.TryFindResource("Border.Strong") ?? Brushes.DimGray);
-        var quietTint = (Brush)(Application.Current.TryFindResource("State.WarningTint") ?? Brushes.Transparent);
+        var quietTint = (Brush)(Application.Current.TryFindResource("Waveform.SilenceTint") ?? Brushes.Transparent);
         var quietLine = (Brush)(Application.Current.TryFindResource("State.Warning") ?? Brushes.Gold);
 
-        // 1) Quiet runs - collect contiguous spans, draw as one Path geometry
-        //    each for tint background + centerline. One frozen Path beats N
-        //    Rectangle/Line elements for layout/render cost.
+        // 1) Silences - one Path geometry each for the tint and centerline.
+        //    One frozen Path beats N Rectangle/Line elements for layout/render
+        //    cost. Each silence stays at least 1 px wide.
         var tintGeo = new StreamGeometry { FillRule = FillRule.Nonzero };
         var lineGeo = new StreamGeometry();
         bool hasQuiet = false;
         using (var tCtx = tintGeo.Open())
         using (var lCtx = lineGeo.Open())
         {
-            int runStart = -1;
             double half = WaveformLaneHeight / 2.0;
-            for (int x = 0; x <= columns; x++)
+            foreach (var (silenceStart, silenceEnd) in AudioLevelService.Silences(loudness))
             {
-                bool quiet = x < columns && colPeaks[x] < QuietThreshold;
-                if (quiet && runStart < 0) runStart = x;
-                else if (!quiet && runStart >= 0)
-                {
-                    int runLen = x - runStart;
-                    if (runLen >= 2)
-                    {
-                        hasQuiet = true;
-                        tCtx.BeginFigure(new Point(runStart, 0), isFilled: true, isClosed: true);
-                        tCtx.LineTo(new Point(runStart + runLen, 0), false, false);
-                        tCtx.LineTo(new Point(runStart + runLen, WaveformLaneHeight), false, false);
-                        tCtx.LineTo(new Point(runStart, WaveformLaneHeight), false, false);
-                        lCtx.BeginFigure(new Point(runStart, half), isFilled: false, isClosed: false);
-                        lCtx.LineTo(new Point(runStart + runLen, half), true, false);
-                    }
-                    runStart = -1;
-                }
+                if (_vm.IsCollapsed && !_vm.KeptTimeline.Spans.Any(s => silenceStart < s.EndUs && silenceEnd > s.StartUs)) continue;
+                double left = XOf(silenceStart, width);
+                double right = Math.Max(left + 1, XOf(silenceEnd, width));
+                hasQuiet = true;
+                tCtx.BeginFigure(new Point(left, 0), isFilled: true, isClosed: true);
+                tCtx.LineTo(new Point(right, 0), false, false);
+                tCtx.LineTo(new Point(right, WaveformLaneHeight), false, false);
+                tCtx.LineTo(new Point(left, WaveformLaneHeight), false, false);
+                lCtx.BeginFigure(new Point(left, half), isFilled: false, isClosed: false);
+                lCtx.LineTo(new Point(right, half), true, false);
             }
         }
-        if (hasQuiet)
-        {
-            tintGeo.Freeze();
-            lineGeo.Freeze();
-            WaveformCanvas.Children.Add(new System.Windows.Shapes.Path
-            {
-                Data = tintGeo,
-                Fill = quietTint,
-                IsHitTestVisible = false,
-            });
-        }
-
         // 2) Symmetric envelope as a single StreamGeometry path: top edge
         //    L→R, bottom edge R→L, closed. Freeze for cross-thread/GPU-friendly
         //    rendering. ~10x faster than a Polygon with 40k Points.
         var envGeo = new StreamGeometry { FillRule = FillRule.Nonzero };
         double half2 = WaveformLaneHeight / 2.0;
         double amp = half2 - 2;   // 2 px padding top/bottom
+        // A fixed dB scale, so the graph keeps its shape while a pass is still filling it.
+        double Height(int x) => amp * Math.Clamp((colLevels[x] - AudioLevelService.GraphFloorDb)
+            / (AudioLevelService.GraphCeilingDb - AudioLevelService.GraphFloorDb), 0, 1);
         using (var ctx = envGeo.Open())
         {
-            ctx.BeginFigure(new Point(0, half2 - colPeaks[0] * amp), isFilled: true, isClosed: true);
+            ctx.BeginFigure(new Point(0, half2 - Height(0)), isFilled: true, isClosed: true);
             for (int x = 1; x < columns; x++)
-                ctx.LineTo(new Point(x, half2 - colPeaks[x] * amp), true, false);
+                ctx.LineTo(new Point(x, half2 - Height(x)), true, false);
             for (int x = columns - 1; x >= 0; x--)
-                ctx.LineTo(new Point(x, half2 + colPeaks[x] * amp), true, false);
+                ctx.LineTo(new Point(x, half2 + Height(x)), true, false);
         }
         envGeo.Freeze();
         WaveformCanvas.Children.Add(new System.Windows.Shapes.Path
@@ -398,15 +404,24 @@ public partial class TimelineView : UserControl
             IsHitTestVisible = false,
         });
 
-        // 3) Yellow centerline on top of the envelope for quiet runs (drawn
-        //    last so it survives over the dim envelope hairline).
+        // 3) Silences over the envelope: a pixel column is ~3 s of a whole show,
+        //    so a silence rarely drops its column's level and the envelope would
+        //    hide a tint drawn behind it.
         if (hasQuiet)
         {
+            tintGeo.Freeze();
+            lineGeo.Freeze();
+            WaveformCanvas.Children.Add(new System.Windows.Shapes.Path
+            {
+                Data = tintGeo,
+                Fill = quietTint,
+                IsHitTestVisible = false,
+            });
             WaveformCanvas.Children.Add(new System.Windows.Shapes.Path
             {
                 Data = lineGeo,
                 Stroke = quietLine,
-                StrokeThickness = 1,
+                StrokeThickness = 2,
                 IsHitTestVisible = false,
             });
         }
@@ -586,8 +601,10 @@ public partial class TimelineView : UserControl
                     TargetNullValue = Confidence.Neutral,
                     FallbackValue = Confidence.Neutral,
                 });
-            BindingOperations.SetBinding(marker, SplitMarker.LabelProperty,
-                new Binding(nameof(Split.Label)) { Source = m });
+            // Bookends sit on the timeline's edges, where a centered label would hang outside it.
+            if (!m.IsBookend)
+                BindingOperations.SetBinding(marker, SplitMarker.LabelProperty,
+                    new Binding(nameof(Split.Label)) { Source = m });
             if (!m.IsBookend)
             {
                 marker.MouseLeftButtonDown += OnMarkerMouseDown;
@@ -763,6 +780,16 @@ public partial class TimelineView : UserControl
 
         if (!_dragMovedPastThreshold)
         {
+            // Ctrl+click toggles, Shift+click selects a range; neither moves the playhead.
+            var modifiers = Keyboard.Modifiers;
+            if (modifiers.HasFlag(ModifierKeys.Control) || modifiers.HasFlag(ModifierKeys.Shift))
+            {
+                if (modifiers.HasFlag(ModifierKeys.Shift)) _vm.SelectMarkerRange(split);
+                else _vm.ToggleMarkerSelection(split);
+                Redraw();
+                e.Handled = true;
+                return;
+            }
             // Click, not drag - select the marker AND seek the video preview
             // to it. SelectMarker only updates the VM's PlayheadUs; the host
             // (MainWindow) needs the SeekRequested signal to call LibVLC's

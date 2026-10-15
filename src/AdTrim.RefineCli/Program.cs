@@ -19,9 +19,77 @@ using AdTrim.Services;
 //
 // If no split list is supplied, embedded MP4 chapters are imported as splits.
 
+if (args.Length == 2 && args[0] == "--replay-suggestions")
+{
+    using var report = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(args[1]));
+    var options = new System.Text.Json.JsonSerializerOptions { IncludeFields = true, WriteIndented = true };
+    var evidence = System.Text.Json.JsonSerializer.Deserialize<SuggestionEvidence>(report.RootElement.GetProperty("Evidence"), options)
+        ?? throw new InvalidDataException("Missing suggestion evidence.");
+    long duration = report.RootElement.GetProperty("Media").GetProperty("DurationUs").GetInt64();
+    var uncertain = new List<CommercialBreakProposal>();
+    var breaks = SuggestionEngine.Classify(evidence, duration, uncertain.Add);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
+    {
+        DetectorVersion = SuggestionEngine.Version,
+        FrameMappingPerformed = false,
+        Breaks = breaks, UncertainBreaks = uncertain
+    }, options));
+    return 0;
+}
+
+if ((args.Length == 2 && (args[0] == "--detect" || args[0] == "--suggest" || args[0] == "--suggest-evidence"))
+    || (args.Length == 3 && args[0] == "--suggest-from-evidence"))
+{
+    var path = Path.GetFullPath(args[1]);
+    async Task<string> Hash()
+    {
+        await using var input = File.OpenRead(path);
+        return Convert.ToHexString(await System.Security.Cryptography.SHA256.HashDataAsync(input));
+    }
+    var before = await Hash();
+    using var cancellation = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
+    var detectorRunner = new FfmpegRunner();
+    var info = await new MediaProbeService(detectorRunner).ProbeAsync(path, cancellation.Token);
+    var watch = Stopwatch.StartNew();
+    SuggestionEvidence? evidence = null;
+    CommercialDetectionResult detection;
+    if (args[0] == "--suggest-from-evidence")
+    {
+        using var report = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(args[2], cancellation.Token));
+        if (!report.RootElement.GetProperty("SourceUnchanged").GetBoolean()
+            || report.RootElement.GetProperty("SourceSha256").GetString() != before
+            || report.RootElement.GetProperty("Media").GetProperty("DurationUs").GetInt64() != info.DurationUs)
+            throw new InvalidDataException("Evidence report does not match this unchanged source.");
+        evidence = System.Text.Json.JsonSerializer.Deserialize<SuggestionEvidence>(report.RootElement.GetProperty("Evidence"),
+            new System.Text.Json.JsonSerializerOptions { IncludeFields = true }) ?? throw new InvalidDataException("Missing suggestion evidence.");
+        detection = await new SuggestionEngine(detectorRunner).AnalyzeEvidenceAsync(path, info, evidence, cancellation.Token);
+    }
+    else if (args[0] == "--suggest-evidence")
+    {
+        evidence = await new SuggestionEvidenceCollector(detectorRunner).CollectAsync(path, info, null, cancellation.Token);
+        detection = await new SuggestionEngine(detectorRunner).AnalyzeEvidenceAsync(path, info, evidence, cancellation.Token);
+    }
+    else detection = args[0] == "--suggest"
+        ? await new SuggestionEngine(detectorRunner).AnalyzeAsync(path, info, cancellationToken: cancellation.Token)
+        : await new CommercialBreakDetector(detectorRunner).AnalyzeAsync(path, info, cancellationToken: cancellation.Token);
+    var after = await Hash();
+    if (before != after) throw new IOException("Source changed during analysis.");
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
+    {
+        SourceSha256 = before, SourceUnchanged = true, ElapsedSeconds = watch.Elapsed.TotalSeconds,
+        PeakWorkingSetBytes = Process.GetCurrentProcess().PeakWorkingSet64,
+        Media = info, Detection = detection, Evidence = evidence,
+    }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true, IncludeFields = true }));
+    return 0;
+}
+
 if (args.Length == 0)
 {
     Console.Error.WriteLine("usage: refine-cli <source.mp4> [t1,t2,...] (seconds)");
+    Console.Error.WriteLine("       refine-cli --detect|--suggest|--suggest-evidence <source.mp4>");
+    Console.Error.WriteLine("       refine-cli --replay-suggestions <evidence-report.json> (no frame mapping)");
+    Console.Error.WriteLine("       refine-cli --suggest-from-evidence <source.mp4> <evidence-report.json>");
     return 64;
 }
 

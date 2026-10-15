@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -38,7 +39,7 @@ internal static partial class Program
         var updateSignature = updateKey.SignData(updateBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
         var updateHandler = new SmokeUpdateHandler(updateBytes, updateSignature);
         var updateService = new UpdateService(directory, updateKey.ExportSubjectPublicKeyInfoPem(),
-            new System.Net.Http.HttpClient(updateHandler));
+            new System.Net.Http.HttpClient(updateHandler), installed: "1.1.0");
         typeof(App).GetField("_updates", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(app, updateService);
         // The harness owns its windows; do not join the installed app's single-instance lifecycle.
         app.Startup -= (StartupEventHandler)Delegate.CreateDelegate(typeof(StartupEventHandler), app,
@@ -126,7 +127,152 @@ internal static partial class Program
                 var vm = (MainViewModel)window.DataContext;
                 for (int i = 0; i < 250 && (!vm.IsFileLoaded || vm.IsBusy); i++) await Task.Delay(20);
                 Require(window.Ready.IsCompletedSuccessfully && vm.IsFileLoaded && !vm.IsBusy, "Launch-file startup completes");
+                Require(((MenuItem)window.FindName("DefaultImportedMarkers")).IsChecked,
+                    "New recordings default to imported markers");
+                Require(!((MenuItem)window.FindName("UseOriginalImportedMarkersMenuItem")).IsEnabled,
+                    "Imported marker action is disabled when a recording has no chapters");
+                var markersButton = (Button)window.FindName("MarkersButton");
+                Require(window.FindName("MarkerSetLabel") is null && ButtonText(markersButton) == "Markers ▾",
+                    "Marker-set button names the source without an Edited suffix: " + ButtonText(markersButton));
+                var mainMenu = (Menu)window.FindName("MainMenu");
+                var fileMenu = (MenuItem)mainMenu.Items[0];
+                var toolsMenu = mainMenu.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "_Tools");
+                Require(fileMenu.Items.OfType<MenuItem>().All(item => item.Header?.ToString() is not ("Markers" or "Starting markers for new files")),
+                    "Marker sources moved out of the File menu");
+                toolsMenu.IsSubmenuOpen = true;
+                window.UpdateLayout();
+                var markersMenu = (MenuItem)window.FindName("AdBreakDetectionMenu");
+                markersMenu.ApplyTemplate();
+                markersMenu.IsSubmenuOpen = true;
+                window.UpdateLayout();
+                var markersPopup = (Popup)markersMenu.Template.FindName("PART_Popup", markersMenu);
+                var suggestionsMenu = markersMenu.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "AdTrim suggested markers");
+                Require(markersPopup.IsOpen && markersMenu.Items.OfType<MenuItem>().Select(item => item.Header?.ToString()).SequenceEqual(
+                        ["Revert to original imported markers", "AdTrim suggested markers", "Starting markers for new files", "Delete all markings"])
+                    && suggestionsMenu.Items.Count == 2,
+                    $"Tools > Ad break detection opens its marker-source actions (submenu={markersMenu.IsSubmenuOpen}, popup={markersPopup.IsOpen}, items={markersMenu.Items.Count})");
+                var analyzeItem = (MenuItem)window.FindName("AnalyzeAdBreaksMenuItem");
+                Require(analyzeItem.Header?.ToString() == (vm.HasAdTrimAnalysis ? "Analyze ad breaks again" : "Analyze ad breaks"),
+                    "The Analyze menu item names what it will do: " + analyzeItem.Header);
+                // While busy, marker actions wait, but the starting-markers preference stays reachable.
+                vm.IsBusy = true;
+                window.UpdateLayout();
+                Require(toolsMenu.IsEnabled && markersMenu.IsEnabled && ((MenuItem)window.FindName("StartingMarkersMenu")).IsEnabled
+                    && !suggestionsMenu.IsEnabled && !((MenuItem)window.FindName("UseOriginalImportedMarkersMenuItem")).IsEnabled
+                    && !markersMenu.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "Delete all markings").IsEnabled,
+                    "Busy disables marker actions but keeps the starting-markers preference reachable");
+                vm.IsBusy = false;
+                markersMenu.IsSubmenuOpen = false;
+                toolsMenu.IsSubmenuOpen = false;
+                ((Button)window.FindName("MarkersButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                window.UpdateLayout();
+                var markersButtonMenu = (ContextMenu)window.FindName("MarkersPopup");
+                Require(markersButtonMenu.IsOpen && !toolsMenu.IsSubmenuOpen && markersButtonMenu.Items.Count == 2
+                    && markersButtonMenu.Items.OfType<MenuItem>().Select(item => item.Header?.ToString()).SequenceEqual(
+                        ["Revert to original imported markers", "Revert to original AdTrim suggested markers"]),
+                    "Marker-set button opens the same Revert actions as the menu (analysis has its own button), not the Tools menu");
+                markersButtonMenu.IsOpen = false;
+                Require(((Button)window.FindName("ClearAllMarkingsButton")).IsEnabled,
+                    "Delete all markings has its own toolbar button");
+                toolsMenu.IsSubmenuOpen = true;
+                markersMenu.IsSubmenuOpen = true;
+                window.UpdateLayout();
+                var defaults = (MenuItem)window.FindName("StartingMarkersMenu");
+                defaults.ApplyTemplate();
+                defaults.IsSubmenuOpen = true;
+                window.UpdateLayout();
+                var importedDefault = (MenuItem)window.FindName("DefaultImportedMarkers");
+                importedDefault.ApplyTemplate();
+                Require(((TextBlock)importedDefault.Template.FindName("Checkmark", importedDefault)).Visibility == Visibility.Visible,
+                    "Starting marker preference has a visible checkmark");
+                defaults.IsSubmenuOpen = false;
+                markersMenu.IsSubmenuOpen = false;
+                toolsMenu.IsSubmenuOpen = false;
+                var beforeAnalysis = ReplaceMarkerSetCommand.Capture(vm);
+                var analysisKey = new MarkerSuggestionStore().Key(vm.SourcePath!, vm.SourceFingerprint!);
+                var cancelledAnalysis = (Task<MarkerSetState?>)Invoke(window, "AnalyzeCommercialsAsync", vm, analysisKey, CancellationToken.None)!;
+                window.UpdateLayout();
+                var cancelButton = (Button)window.FindName("CancelCommercialAnalysisButton");
+                var analysisToolbar = (FrameworkElement)window.FindName("TimelineToolbar");
+                Require(((FrameworkElement)window.FindName("AnalysisPanel")).IsVisible && cancelButton.IsVisible && cancelButton.IsEnabled
+                    && analysisToolbar.IsVisible && !analysisToolbar.IsEnabled
+                    && !((FrameworkElement)window.FindName("StatusOverridePanel")).IsVisible
+                    && !string.IsNullOrEmpty(((TextBlock)window.FindName("AnalysisStageText")).Text)
+                    && ((System.Windows.Documents.Run)window.FindName("AnalysisTimeLeftText")).Text == ""
+                    && window.TaskbarItemInfo?.ProgressState is System.Windows.Shell.TaskbarItemProgressState.Normal,
+                    "During analysis the progress shows once, over the timeline, with taskbar progress and a clickable Cancel");
+                var percentText = (TextBlock)window.FindName("AnalysisPercentText");
+                var stageText = (TextBlock)window.FindName("AnalysisStageText");
+                var timeLeftLine = ((System.Windows.Documents.Run)window.FindName("AnalysisTimeLeftText")).Parent as TextBlock;
+                Require(ButtonText(cancelButton) == "Cancel analysis"
+                    && percentText.TranslatePoint(new Point(percentText.ActualWidth, 0), stageText).X <= 0
+                    && percentText.FontSize >= 2.5 * stageText.FontSize
+                    && cancelButton.TranslatePoint(new Point(), timeLeftLine!).Y - timeLeftLine!.ActualHeight is >= 16 and <= 24,
+                    "Large percentage sits left of the step text; Cancel analysis is on its own line 16-24 px below the time left");
+                var frosted = new[] { analysisToolbar, (FrameworkElement)window.FindName("TimelineScroll") };
+                Require(frosted.All(element => element.Effect is System.Windows.Media.Effects.BlurEffect),
+                    "Toolbar and timeline are frosted while analysis runs");
+                cancelButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Require(await cancelledAnalysis is null && !vm.IsBusy && vm.CurrentMarkerSetId() == beforeAnalysis.ContentId(),
+                    "Cancel analysis leaves existing splits and exclusions intact");
+                var completedAnalysis = await (Task<MarkerSetState?>)Invoke(window, "AnalyzeCommercialsAsync", vm, analysisKey, CancellationToken.None)!;
+                Require(completedAnalysis is { Splits.Count: 0 } && vm.CurrentMarkerSetId() == beforeAnalysis.ContentId(),
+                    "Analyzing ad-free disposable media does not mutate the editor: " + vm.Banner);
+                Require(vm.Banner is { Kind: StatusKind.Success } finished && finished.Title.StartsWith("Ad-break analysis finished in ")
+                    && finished.Body.StartsWith("Found 0 ad breaks and 0 uncertain red markers.")
+                    && window.TaskbarItemInfo?.ProgressState is System.Windows.Shell.TaskbarItemProgressState.None,
+                    "A finished analysis summarizes its result and clears taskbar progress: " + vm.Banner);
+                Require(new[] { "TimelineToolbar", "TimelineScroll" }.All(name => ((FrameworkElement)window.FindName(name)).Effect is null),
+                    "Frosting clears when analysis finishes");
+                var timeLeft = typeof(MainWindow).GetMethod("TimeLeftText", BindingFlags.Static | BindingFlags.NonPublic)!;
+                string? Left(double seconds, double done) => (string?)timeLeft.Invoke(null, [TimeSpan.FromSeconds(seconds), done, 1 - done]);
+                Require(Left(4, .5) is null && Left(30, .01) is null && Left(30, .5) == "Less than a minute left"
+                    && Left(60, .25) == "About 3 min left",
+                    "Time left waits for a stable rate, then rounds up to whole minutes");
+                window.UpdateLayout();
+                var analyzeButton = (Button)window.FindName("AnalyzeAdBreaksButton");
+                Require(vm.HasAdTrimAnalysis && analyzeButton.Content is StackPanel labels
+                    && labels.Children.OfType<TextBlock>().Single(x => x.IsVisible).Text == "Analyze ad breaks again",
+                    "After an analysis the toolbar offers Analyze ad breaks again");
+                // The discard question comes before any analysis work; declining runs nothing.
+                var askField = typeof(MainWindow).GetField("_askDiscardEdits", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var realAsk = askField.GetValue(window);
+                bool? busyWhenAsked = null;
+                askField.SetValue(window, new Func<string, string, bool>((_, _) => { busyWhenAsked = vm.IsBusy; return false; }));
+                var editedBefore = vm.CurrentMarkerSetId();
+                if (vm.IsTimelineEdited)
+                {
+                    bool analysisStarted = false;
+                    System.ComponentModel.PropertyChangedEventHandler watch = (_, args) =>
+                    { if (args.PropertyName == nameof(MainViewModel.IsAnalyzingCommercials) && vm.IsAnalyzingCommercials) analysisStarted = true; };
+                    vm.PropertyChanged += watch;
+                    analyzeButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    await Task.Delay(300);
+                    vm.PropertyChanged -= watch;
+                    Require(busyWhenAsked == false && !analysisStarted && vm.CurrentMarkerSetId() == editedBefore,
+                        "Analyze again asks before analyzing, and Cancel keeps the edits without running analysis");
+                }
+                askField.SetValue(window, realAsk);
+                Invoke(window, "SetCollapsed", vm, true);
+                Invoke(window, "ApplyMarkerSet", vm, completedAnalysis!, "Analyze ad breaks", false);
+                Require(!vm.IsCollapsed && vm.Segments.Count == 1 && !vm.Segments[0].IsExcluded,
+                    "Applying suggestions leaves stale collapsed playback and includes unclassified video");
+                Require(ButtonText(markersButton) == "AdTrim suggested markers ▾",
+                    "Marker-set button names AdTrim suggested markers once they are applied: " + ButtonText(markersButton));
+                vm.CommandStack.Undo();
+                Require(vm.CurrentMarkerSetId() == beforeAnalysis.ContentId(), "Undo restores the complete previous edit after analysis");
+                vm.IsExportScreen = true;
+                window.UpdateLayout();
+                Require(!suggestionsMenu.IsEnabled && !((MenuItem)window.FindName("UseOriginalImportedMarkersMenuItem")).IsEnabled
+                    && !markersMenu.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "Delete all markings").IsEnabled
+                    && !((Button)window.FindName("MarkersButton")).IsEnabled,
+                    "Marker replacement is unavailable during export");
+                Invoke(window, "OnUseAdTrimSuggestions", window, new RoutedEventArgs());
+                Require(vm.CurrentMarkerSetId() == beforeAnalysis.ContentId(), "Export also blocks marker handler invocation");
+                vm.IsExportScreen = false;
+
                 await CheckMultipleWindows(app, window, source, directory);
+                await CheckStartingMarkers(app, source, directory);
                 Require(vm.IsFileLoaded && vm.Markers.Count == 4, "Fixture and sidecar loaded");
                 var loadedSource = vm.SourcePath;
                 vm.SourcePath = null;
@@ -167,6 +313,113 @@ internal static partial class Program
                             boundaryKey + " reaches the timeline boundary in " + (vm.IsCollapsed ? "collapsed" : "full") + " view");
                     }
                 }
+                if (vm.IsCollapsed) Invoke(window, "SetCollapsed", vm, false);
+                Invoke(window, "OnSelectAllMarkers", window, new RoutedEventArgs());
+                int internalMarkers = vm.Markers.Count(m => !m.IsBookend);
+                Require(vm.SelectedMarkerCount == internalMarkers
+                    && vm.SelectionKind == (internalMarkers > 1 ? SelectionKind.Markers : SelectionKind.Marker),
+                    "Select all markers selects every marker except the bookends");
+                if (internalMarkers > 1)
+                {
+                    var times = vm.Markers.Select(m => m.TimeUs).ToList();
+                    var moveKey = new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,
+                        PresentationSource.FromVisual(window), 0, System.Windows.Input.Key.M)
+                        { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent };
+                    keyHandler.Invoke(window, new object[] { window, moveKey });
+                    Require(moveKey.Handled && vm.Markers.Select(m => m.TimeUs).SequenceEqual(times)
+                        && vm.StatusOverride?.Contains("single marker") == true,
+                        "M does nothing but explain itself when several markers are selected");
+                    var deleteKey = new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,
+                        PresentationSource.FromVisual(window), 0, System.Windows.Input.Key.Delete)
+                        { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent };
+                    keyHandler.Invoke(window, new object[] { window, deleteKey });
+                    Require(deleteKey.Handled && vm.Markers.All(m => m.IsBookend) && vm.SelectionKind == SelectionKind.None,
+                        "Del deletes exactly the selected markers");
+                    vm.CommandStack.Undo();
+                    Require(vm.Markers.Select(m => m.TimeUs).SequenceEqual(times), "One undo restores all deleted markers");
+                }
+                vm.ClearSelection();
+                System.Windows.Input.KeyEventArgs Press(System.Windows.Input.Key k)
+                {
+                    var args = new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,
+                        PresentationSource.FromVisual(window), 0, k) { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent };
+                    keyHandler.Invoke(window, new object[] { window, args });
+                    return args;
+                }
+                // Alt+arrows (handler invoked directly: modifiers cannot be simulated here).
+                var internalSorted = vm.Markers.Where(m => !m.IsBookend).OrderBy(m => m.TimeUs).ToList();
+                if (internalSorted.Count > 0)
+                {
+                    Invoke(window, "SeekTo", vm, 0L, true);
+                    Invoke(window, "JumpToMarker", vm, 1);
+                    Require(vm.SelectedMarker == internalSorted[0] && vm.PlayheadUs == internalSorted[0].TimeUs,
+                        "Next marker selects and goes to the first marker after the playhead");
+                    Invoke(window, "JumpToMarker", vm, -1);
+                    Require(vm.SelectedMarker == internalSorted[0] && vm.StatusOverride?.Contains("No marker before") == true,
+                        "Previous marker explains when there is none");
+                }
+                // Ctrl+Alt+A: only markers in the zoomed, scrolled-to part of the timeline.
+                if (internalSorted.Count > 1)
+                {
+                    vm.ZoomFactor = 32;
+                    window.UpdateLayout();
+                    var scroll = (ScrollViewer)window.FindName("TimelineScroll");
+                    var timelineWidth = ((FrameworkElement)window.FindName("Timeline")).ActualWidth;
+                    // Centre the first marker so at least one marker is on screen and others are not.
+                    scroll.ScrollToHorizontalOffset(timelineWidth * internalSorted[0].TimeUs / (double)vm.DurationUs - scroll.ViewportWidth / 2);
+                    window.UpdateLayout();
+                    Invoke(window, "OnSelectVisibleMarkers", window, new RoutedEventArgs());
+                    var (visibleFrom, visibleTo) = ((long, long))Invoke(window, "VisibleTimelineRange", vm)!;
+                    var expected = internalSorted.Where(m => m.TimeUs >= visibleFrom && m.TimeUs <= visibleTo).ToList();
+                    Require(expected.Count > 0 && expected.Count < internalSorted.Count && vm.SelectedMarkers.SequenceEqual(expected),
+                        $"Select visible markers selects only markers on screen ({expected.Count} of {internalSorted.Count})");
+                    window.UpdateLayout();   // the scrollbar settles in the pass after the scroll
+                    var timelineView = (FrameworkElement)window.FindName("Timeline");
+                    var waveformLane = (FrameworkElement)timelineView.FindName("WaveformCanvas");
+                    var waveformBottom = waveformLane.TransformToAncestor(scroll).TransformBounds(new Rect(waveformLane.RenderSize)).Bottom;
+                    Require(scroll.ComputedHorizontalScrollBarVisibility == Visibility.Visible && waveformBottom <= scroll.ViewportHeight + 0.5,
+                        $"Zoom scrollbar leaves the whole waveform visible (bottom {waveformBottom:0.#}, viewport {scroll.ViewportHeight:0.#}, bar {scroll.ComputedHorizontalScrollBarVisibility}, timeline {timelineView.ActualHeight:0.#})");
+                    vm.ClearSelection();
+                    vm.ZoomFactor = 1;
+                    window.UpdateLayout();
+                }
+                // J / K / L shuttle.
+                var player = (AdTrim.ViewModels.MpvPreviewViewModel)typeof(MainWindow)
+                    .GetField("_previewAfter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                Invoke(window, "SeekTo", vm, vm.DurationUs / 2, true);
+                await Task.Delay(400);
+                Require(Press(System.Windows.Input.Key.L).Handled && vm.StatusOverride?.StartsWith("Playing 1") == true, "L plays forward");
+                for (int i = 0; i < 100 && !player.IsPlaying; i++) await Task.Delay(20);
+                Require(player.IsPlaying, "L starts playback");
+                Press(System.Windows.Input.Key.L);
+                Require(vm.StatusOverride?.StartsWith("Playing 2") == true, "Pressing L again doubles the speed");
+                Press(System.Windows.Input.Key.K);
+                for (int i = 0; i < 100 && player.IsPlaying; i++) await Task.Delay(20);
+                Require(!player.IsPlaying && vm.StatusOverride == "Paused.", "K pauses");
+                long beforeRewind = vm.PlayheadUs;
+                Require(Press(System.Windows.Input.Key.J).Handled, "J starts rewinding");
+                await Task.Delay(600);
+                Press(System.Windows.Input.Key.K);
+                long afterRewind = vm.PlayheadUs;
+                await Task.Delay(300);
+                Require(afterRewind < beforeRewind && vm.PlayheadUs == afterRewind, "J rewinds the playhead and K stops it");
+                // F1 shortcut list (modal: closed as soon as it appears).
+                // Poll until the dialog is visible; one idle callback can run before it is shown.
+                bool listShown = false;
+                int attempts = 0;
+                void CloseListWhenShown()
+                {
+                    var list = app.Windows.OfType<AdTrim.Views.ShortcutsDialog>().SingleOrDefault();
+                    if (list is { IsVisible: true } || ++attempts >= 200)
+                    {
+                        listShown = list is { IsVisible: true };
+                        list?.Close();
+                        return;
+                    }
+                    _ = window.Dispatcher.BeginInvoke(CloseListWhenShown, DispatcherPriority.ApplicationIdle);
+                }
+                _ = window.Dispatcher.BeginInvoke(CloseListWhenShown, DispatcherPriority.ApplicationIdle);
+                Require(Press(System.Windows.Input.Key.F1).Handled && listShown, "F1 shows the keyboard shortcut list");
                 await Task.Delay(250);
                 RequireSubtitlesDisabled(window);
                 var savedBounds = vm.Markers.Select(m => m.TimeUs).ToArray();
@@ -441,7 +694,7 @@ internal static partial class Program
                 var nameBounds = rowName.TransformToAncestor(row).TransformBounds(new Rect(rowName.RenderSize));
                 var rangeBounds = rowRange.TransformToAncestor(row).TransformBounds(new Rect(rowRange.RenderSize));
                 Require(rangeBounds.Left - nameBounds.Right >= 16 && rowName.ActualWidth >= 140,
-                    "Long chapter names retain readable width and a clear gap before source times");
+                    $"Long chapter names retain readable width and a clear gap before source times (gap {rangeBounds.Left - nameBounds.Right:F0}, name {rowName.ActualWidth:F0}, range {rowRange.ActualWidth:F0}, row {row.ActualWidth:F0})");
                 Capture(progressDialog, Path.Combine(directory, "quiet-focus-details.png"));
                 var compactSummary = (TextBlock)progressDialog.FindName("PartsSummaryText");
                 Require(compactSummary.Text.Contains("parts kept ·") && !compactSummary.Text.Contains("final video"),
@@ -571,6 +824,14 @@ internal static partial class Program
         Require(firstVm.IsCompleted, "The other window's export still completes");
         firstView.Close();
         secondView.Close();
+        var stalePreferences = await UserPreferences.LoadAsync();
+        await (stalePreferences with { NewFileMarkerSource = NewFileMarkerSource.AdTrim }).SaveChangesAsync(stalePreferences, null, true);
+        await stalePreferences.SaveChangesAsync(stalePreferences, null);
+        Require((await UserPreferences.LoadAsync()).NewFileMarkerSource == NewFileMarkerSource.AdTrim,
+            "Saving another window preserves the changed starting-marker preference");
+        await stalePreferences.SaveChangesAsync(stalePreferences, null, true);
+        Require((await UserPreferences.LoadAsync()).NewFileMarkerSource == NewFileMarkerSource.Imported,
+            "An explicit starting-marker choice overrides a stale window snapshot");
         second.Close();
         for (int i = 0; i < 100 && second.IsVisible; i++) await Task.Delay(20);
     }
@@ -582,6 +843,33 @@ internal static partial class Program
         view.Closed += (_, _) => host.Close();
         host.Show();
         return host;
+    }
+
+    private static async Task CheckStartingMarkers(App app, string source, string directory)
+    {
+        var preferences = await UserPreferences.LoadAsync();
+        await (preferences with { NewFileMarkerSource = NewFileMarkerSource.AdTrim }).SaveChangesAsync(preferences, null, true);
+        var path = Path.Combine(directory, "new-recording.mp4");
+        File.Copy(source, path);
+        var window = await app.OpenRecordingAsync(path);
+        window.Opacity = 0;
+        window.ShowInTaskbar = false;
+        var vm = (MainViewModel)window.DataContext;
+        Require(!vm.IsBusy && vm.MarkerSetSource == MarkerSetSource.AdTrim && !vm.HasWorkingMarkings,
+            "New-file preference automatically analyzes a recording without a saved project");
+        vm.CommandStack.Execute(new ClearAllMarkingsCommand(vm));
+        window.Close();
+        for (int i = 0; i < 100 && window.IsVisible; i++) await Task.Delay(20);
+        Require(!window.IsVisible, "Blank current timeline saves before closing");
+        var reopened = await app.OpenRecordingAsync(path);
+        reopened.Opacity = 0;
+        reopened.ShowInTaskbar = false;
+        var restored = (MainViewModel)reopened.DataContext;
+        Require(restored.MarkerSetSource == MarkerSetSource.Blank && !restored.HasWorkingMarkings,
+            "A deliberately cleared saved project wins over the automatic-analysis preference");
+        reopened.Close();
+        for (int i = 0; i < 100 && reopened.IsVisible; i++) await Task.Delay(20);
+        await preferences.SaveChangesAsync(preferences, null, true);
     }
 
     private static async Task CheckMultipleWindows(App app, MainWindow original, string source, string directory)
@@ -692,7 +980,7 @@ internal static partial class Program
     private static void CheckSegmentToolbar(MainWindow window, MainViewModel vm, string directory)
     {
         var toolbar = (FrameworkElement)window.FindName("TimelineToolbar");
-        var refine = (Button)window.FindName("RefineAllButton");
+        var refine = (Button)window.FindName("AnalyzeAdBreaksButton");
         var exclude = (Button)window.FindName("ToggleExcludedButton");
         var summary = vm.RefineSummary;
         foreach (var size in new[] { new Size(1920, 1080), new Size(1280, 640) })
@@ -793,8 +1081,10 @@ internal static partial class Program
             for (int i = 0; i < 200 && after.IsSeeking; i++) await Task.Delay(20);
             vm.SelectMarker(added);
             Invoke(window, "OnMoveSelectedToPlayhead", window, new RoutedEventArgs());
+            for (int i = 0; i < 100 && added.TimeUs != after.PositionUs; i++) await Task.Delay(20);
             Require(added.TimeUs == after.PositionUs,
                 "Move split preserves the displayed timestamp despite a mismatched frame grid");
+            Require(vm.StatusOverride?.StartsWith("Moved marker from") == true, "Moving a marker to the playhead says so: " + vm.StatusOverride);
             var savedBoundary = added.TimeUs;
             Invoke(window, "SeekTo", vm, 0L, true);
             await Task.Delay(300);
@@ -900,6 +1190,20 @@ internal static partial class Program
         using var stream = File.Create(path);
         encoder.Save(stream);
     }
+    /// <summary>The text a button actually renders (after any ContentStringFormat).</summary>
+    private static string ButtonText(Button button)
+    {
+        button.ApplyTemplate();
+        button.UpdateLayout();
+        static IEnumerable<DependencyObject> Walk(DependencyObject node)
+        {
+            yield return node;
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+                foreach (var child in Walk(VisualTreeHelper.GetChild(node, i))) yield return child;
+        }
+        return string.Concat(Walk(button).OfType<TextBlock>().Select(x => x.Text));
+    }
+
     private static object? Invoke(object instance, string name, params object[] args)
         => instance.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(instance, args);
     private static void Require(bool condition, string message)

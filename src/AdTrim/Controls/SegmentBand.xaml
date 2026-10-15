@@ -24,7 +24,7 @@
               Margin="6,4,0,0"
               CornerRadius="3"
               Padding="6,2"
-              Background="#73000000">
+              Background="#CC000000">
         <StackPanel x:Name="LabelStack" Orientation="Horizontal">
           <Rectangle x:Name="LabelDot"
                      Width="6" Height="6"

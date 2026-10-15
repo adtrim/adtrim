@@ -54,6 +54,7 @@ internal static partial class Program
                 window.Height = 900;
                 window.UpdateLayout();
                 var vm = (MainViewModel)window.DataContext;
+                await WaitForTimelineMedia(window, vm);
                 // Consecutive frames here show clear head and ear movement without a scene cut.
                 await SeekWebsite(window, vm, 179_700_000);
                 CaptureWebsiteEditor(window, Path.Combine(output, "walkthrough-open.png"), scratch);
@@ -64,6 +65,7 @@ internal static partial class Program
                 await SeekWebsite(window, vm, 179_700_000);
                 CaptureWebsiteEditor(window, Path.Combine(output, "walkthrough-edit.png"), scratch);
                 CaptureWebsiteEditor(window, Path.Combine(output, "timeline-hero.png"), scratch);
+                await CaptureWebsiteTimelineAsync(window, vm, output, media.DurationUs);
                 Invoke(window, "OnExport", window, new RoutedEventArgs());
                 var view = (AdTrim.Views.ExportView)((ContentControl)window.FindName("ExportHost")).Content;
                 var exportVm = (ExportDialogViewModel)view.DataContext;
@@ -105,6 +107,74 @@ internal static partial class Program
             await Task.Delay(20);
         }
         throw new InvalidOperationException("Preview frames did not settle for the screenshot.");
+    }
+
+    // Close-ups for the What's new and home pages, rendered at 2x so they stay sharp on
+    // high-density screens. The video surfaces are not part of any crop.
+    private static void CaptureWebsiteCrops(MainWindow window, string output, params (string Name, Rect Area)[] crops)
+    {
+        const double scale = 2;
+        var content = (FrameworkElement)window.Content;
+        window.UpdateLayout();
+        var bitmap = new RenderTargetBitmap((int)(content.ActualWidth * scale), (int)(content.ActualHeight * scale),
+            96 * scale, 96 * scale, PixelFormats.Pbgra32);
+        bitmap.Render(content);
+        foreach (var (name, crop) in crops)
+        {
+            var area = crop;
+            area.Intersect(new Rect(content.RenderSize));
+            var pixels = new Int32Rect((int)Math.Round(area.X * scale), (int)Math.Round(area.Y * scale),
+                (int)Math.Round(area.Width * scale), (int)Math.Round(area.Height * scale));
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(new CroppedBitmap(bitmap, pixels)));
+            using var file = File.Create(Path.Combine(output, name));
+            encoder.Save(file);
+        }
+    }
+
+    private static Rect WebsiteBounds(MainWindow window, FrameworkElement element) =>
+        element.TransformToAncestor((Visual)window.Content).TransformBounds(new Rect(element.RenderSize));
+
+    private static async Task CaptureWebsiteTimelineAsync(MainWindow window, MainViewModel vm, string output, long durationUs)
+    {
+        var timeline = (AdTrim.Controls.TimelineView)window.FindName("Timeline");
+        var whole = WebsiteBounds(window, timeline);
+        whole.Inflate(8, 8);
+        var toolbar = Rect.Union(WebsiteBounds(window, (FrameworkElement)window.FindName("MarkersButton")),
+            WebsiteBounds(window, (FrameworkElement)window.FindName("ClearAllMarkingsButton")));
+        toolbar.Inflate(6, 6);
+        CaptureWebsiteCrops(window, output, ("timeline.png", whole), ("analyze-toolbar.png", toolbar));
+
+        // Zoom in on the second excluded scene (300-340 s) and the silences just after it.
+        vm.ZoomFactor = 3;
+        window.UpdateLayout();
+        ((ScrollViewer)window.FindName("TimelineScroll")).ScrollToHorizontalOffset(timeline.ActualWidth * 280_000_000 / durationUs);
+        await Task.Delay(300);
+        await WaitForTimelineMedia(window, vm);
+        var thumbs = WebsiteBounds(window, (FrameworkElement)timeline.FindName("ThumbCanvas"));
+        var wave = WebsiteBounds(window, (FrameworkElement)timeline.FindName("WaveformCanvas"));
+        double X(long us) => thumbs.X + thumbs.Width * us / durationUs;
+        CaptureWebsiteCrops(window, output,
+            ("timeline-detail.png", new Rect(new Point(X(285_000_000), thumbs.Top - 4), new Point(X(375_000_000), wave.Bottom + 4))));
+        vm.ZoomFactor = 1;
+        window.UpdateLayout();
+    }
+
+    // The site shows the finished thumbnail strip and waveform, not a partly loaded timeline.
+    private static async Task WaitForTimelineMedia(MainWindow window, MainViewModel vm)
+    {
+        object? Field(string name) => typeof(MainWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window);
+        for (int attempt = 0; attempt < 6000; attempt++)
+        {
+            if (Field("_audioPass") is AudioLevelPass { Completion.IsCompletedSuccessfully: true } && vm.AudioLoudness is not null
+                && Field("_thumbnailLoader") is ThumbnailLoader { IsBusy: false } && vm.ThumbnailTiles.Count > 0)
+            {
+                await Task.Delay(500);
+                if (Field("_thumbnailLoader") is ThumbnailLoader { IsBusy: false }) return;
+            }
+            await Task.Delay(20);
+        }
+        throw new InvalidOperationException("Thumbnails and the waveform did not finish loading for the screenshot.");
     }
 
     private static void CaptureWebsiteEditor(MainWindow window, string path, string scratch)

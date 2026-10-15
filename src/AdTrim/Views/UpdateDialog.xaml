@@ -21,13 +21,13 @@
           <TextBlock x:Name="Explanation" Margin="0,24,0,0" FontSize="14" LineHeight="21" TextWrapping="Wrap"/>
           <TextBlock x:Name="Reminder" Margin="0,16,0,0" FontSize="12" Foreground="{StaticResource Text.Secondary}" TextWrapping="Wrap" Visibility="Collapsed"/>
           <TextBlock x:Name="ManualInstall" Margin="0,24,0,0" FontSize="12" Foreground="{StaticResource Text.Secondary}" TextWrapping="Wrap"
-                     Text="Download the installer from the GitHub release page, close AdTrim, and run it to update. Your settings and projects are kept."/>
+                     Text="Download the installer from the What's new page, close AdTrim, and run it to update. Your settings and projects are kept."/>
         </StackPanel>
       </ScrollViewer>
       <Border Grid.Row="2" BorderBrush="{StaticResource Border.Subtle}" BorderThickness="0,1,0,0" Padding="20,16">
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
           <Button x:Name="LaterButton" Content="Later" Click="OnClose" Padding="18,7" Margin="0,0,10,0"/>
-          <Button x:Name="ReleaseButton" Content="View release on GitHub" Style="{StaticResource Button.Primary}" Padding="18,7" Click="OnRelease"/>
+          <Button x:Name="ReleaseButton" Content="See what's new" Style="{StaticResource Button.Primary}" Padding="18,7" Click="OnRelease"/>
         </StackPanel>
       </Border>
     </Grid>

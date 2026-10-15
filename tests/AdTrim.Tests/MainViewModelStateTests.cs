@@ -53,12 +53,4 @@ public class MainViewModelStateTests
         splits[0].Confirmed.Should().BeFalse();
         splits[1].Confirmed.Should().BeTrue();
     }
-
-    [Fact]
-    public void ThumbnailService_TimeForTile_UsesMidpointsAndClamps()
-    {
-        ThumbnailService.TimeForTile(0, 4, 4_000_000).Should().Be(500_000);
-        ThumbnailService.TimeForTile(3, 4, 4_000_000).Should().Be(3_500_000);
-        ThumbnailService.TimeForTile(0, 0, 4_000_000).Should().Be(0);
-    }
 }

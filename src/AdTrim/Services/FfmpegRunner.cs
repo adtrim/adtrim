@@ -70,6 +70,46 @@ public sealed class FfmpegRunner
         Action<string>? onStderrLine = null)
         => RunAsync(FfmpegPath, args, onStdoutLine, ct, onStderrLine);
 
+    public async Task<FfmpegResult> RunFfmpegBinaryAsync(IEnumerable<string> args,
+        Func<Stream, Task> consume, Action<string>? onDiagnostic, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var psi = new ProcessStartInfo
+        {
+            FileName = FfmpegPath, RedirectStandardOutput = true, RedirectStandardError = true,
+            UseShellExecute = false, CreateNoWindow = true, StandardErrorEncoding = Encoding.UTF8,
+        };
+        foreach (var arg in args) psi.ArgumentList.Add(arg);
+        using var process = new Process { StartInfo = psi };
+        var diagnostics = new StringBuilder();
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is null) return;
+            onDiagnostic?.Invoke(e.Data);
+            diagnostics.AppendLine(e.Data);
+            if (diagnostics.Length > 1_048_576) diagnostics.Remove(0, diagnostics.Length - 524_288);
+        };
+        process.Start();
+        process.BeginErrorReadLine();
+        void Kill()
+        {
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { /* exit race */ }
+        }
+        using var registration = ct.Register(Kill);
+        try { await consume(process.StandardOutput.BaseStream).ConfigureAwait(false); }
+        catch
+        {
+            Kill();
+            await process.WaitForExitAsync().ConfigureAwait(false);
+            process.WaitForExit();
+            throw;
+        }
+        await process.WaitForExitAsync().ConfigureAwait(false);
+        process.WaitForExit();
+        ct.ThrowIfCancellationRequested();
+        return new FfmpegResult { ExitCode = process.ExitCode, Stdout = "", Stderr = diagnostics.ToString() };
+    }
+
     public async Task<FfmpegResult> RunAsync(
         string exe, IEnumerable<string> args, Action<string>? onStdoutLine, CancellationToken ct,
         Action<string>? onStderrLine = null)

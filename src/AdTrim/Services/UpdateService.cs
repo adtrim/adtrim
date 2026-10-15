@@ -19,9 +19,12 @@ public sealed class UpdateService
     public string? Error { get; private set; }
     public event EventHandler? Changed;
 
-    public UpdateService(string directory, string publicKey, HttpClient? http = null)
+    private readonly string _installed;
+
+    public UpdateService(string directory, string publicKey, HttpClient? http = null, string? installed = null)
     {
         _directory = directory;
+        _installed = installed ?? AppVersion.Numeric;
         _publicKey = publicKey;
         _http = http ?? new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(12) };
     }
@@ -52,28 +55,56 @@ public sealed class UpdateService
             _state.Digest = digest;
             _state.Feed = bytes;
             _state.Signature = signature;
-            Notice = UpdateFeedReader.Select(feed, AppVersion.Numeric);
+            Notice = UpdateFeedReader.Select(feed, _installed);
             await SaveAsync(ct);
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException or JsonException or CryptographicException or ArgumentException or FormatException or OperationCanceledException)
         {
             Error = "Unable to verify update information. Check your connection and try again.";
-            Notice = null;
-            if (_state.Feed is not null && _state.Signature is not null)
-            {
-                try
-                {
-                    var cached = UpdateFeedReader.Verify(_state.Feed, _state.Signature, _publicKey, DateTimeOffset.UtcNow, _state.Revision);
-                    Notice = UpdateFeedReader.Select(cached, AppVersion.Numeric);
-                }
-                catch (Exception invalid) when (invalid is IOException or InvalidDataException or JsonException or CryptographicException or ArgumentException or FormatException) { }
-            }
+            Notice = CachedNotice();
         }
         finally
         {
             IsChecking = false;
             _gate.Release();
             Changed?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>Shows the last verified announcement at once, before a network check finishes.
+    /// Makes no requests; the saved feed is re-verified against the embedded key.</summary>
+    public async Task LoadCachedAsync(CancellationToken ct = default)
+    {
+        if (!await _gate.WaitAsync(0, ct)) return;
+        try
+        {
+            if (!_loaded)
+            {
+                await LoadAsync(ct);
+                _loaded = true;
+            }
+            Notice ??= CachedNotice();
+        }
+        // An unreadable saved state is reported by the network check that follows.
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException) { }
+        finally
+        {
+            _gate.Release();
+            Changed?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private UpdateNotice? CachedNotice()
+    {
+        if (_state.Feed is null || _state.Signature is null) return null;
+        try
+        {
+            var cached = UpdateFeedReader.Verify(_state.Feed, _state.Signature, _publicKey, DateTimeOffset.UtcNow, _state.Revision);
+            return UpdateFeedReader.Select(cached, _installed);
+        }
+        catch (Exception invalid) when (invalid is IOException or InvalidDataException or JsonException or CryptographicException or ArgumentException or FormatException)
+        {
+            return null;
         }
     }
 

@@ -136,19 +136,19 @@ public partial class SegmentBand : UserControl
             Bd.Effect = null;
         }
 
-        // Label chip
+        // Label chip: dark enough to read over filmstrip frames, not solid black.
         LabelTb.Text = Label ?? string.Empty;
         if (isExc)
         {
             LabelTb.Foreground = (Brush)(Application.Current.TryFindResource("Text.Secondary") ?? Brushes.LightGray);
-            LabelChip.Background = new SolidColorBrush(Color.FromArgb(0x8C, 0, 0, 0));
+            LabelChip.Background = new SolidColorBrush(Color.FromArgb(0xD9, 0, 0, 0));
             LabelDot.Visibility = Visibility.Visible;
             LabelTb.Text = (Label ?? "").ToUpperInvariant();
         }
         else
         {
             LabelTb.Foreground = (Brush)(Application.Current.TryFindResource("Text.Primary") ?? Brushes.White);
-            LabelChip.Background = new SolidColorBrush(Color.FromArgb(0x73, 0, 0, 0));
+            LabelChip.Background = new SolidColorBrush(Color.FromArgb(0xCC, 0, 0, 0));
             LabelDot.Visibility = Visibility.Collapsed;
         }
     }

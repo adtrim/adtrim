@@ -90,6 +90,8 @@
   <!-- Soft tinted brushes for selection/excluded fills (with alpha) -->
   <SolidColorBrush x:Key="Accent.SelectionFill" Color="#2E4F8CFF"/>
   <SolidColorBrush x:Key="State.WarningTint"    Color="#1AF5B84A"/>
+  <!-- Timeline silences: drawn over the waveform, so strong enough to read through it -->
+  <SolidColorBrush x:Key="Waveform.SilenceTint" Color="#66F5B84A"/>
   <SolidColorBrush x:Key="State.DangerTint"     Color="#12FF6B6B"/>
 
   <!-- =================================================================== -->

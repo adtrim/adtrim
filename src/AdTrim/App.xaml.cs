@@ -155,6 +155,20 @@ public partial class App : Application
         var win = NewWindow(path);
         _ = Task.Run(() => RecoverExportsAsync(win, _pipeServerCts.Token));
         _ = CheckUpdatesAtStartupAsync(win, _pipeServerCts.Token);
+        _ = Task.Run(CleanUpMediaCaches);
+    }
+
+    // Thumbnail and audio-level caches for recordings not opened in months, and formats this
+    // version no longer reads. Small, local, and never touches recordings or projects.
+    private static void CleanUpMediaCaches()
+    {
+        try
+        {
+            Services.MediaCacheCleanup.Run(Services.ThumbnailService.DefaultCacheRoot, Services.ThumbnailService.CurrentFolderSuffix,
+                Services.AudioLevelService.DefaultCacheRoot, Services.AudioLevelService.CacheVersion,
+                Services.MediaCacheCleanup.LegacyWaveformRoot, DateTime.UtcNow);
+        }
+        catch (Exception ex) { WriteCrashLog("Cache cleanup", ex); }
     }
 
     private async Task CheckUpdatesAtStartupAsync(MainWindow window, CancellationToken ct)
@@ -164,11 +178,17 @@ public partial class App : Application
         ct = automatic.Token;
         try
         {
+            // Yield first so window creation never waits on this, and turning checks off at once
+            // still cancels before any request.
+            await Task.Yield();
             if (!AutomaticUpdatesEnabled) return;
-            await window.Ready.WaitAsync(ct);
-            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+            // The last verified result shows immediately; the fresh check (two small files, about
+            // 0.2 s) runs alongside opening the recording rather than after it.
+            await Updates.LoadCachedAsync(ct);
             if (!AutomaticUpdatesEnabled) return;
             await Updates.CheckAsync(ct);
+            // Only an announcement waits for the window: never mid-open, never once the user has started.
+            await window.Ready.WaitAsync(ct);
             if (ct.IsCancellationRequested || !AutomaticUpdatesEnabled || UpdateStartupInterrupted || UpdateDialogOpen || !Updates.AnnouncementDue) return;
             var active = Windows.OfType<MainWindow>().FirstOrDefault(w => w.IsActive && w.CanAnnounceUpdate);
             if (active is not null && Windows.OfType<MainWindow>().All(w => w.CanAnnounceUpdate))

@@ -9,7 +9,7 @@ namespace AdTrim.Services;
 public sealed record UpdateAdvisory(string Id, string AffectedFrom, string FixedIn, string Importance, string Summary);
 public sealed record UpdateFeed(int Schema, long Revision, DateTimeOffset PublishedAt, DateTimeOffset? ExpiresAt,
     string LatestVersion, string Summary, UpdateAdvisory[] Advisories);
-public sealed record UpdateNotice(string Version, string Importance, string Summary, string[] AdvisoryIds)
+public sealed record UpdateNotice(string Version, string Importance, string Summary, string[] AdvisoryIds, string? Installed = null)
 {
     public string Title => Importance switch
     {
@@ -18,7 +18,10 @@ public sealed record UpdateNotice(string Version, string Importance, string Summ
         _ => $"AdTrim v{Version} is available"
     };
     public string Label => Importance == "regular" ? $"Update available: v{Version}" : $"{Title}: v{Version}";
-    public Uri ReleaseUri => new($"https://github.com/adtrim/adtrim/releases/tag/v{UpdateFeedReader.ParseVersion(Version)}");
+    // The versions travel in the fragment, which the browser never sends to the server.
+    public Uri ReleaseUri => new("https://adtrim.github.io/whats-new/#"
+        + (Installed is null ? "" : $"from={UpdateFeedReader.ParseVersion(Installed)}&")
+        + $"to={UpdateFeedReader.ParseVersion(Version)}");
 }
 
 public static class UpdateFeedReader
@@ -101,7 +104,7 @@ public static class UpdateFeedReader
         var importance = affected.Any(a => a.Importance == "urgent") ? "urgent" : affected.Length > 0 ? "security" : "regular";
         return new(feed.LatestVersion, importance,
             affected.Length > 0 ? string.Join("\n\n", affected.Select(a => a.Summary)) : feed.Summary,
-            affected.Select(a => a.Id).ToArray());
+            affected.Select(a => a.Id).ToArray(), installed);
     }
 
     private static void ValidateText(string value, int max)

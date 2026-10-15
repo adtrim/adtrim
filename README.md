@@ -2,7 +2,7 @@
 
 A Windows desktop editor for trimming commercials out of recorded TV - designed for the kind of MPEG-2 + AC3 broadcast captures that come out of Plex DVR, NextPVR, MythTV, and similar over-the-air recording stacks.
 
-AdTrim is a *manual* editor: you mark the cut points, review transitions, and export. It does not auto-detect commercials. It's the tool you reach for when you want frame-accurate control over the output, or when an automatic tool got it 95% right and you want to clean up the last 5%.
+AdTrim is a *manual* editor: you mark the cut points, review transitions, and export. **Analyze ad breaks** can suggest where the breaks are, but its suggestions are experimental markers for you to review; it never excludes anything on its own. It's the tool you reach for when you want frame-accurate control over the output, or when an automatic tool got it 95% right and you want to clean up the last 5%.
 
 > **Status:** v1.1 - usable but rough. Built primarily for one person's workflow (mine). Released publicly because others may find it useful.
 
@@ -36,7 +36,7 @@ Moving or refining a split preserves the adjacent exclusion decisions. Splitting
 
 Project saves run in the background. The status changes to **Saved** only after writing succeeds; opening another file, closing a project, and exiting flush pending edits. If the recording's folder cannot be written, saves use `%LOCALAPPDATA%\AdTrim\projects`. Reopening uses the newest valid matching save, including that fallback. Corrupt and newer-version projects are preserved. To reset a project completely, remove its fallback save as well as its adjacent sidecar.
 
-Waveform/thumbnail visibility, export acceleration, window bounds, and recent playback positions are stored separately in `%LOCALAPPDATA%\AdTrim\preferences.json`. Viewing and playback changes do not create project edits. Waveform and thumbnail extraction remain opt-in on a fresh setup.
+Waveform/thumbnail visibility, export acceleration, window bounds, and recent playback positions are stored separately in `%LOCALAPPDATA%\AdTrim\preferences.json`. Viewing and playback changes do not create project edits. The thumbnail strip and waveform are on for a fresh setup and can be turned off in the View menu.
 
 Export setup and progress replace the editor inside the recording window. The editor's position, zoom, and selection are retained when you return. During export, that window's editing commands are disabled; other recording windows remain available. Closing an exporting window asks whether to cancel its export, waits for cleanup, then closes only that window. Completed exports offer Open video, Open folder, and Back to editing. Multiple windows cannot export to the same destination or overwrite another open recording.
 
@@ -46,7 +46,7 @@ Export temporary files are tracked and removed after success, failure, or cancel
 
 ## What it doesn't do
 
-- No automatic commercial detection. (Use a separate tool like [Comskip](https://www.kaashoek.com/comskip/) first if you want that, then import its output as a starting point - chapter import is the closest thing today.)
+- No automatic cutting. Ad break suggestions only add markers, can miss or misplace breaks, and remain included until you exclude them. Chapters from a separate tool like [Comskip](https://www.kaashoek.com/comskip/) can also be imported as starting points.
 - No batch mode. One file at a time.
 - No frame-accurate audio cuts. Audio is stream-copied (AC3), which is packet-accurate, so cut boundaries can slip by up to ~32 ms. This is fine for commercial-trimming; not appropriate for music-video editing.
 - No direct `.ts`/`.mkv` editing yet.
@@ -118,6 +118,10 @@ dotnet test AdTrim.sln --no-build
 Some integration tests require local recording fixtures and report a skip when absent. See [Testing](docs/TESTING.md) for the application smoke check and fixture setup.
 
 ---
+
+## Marker sources
+
+See [Marker sources and experimental suggestions](docs/marker-sources.md) for switching original markers, clearing the timeline, and choosing the default for new files.
 
 ## Bundled components
 

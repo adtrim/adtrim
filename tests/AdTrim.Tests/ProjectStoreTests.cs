@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json;
 using System.Text;
 using AwesomeAssertions;
 using AdTrim.Models;
@@ -73,6 +74,28 @@ public class ProjectStoreTests : IDisposable
     }
 
     [Fact]
+    public void FailedReplaceBesideSource_FallsBackWithoutLeavingATempFile()
+    {
+        // A sidecar another program holds or protects must not collect stale .tmp files beside the recording.
+        var store = new ProjectStore(Path.Combine(_testDir, "fallback"));
+        var project = new AdTrimProject(2, _sourcePath, ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs),
+            _media, new(), new(), SidecarLocation.NextToSource);
+        var primary = store.Save(project);
+        var before = File.ReadAllBytes(primary);
+        File.SetAttributes(primary, FileAttributes.ReadOnly);
+        try
+        {
+            var saved = store.Save(project with { Splits = new() { new("a", 1_000_000, SplitSource.Manual, null, null, false, "Next") } });
+            Assert.Equal(store.AppDataFallbackPathFor(_sourcePath), saved);
+            Assert.Equal("Next", store.Load(_sourcePath, _media).Project!.Splits[0].ChapterTitle);
+            Assert.Equal(before, File.ReadAllBytes(primary));
+            Assert.False(File.Exists(primary + ".tmp"));
+            File.Delete(saved);
+        }
+        finally { File.SetAttributes(primary, FileAttributes.Normal); }
+    }
+
+    [Fact]
     public void VersionOne_LoadsAndChapterTitlesRoundtripInVersionTwo()
     {
         var store = new ProjectStore(Path.Combine(_testDir, "fallback"));
@@ -144,6 +167,29 @@ public class ProjectStoreTests : IDisposable
         var result = store.Load(_sourcePath, _media);
         result.Status.Should().Be(SidecarLoadStatus.LoadedWithMtimeWarning);
         result.Project.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void SchemaUpgrade_PreservesExactLegacySidecarBeforeSaving()
+    {
+        var dataDirectory = Path.Combine(_testDir, "appdata");
+        var store = new ProjectStore(Path.Combine(_testDir, "fallback"), dataDirectory);
+        var old = new AdTrimProject(2, _sourcePath, ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs),
+            _media, new(), new(), SidecarLocation.NextToSource);
+        store.Save(old);
+        var sidecar = store.SidecarPathFor(_sourcePath);
+        var original = File.ReadAllBytes(sidecar);
+
+        store.Save(old with { SchemaVersion = AdTrimProject.CurrentSchemaVersion, MarkerSetSource = MarkerSetSource.Imported });
+
+        var backup = Assert.Single(Directory.GetFiles(Path.Combine(dataDirectory, "rollback", "projects"), "*.adt.json"));
+        Assert.Equal(original, File.ReadAllBytes(backup));
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(dataDirectory, "rollback", "projects", "manifest.json")));
+        var record = Assert.Single(manifest.RootElement.EnumerateArray());
+        Assert.Equal(Path.GetFullPath(_sourcePath), record.GetProperty("SourcePath").GetString());
+        Assert.Equal(Path.GetFullPath(sidecar), record.GetProperty("OriginalPath").GetString());
+        Assert.Equal(Path.GetFullPath(backup), record.GetProperty("BackupPath").GetString());
+        Assert.Equal(SidecarLoadStatus.Loaded, store.Load(_sourcePath, _media).Status);
     }
 
     [Fact]

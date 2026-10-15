@@ -27,11 +27,18 @@ public sealed record SidecarLoadResult(SidecarLoadStatus Status, AdTrimProject? 
 /// </summary>
 public sealed class ProjectStore
 {
+    private static readonly object RollbackManifestGate = new();
     private readonly string _fallbackDirectory;
-    public ProjectStore(string? fallbackDirectory = null)
-        => _fallbackDirectory = fallbackDirectory ?? Path.Combine(
-            Environment.GetEnvironmentVariable("ADTRIM_DATA_DIR") ?? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AdTrim"), "projects");
+    private readonly string _rollbackDirectory;
+    public ProjectStore(string? fallbackDirectory = null, string? dataDirectory = null)
+    {
+        dataDirectory ??= fallbackDirectory is not null
+            ? Path.GetDirectoryName(Path.GetFullPath(fallbackDirectory))!
+            : Environment.GetEnvironmentVariable("ADTRIM_DATA_DIR") ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AdTrim");
+        _fallbackDirectory = fallbackDirectory ?? Path.Combine(dataDirectory, "projects");
+        _rollbackDirectory = Path.Combine(dataDirectory, "rollback", "projects");
+    }
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         WriteIndented = true,
@@ -123,6 +130,7 @@ public sealed class ProjectStore
         if (project.SchemaVersion < 1 || project.Fingerprint is null || project.Media is null
             || project.Splits is null || project.ExcludedSegmentIds is null || string.IsNullOrWhiteSpace(project.SourcePath))
             return "Project is missing required data.";
+        if (!Enum.IsDefined(project.MarkerSetSource)) return "Invalid marker source.";
         long duration = project.Fingerprint.DurationUs;
         if (duration <= 0 || project.Media.DurationUs != duration || project.Fingerprint.SizeBytes < 0)
             return "Invalid source metadata.";
@@ -140,18 +148,6 @@ public sealed class ProjectStore
         }
         segments.Add($"segment-{previous}-{duration}");
         return project.ExcludedSegmentIds.Any(id => !segments.Contains(id)) ? "Unknown excluded segment." : null;
-    }
-
-    private static void PreserveUnreadable(string path)
-    {
-        if (!File.Exists(path)) return;
-        try
-        {
-            var old = JsonSerializer.Deserialize<AdTrimProject>(File.ReadAllText(path), JsonOpts);
-            if (old is not null && old.SchemaVersion <= AdTrimProject.CurrentSchemaVersion && Validate(old) is null) return;
-        }
-        catch (JsonException) { }
-        throw new IOException("Existing project cannot be safely overwritten: " + path);
     }
 
     /// <summary>Atomic save: write to .tmp, fsync, rename. Falls back to AppData if next-to-source fails.</summary>
@@ -175,18 +171,84 @@ public sealed class ProjectStore
         return fallback;
     }
 
-    private static void WriteAtomic(string path, AdTrimProject project)
+    private void WriteAtomic(string path, AdTrimProject project)
     {
-        PreserveUnreadable(path);
+        EnsureReadableAndBackedUp(path, project);
         var tmp = path + ".tmp";
-        using (var fs = File.Create(tmp))
+        try
         {
-            JsonSerializer.Serialize(fs, project, JsonOpts);
-            fs.Flush(flushToDisk: true);
+            using (var fs = File.Create(tmp))
+            {
+                JsonSerializer.Serialize(fs, project, JsonOpts);
+                fs.Flush(flushToDisk: true);
+            }
+            if (File.Exists(path)) File.Replace(tmp, path, destinationBackupFileName: null);
+            else File.Move(tmp, path);
         }
-        if (File.Exists(path)) File.Replace(tmp, path, destinationBackupFileName: null);
-        else File.Move(tmp, path);
+        finally
+        {
+            // A failed replace can move the original away; then the temp file is the only copy on disk.
+            if (File.Exists(tmp) && File.Exists(path)) File.Delete(tmp);
+        }
     }
+
+    private void EnsureReadableAndBackedUp(string path, AdTrimProject replacement)
+    {
+        if (!File.Exists(path)) return;
+        AdTrimProject? old;
+        try { old = JsonSerializer.Deserialize<AdTrimProject>(File.ReadAllText(path), JsonOpts); }
+        catch (JsonException ex) { throw new IOException("Existing project cannot be safely overwritten: " + path, ex); }
+        if (old is null || Validate(old) is not null)
+            throw new IOException("Existing project cannot be safely overwritten: " + path);
+        if (old.SchemaVersion > AdTrimProject.CurrentSchemaVersion)
+            throw new IOException("This project was saved by a newer AdTrim version and cannot be overwritten.");
+        if (old.SchemaVersion >= replacement.SchemaVersion) return;
+
+        Directory.CreateDirectory(_rollbackDirectory);
+        var originalBytes = File.ReadAllBytes(path);
+        var contentHash = Convert.ToHexString(SHA256.HashData(originalBytes));
+        var backup = Path.Combine(_rollbackDirectory,
+            $"{FingerprintHash(replacement.SourcePath)}-schema{old.SchemaVersion}-{contentHash}.adt.json");
+        if (!File.Exists(backup))
+        {
+            var tempBackup = backup + ".tmp";
+            try
+            {
+                using (var fs = new FileStream(tempBackup, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                { fs.Write(originalBytes); fs.Flush(flushToDisk: true); }
+                File.Move(tempBackup, backup);
+            }
+            finally { if (File.Exists(tempBackup)) File.Delete(tempBackup); }
+        }
+        if (!SHA256.HashData(File.ReadAllBytes(backup)).SequenceEqual(SHA256.HashData(originalBytes)))
+            throw new IOException("The rollback backup could not be verified. Existing project was preserved.");
+        RecordRollbackBackup(replacement.SourcePath, path, backup, old.SchemaVersion);
+    }
+
+    private void RecordRollbackBackup(string sourcePath, string originalPath, string backupPath, int schemaVersion)
+    {
+        lock (RollbackManifestGate)
+        {
+            var manifestPath = Path.Combine(_rollbackDirectory, "manifest.json");
+            var records = File.Exists(manifestPath)
+                ? JsonSerializer.Deserialize<List<RollbackRecord>>(File.ReadAllText(manifestPath)) ?? new()
+                : new List<RollbackRecord>();
+            if (records.Any(r => StringComparer.OrdinalIgnoreCase.Equals(r.BackupPath, backupPath))) return;
+            records.Add(new RollbackRecord(Path.GetFullPath(sourcePath), Path.GetFullPath(originalPath),
+                Path.GetFullPath(backupPath), schemaVersion, DateTimeOffset.UtcNow));
+            var temp = manifestPath + ".tmp";
+            try
+            {
+                File.WriteAllText(temp, JsonSerializer.Serialize(records, new JsonSerializerOptions { WriteIndented = true }));
+                if (File.Exists(manifestPath)) File.Replace(temp, manifestPath, null);
+                else File.Move(temp, manifestPath);
+            }
+            finally { if (File.Exists(temp)) File.Delete(temp); }
+        }
+    }
+
+    private sealed record RollbackRecord(string SourcePath, string OriginalPath, string BackupPath,
+        int SchemaVersion, DateTimeOffset SavedUtc);
 
     private static string FingerprintHash(string sourcePath)
     {

@@ -3,6 +3,93 @@ using AdTrim.ViewModels;
 
 namespace AdTrim.Commands;
 
+public sealed record MarkerSetState(
+    IReadOnlyList<PersistedSplit> Splits,
+    IReadOnlyList<string> ExcludedSegmentIds,
+    string? StartChapterTitle,
+    MarkerSetSource Source,
+    string? BaselineId)
+{
+    public string ContentId()
+    {
+        // JSON escapes names and writes numbers independently of the UI culture.
+        var canonical = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            Splits = Splits.OrderBy(s => s.TimeUs).Select(s => new
+                { s.TimeUs, s.Source, s.OriginalTimeUs, s.Confidence, s.Confirmed, s.ChapterTitle }),
+            StartChapterTitle,
+            Exclusions = ExcludedSegmentIds.OrderBy(id => id, StringComparer.Ordinal),
+        });
+        return "v2:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(canonical));
+    }
+}
+
+public sealed class ReplaceMarkerSetCommand : IEditCommand
+{
+    private readonly MainViewModel _vm;
+    private readonly MarkerSetState _before;
+    private readonly MarkerSetState _after;
+    private readonly string _description;
+
+    public ReplaceMarkerSetCommand(MainViewModel vm, MarkerSetState after, string description)
+    {
+        _vm = vm;
+        _before = Capture(vm);
+        _after = after;
+        _description = description;
+    }
+
+    public string Description => _description;
+    public void Do() => Apply(_after);
+    public void Undo() => Apply(_before);
+    private void Apply(MarkerSetState state)
+    {
+        _vm.ClearSelection();
+        _vm.Markers.Clear();
+        _vm.Segments.Clear();
+        _vm.ExcludedSegmentIds.Clear();
+        _vm.Markers.Add(new Split { TimeUs = 0, Confirmed = true, Label = "Start", ChapterTitle = state.StartChapterTitle });
+        foreach (var split in state.Splits.OrderBy(s => s.TimeUs))
+            _vm.Markers.Add(new Split
+            {
+                Id = split.Id,
+                TimeUs = split.TimeUs,
+                Source = split.Source,
+                OriginalTimeUs = split.OriginalTimeUs,
+                Confidence = split.Confidence,
+                Confirmed = split.Confirmed,
+                ChapterTitle = split.ChapterTitle,
+            });
+        _vm.Markers.Add(new Split { TimeUs = _vm.DurationUs, Confirmed = true, Label = "End" });
+        foreach (var id in state.ExcludedSegmentIds) _vm.ExcludedSegmentIds.Add(id);
+        _vm.MarkerSetSource = state.Source;
+        _vm.MarkerBaselineId = state.BaselineId;
+        _vm.RebuildSegmentsFromSplits();
+        if (state.Source == MarkerSetSource.Blank && state.BaselineId is null)
+            _vm.MarkerBaselineId = _vm.CurrentMarkerSetId();
+    }
+
+    public static MarkerSetState Capture(MainViewModel vm) => new(
+        vm.Markers.Where(m => !m.IsBookend).Select(m => new PersistedSplit(m.Id, m.TimeUs, m.Source,
+            m.OriginalTimeUs, m.Confidence, m.Confirmed, m.ChapterTitle)).ToArray(),
+        vm.ExcludedSegmentIds.ToArray(), vm.Markers.FirstOrDefault()?.ChapterTitle,
+        vm.MarkerSetSource, vm.MarkerBaselineId);
+}
+
+public sealed class ClearAllMarkingsCommand : IEditCommand
+{
+    private readonly ReplaceMarkerSetCommand _replace;
+    public ClearAllMarkingsCommand(MainViewModel vm)
+    {
+        _replace = new ReplaceMarkerSetCommand(vm,
+            new MarkerSetState(Array.Empty<PersistedSplit>(), Array.Empty<string>(), null,
+                MarkerSetSource.Blank, null), "Delete all markings");
+    }
+    public string Description => _replace.Description;
+    public void Do() => _replace.Do();
+    public void Undo() => _replace.Undo();
+}
+
 /// <summary>Add a split at a specific time. Undo removes it and rebuilds segments.</summary>
 public sealed class AddSplitCommand : IEditCommand
 {
@@ -105,6 +192,37 @@ public sealed class DeleteSplitCommand : IEditCommand
     public void Undo()
     {
         _vm.Markers.Insert(_originalIndex, _split);
+        _vm.RebuildSegmentsFromSplits(_exclusions);
+    }
+}
+
+/// <summary>Delete several splits as one undo step, restoring positions and exclusions on undo.</summary>
+public sealed class DeleteSplitsCommand : IEditCommand
+{
+    private readonly MainViewModel _vm;
+    private readonly IReadOnlyList<Split> _splits;
+    private (int Index, Split Split)[] _original = [];
+    private HashSet<string>? _exclusions;
+
+    public DeleteSplitsCommand(MainViewModel vm, IEnumerable<Split> splits)
+    {
+        _vm = vm;
+        _splits = splits.Where(s => !s.IsBookend).ToList();
+    }
+
+    public string Description => $"Delete {_splits.Count} splits";
+
+    public void Do()
+    {
+        _exclusions ??= _vm.CaptureExclusions();
+        _original = _splits.Select(s => (_vm.Markers.IndexOf(s), s)).Where(x => x.Item1 >= 0).OrderBy(x => x.Item1).ToArray();
+        foreach (var (_, split) in _original) _vm.Markers.Remove(split);
+        _vm.RebuildSegmentsFromSplits();
+    }
+
+    public void Undo()
+    {
+        foreach (var (index, split) in _original) _vm.Markers.Insert(index, split);
         _vm.RebuildSegmentsFromSplits(_exclusions);
     }
 }

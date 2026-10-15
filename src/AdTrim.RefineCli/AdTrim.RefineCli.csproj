@@ -23,6 +23,15 @@
     <Compile Include="..\AdTrim\Services\MediaProbeService.cs"     Link="Services\MediaProbeService.cs"/>
     <Compile Include="..\AdTrim\Services\ChapterImportService.cs"  Link="Services\ChapterImportService.cs"/>
     <Compile Include="..\AdTrim\Services\FrameSnap.cs"             Link="Services\FrameSnap.cs"/>
+    <Compile Include="..\AdTrim\Services\CommercialBreakDetector.cs" Link="Services\CommercialBreakDetector.cs"/>
+    <Compile Include="..\AdTrim\Services\RecurringGraphic.cs" Link="Services\RecurringGraphic.cs"/>
+    <Compile Include="..\AdTrim\Services\SuggestionEvidence.cs" Link="Services\SuggestionEvidence.cs"/>
+    <Compile Include="..\AdTrim\Services\AudioLevelService.cs" Link="Services\AudioLevelService.cs"/>
+    <Compile Include="..\AdTrim\Services\MediaCacheCleanup.cs" Link="Services\MediaCacheCleanup.cs"/>
+    <Compile Include="..\AdTrim\Services\FrameCacheService.cs" Link="Services\FrameCacheService.cs"/>
+    <Compile Include="..\AdTrim\Services\SuggestionEngine.cs" Link="Services\SuggestionEngine.cs"/>
+    <Compile Include="..\AdTrim\Services\ShowProfile.cs" Link="Services\ShowProfile.cs"/>
+    <Compile Include="..\AdTrim\Services\LogoFreeSegmenter.cs" Link="Services\LogoFreeSegmenter.cs"/>
     <Compile Include="..\AdTrim\Services\RefineService.cs"         Link="Services\RefineService.cs"/>
   </ItemGroup>
 

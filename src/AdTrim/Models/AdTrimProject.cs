@@ -2,6 +2,8 @@ namespace AdTrim.Models;
 
 public enum SplitSource { Chapter, Manual, Refined }
 
+public enum MarkerSetSource { Imported, AdTrim, Unknown, Blank }
+
 public sealed record SourceFingerprint(long SizeBytes, long ModifiedUnixMs, long DurationUs);
 
 public sealed record PersistedSplit(
@@ -27,7 +29,9 @@ public sealed record AdTrimProject(
     List<PersistedSplit> Splits,
     List<string> ExcludedSegmentIds,
     SidecarLocation SidecarLocation,
-    string? StartChapterTitle = null)
+    string? StartChapterTitle = null,
+    MarkerSetSource MarkerSetSource = MarkerSetSource.Unknown,
+    string? MarkerBaselineId = null)
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 }

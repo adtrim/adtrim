@@ -7,7 +7,7 @@ using AdTrim.Models;
 
 namespace AdTrim.ViewModels;
 
-public enum SelectionKind { None, Marker, Segment }
+public enum SelectionKind { None, Marker, Segment, Markers }
 
 /// <summary>
 /// Main editor state. All times are integer microseconds - the authoritative
@@ -27,7 +27,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string? SourcePath
     {
         get => _sourcePath;
-        set { if (Set(ref _sourcePath, value)) Notify(nameof(IsFileLoaded), nameof(CanToggleCollapsed)); }
+        set { if (Set(ref _sourcePath, value)) Notify(nameof(IsFileLoaded), nameof(CanToggleCollapsed), nameof(CanReplaceMarkers)); }
     }
 
     public string MediaInfoLine { get; set; } = "";
@@ -36,7 +36,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public long DurationUs
     {
         get => _durationUs;
-        set { if (Set(ref _durationUs, value)) Notify(nameof(IsFileLoaded), nameof(CanToggleCollapsed)); }
+        set { if (Set(ref _durationUs, value)) Notify(nameof(IsFileLoaded), nameof(CanToggleCollapsed), nameof(CanReplaceMarkers)); }
     }
 
     /// <summary>True once a media file has been opened (probe complete, splits populated).</summary>
@@ -60,17 +60,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set => Set(ref _zoomFactor, value);
     }
 
-    // Keep timeline media analysis off by default while performance is being
-    // evaluated. Both waveforms and thumbnails can trigger background ffmpeg
-    // work, so users should explicitly opt in from the View menu for now.
-    private bool _showWaveform = false;
+    // On by default: thumbnails fetch only on-screen keyframes and the waveform
+    // shares ad-break analysis's audio pass, and both yield to scrubbing.
+    private bool _showWaveform = true;
     public bool ShowWaveform
     {
         get => _showWaveform;
         set => Set(ref _showWaveform, value);
     }
 
-    private bool _showThumbnails = false;
+    private bool _showThumbnails = true;
     public bool ShowThumbnails
     {
         get => _showThumbnails;
@@ -99,18 +98,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public ObservableCollection<Split> Markers { get; } = new();
     public ObservableCollection<Segment> Segments { get; } = new();
-    public ObservableCollection<TimelineThumbnail> Thumbnails { get; } = new();
+    /// <summary>Filmstrip tiles fetched so far for the open recording. Replaced, not mutated, as tiles arrive.</summary>
+    private ThumbnailStrip _thumbnailTiles = ThumbnailStrip.Empty;
+    public ThumbnailStrip ThumbnailTiles
+    {
+        get => _thumbnailTiles;
+        set => Set(ref _thumbnailTiles, value);
+    }
 
     /// <summary>
-    /// Per-bin audio peak levels (0..1) for the timeline waveform. Populated
-    /// asynchronously after a file opens; null until extraction completes (or
-    /// if it fails). Length is the bin count chosen at extraction time.
+    /// Primary-audio loudness for the timeline graph, <see cref="Services.AudioLevelService.LoudnessPerSecond"/>
+    /// values per second as dBFS + 120, on the source clock. Filled by the recording's shared audio
+    /// pass; while it runs this holds only the values measured so far. Null before the first arrive.
     /// </summary>
-    private float[]? _waveformPeaks;
-    public float[]? WaveformPeaks
+    private byte[]? _audioLoudness;
+    public byte[]? AudioLoudness
     {
-        get => _waveformPeaks;
-        set => Set(ref _waveformPeaks, value);
+        get => _audioLoudness;
+        set => Set(ref _audioLoudness, value);
     }
 
     /// <summary>IDs of segments marked excluded. Persisted; survives marker moves
@@ -118,6 +123,39 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public HashSet<string> ExcludedSegmentIds { get; } = new();
 
     public SourceFingerprint? SourceFingerprint { get; set; }
+    private MarkerSetSource _markerSetSource = MarkerSetSource.Unknown;
+    public MarkerSetSource MarkerSetSource
+    {
+        get => _markerSetSource;
+        set { if (Set(ref _markerSetSource, value)) { Notify(nameof(MarkerSetLabel), nameof(IsTimelineEdited)); MarkDirty(); } }
+    }
+
+    private string? _markerBaselineId;
+    public string? MarkerBaselineId
+    {
+        get => _markerBaselineId;
+        set { if (Set(ref _markerBaselineId, value)) Notify(nameof(IsTimelineEdited), nameof(MarkerSetLabel)); }
+    }
+
+    /// <summary>Caption of the toolbar's marker-set button: which set the timeline came from.</summary>
+    public string MarkerSetLabel => MarkerSetSource switch
+    {
+        MarkerSetSource.Imported => "Imported markers",
+        MarkerSetSource.AdTrim => "AdTrim suggested markers",
+        _ => "Markers",
+    };
+
+    public bool HasWorkingMarkings => Markers.Any(m => !m.IsBookend || m.ChapterTitle is not null)
+        || Segments.Any(s => s.IsExcluded);
+
+    public bool IsTimelineEdited => MarkerBaselineId is { } baseline
+        ? !StringComparer.Ordinal.Equals(baseline, CurrentMarkerSetId())
+        : HasWorkingMarkings;
+
+    public string CurrentMarkerSetId()
+    {
+        return ReplaceMarkerSetCommand.Capture(this).ContentId();
+    }
     public long Revision { get; private set; }
     private string _saveStatus = "";
     public string SaveStatus { get => _saveStatus; set => Set(ref _saveStatus, value); }
@@ -136,9 +174,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string? StatusOverride
     {
         get => _statusOverride;
-        set { if (Set(ref _statusOverride, value)) Notify(nameof(HasStatusOverride)); }
+        set { if (Set(ref _statusOverride, value)) Notify(nameof(HasStatusOverride), nameof(ShowsStatusOverride)); }
     }
     public bool HasStatusOverride => !string.IsNullOrEmpty(_statusOverride);
+    /// <summary>The status bar shows the override, except during ad-break analysis, whose progress is on the timeline.</summary>
+    public bool ShowsStatusOverride => HasStatusOverride && !IsAnalyzingCommercials;
 
     private StatusKind _statusKind = StatusKind.Info;
     public StatusKind StatusKind
@@ -155,6 +195,38 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set { if (Set(ref _progressPercent, value)) Notify(nameof(HasProgress), nameof(ProgressPercentValue)); }
     }
     public bool HasProgress => _progressPercent.HasValue;
+
+    private bool _hasAdTrimAnalysis;
+    /// <summary>This recording already has AdTrim ad-break suggestions (cached or currently applied).</summary>
+    public bool HasAdTrimAnalysis
+    {
+        get => _hasAdTrimAnalysis;
+        set => Set(ref _hasAdTrimAnalysis, value);
+    }
+
+    private string? _analysisStage;
+    /// <summary>Named step of the running ad-break analysis, shown over the timeline.</summary>
+    public string? AnalysisStage
+    {
+        get => _analysisStage;
+        set => Set(ref _analysisStage, value);
+    }
+
+    private string? _analysisTimeLeft;
+    /// <summary>Estimated time left for the running ad-break analysis, or null until it can be estimated.</summary>
+    public string? AnalysisTimeLeft
+    {
+        get => _analysisTimeLeft;
+        set => Set(ref _analysisTimeLeft, value);
+    }
+
+    private bool _isAnalyzingCommercials;
+    /// <summary>Commercial analysis is running: markers are locked and the analysis panel shows.</summary>
+    public bool IsAnalyzingCommercials
+    {
+        get => _isAnalyzingCommercials;
+        set { if (Set(ref _isAnalyzingCommercials, value)) Notify(nameof(ShowsStatusOverride)); }
+    }
     public double ProgressPercentValue => _progressPercent ?? 0.0;
 
     // ---- Banner above transport ----
@@ -182,15 +254,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool IsBusy
     {
         get => _isBusy;
-        set { if (Set(ref _isBusy, value)) Notify(nameof(CanEdit), nameof(CanInteract), nameof(CanToggleCollapsed)); }
+        set { if (Set(ref _isBusy, value)) Notify(nameof(CanEdit), nameof(CanInteract), nameof(CanToggleCollapsed), nameof(CanReplaceMarkers)); }
     }
 
     private bool _isExportScreen;
     public bool IsExportScreen
     {
         get => _isExportScreen;
-        set { if (Set(ref _isExportScreen, value)) Notify(nameof(CanEdit), nameof(CanInteract), nameof(CanToggleCollapsed)); }
+        set { if (Set(ref _isExportScreen, value)) Notify(nameof(CanEdit), nameof(CanInteract), nameof(CanToggleCollapsed), nameof(CanReplaceMarkers)); }
     }
+    public bool CanReplaceMarkers => IsFileLoaded && CanInteract;
     public bool CanToggleCollapsed => IsFileLoaded && CanInteract;
     public bool CanInteract => !IsBusy && !IsExportScreen;
     public bool CanEdit => CanInteract && !IsCollapsed;
@@ -240,6 +313,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         private set => Set(ref _selectedMarker, value);
     }
 
+    private readonly List<Split> _selectedMarkers = new();
+    /// <summary>Every selected marker: the single selection, or all of a multiple selection.</summary>
+    public IReadOnlyList<Split> SelectedMarkers => SelectedMarker is { } one ? [one] : _selectedMarkers;
+    public int SelectedMarkerCount => SelectedMarkers.Count;
+
     private Segment? _selectedSegment;
     public Segment? SelectedSegment
     {
@@ -275,6 +353,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
         { marker.PropertyChanged -= OnMarkerPropertyChanged; _observedMarkers.Remove(marker); }
         if (e.NewItems is not null) foreach (Split marker in e.NewItems)
             if (_observedMarkers.Add(marker)) marker.PropertyChanged += OnMarkerPropertyChanged;
+        // A multiple selection never outlives its markers (undo, reloads, replaced marker sets).
+        var gone = _selectedMarkers.Where(m => !Markers.Contains(m)).ToList();
+        foreach (var marker in gone) { marker.IsSelected = false; _selectedMarkers.Remove(marker); }
+        if (gone.Count > 0)
+        {
+            if (_selectedMarkers.Count == 0) SelectionKind = SelectionKind.None;
+            Notify(nameof(SelectedMarkers), nameof(SelectedMarkerCount));
+        }
         NotifyConfirmProgress();
     }
 
@@ -298,6 +384,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (e.PropertyName is nameof(Split.IsSelected)) return;
         if (e.PropertyName is nameof(Split.Confirmed))
             NotifyConfirmProgress();
+        Notify(nameof(IsTimelineEdited), nameof(MarkerSetLabel));
         MarkDirty();
     }
 
@@ -322,6 +409,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     MarkDirty();
                     RefreshKeptTimeline();
                     Notify(nameof(ExpectedOutputDurationUs));
+                    Notify(nameof(IsTimelineEdited), nameof(MarkerSetLabel));
                 }
             }
             return;
@@ -347,7 +435,59 @@ public sealed class MainViewModel : INotifyPropertyChanged
         SelectedMarker = marker;
         marker.IsSelected = true;
         SelectionKind = SelectionKind.Marker;
+        SelectionAnchor = marker;
+        Notify(nameof(SelectedMarkers), nameof(SelectedMarkerCount));
         PlayheadUs = marker.TimeUs;
+    }
+
+    /// <summary>The last marker clicked or selected on its own: the start of a Shift+click range.</summary>
+    public Split? SelectionAnchor { get; private set; }
+
+    /// <summary>Selects every marker except the bookends (Ctrl+A).</summary>
+    public void SelectAllMarkers() => SetMarkerSelection(Markers.Where(m => !m.IsBookend));
+
+    /// <summary>Selects the markers matching <paramref name="predicate"/> (for example, low-confidence ones).</summary>
+    public void SelectMarkersWhere(Func<Split, bool> predicate) => SetMarkerSelection(Markers.Where(m => !m.IsBookend && predicate(m)));
+
+    /// <summary>Ctrl+click: adds or removes one marker without moving the playhead.</summary>
+    public void ToggleMarkerSelection(Split marker)
+    {
+        if (marker.IsBookend) return;
+        var next = SelectedMarkers.ToList();
+        if (!next.Remove(marker)) next.Add(marker);
+        SetMarkerSelection(next);
+        SelectionAnchor = marker;
+    }
+
+    /// <summary>Shift+click: selects every marker between the anchor and <paramref name="marker"/>.</summary>
+    public void SelectMarkerRange(Split marker)
+    {
+        if (marker.IsBookend) return;
+        var anchor = SelectionAnchor is { } a && Markers.Contains(a) ? a : SelectedMarker;
+        if (anchor is null) { SetMarkerSelection([marker]); SelectionAnchor = marker; return; }
+        long from = Math.Min(anchor.TimeUs, marker.TimeUs), to = Math.Max(anchor.TimeUs, marker.TimeUs);
+        SetMarkerSelection(Markers.Where(m => !m.IsBookend && m.TimeUs >= from && m.TimeUs <= to));
+        SelectionAnchor = anchor;
+    }
+
+    /// <summary>Replaces the selection without moving the playhead; one marker is a normal single selection.</summary>
+    private void SetMarkerSelection(IEnumerable<Split> markers)
+    {
+        var chosen = markers.Distinct().OrderBy(m => m.TimeUs).ToList();
+        ClearSelection();
+        if (chosen.Count == 1)
+        {
+            SelectedMarker = chosen[0];
+            chosen[0].IsSelected = true;
+            SelectionKind = SelectionKind.Marker;
+        }
+        else if (chosen.Count > 1)
+        {
+            foreach (var marker in chosen) marker.IsSelected = true;
+            _selectedMarkers.AddRange(chosen);
+            SelectionKind = SelectionKind.Markers;
+        }
+        Notify(nameof(SelectedMarkers), nameof(SelectedMarkerCount));
     }
 
     public void SelectSegment(Segment segment)
@@ -370,7 +510,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
             s.State = s.State == SegmentState.SelectedExcluded ? SegmentState.Excluded : SegmentState.Default;
             SelectedSegment = null;
         }
+        foreach (var marker in _selectedMarkers) marker.IsSelected = false;
+        _selectedMarkers.Clear();
         SelectionKind = SelectionKind.None;
+        Notify(nameof(SelectedMarkers), nameof(SelectedMarkerCount));
     }
 
     // ---- Segment derivation ------------------------------------------------
@@ -418,6 +561,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         finally { _rebuilding = false; }
         RefreshKeptTimeline();
         Notify(nameof(ExpectedOutputDurationUs));
+        Notify(nameof(IsTimelineEdited), nameof(MarkerSetLabel));
     }
 
     public Split? NextUnconfirmedAfter(long timeUs)

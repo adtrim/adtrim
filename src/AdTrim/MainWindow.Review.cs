@@ -17,6 +17,7 @@ public partial class MainWindow
         _savedPreferences = _preferences;
         vm.ShowWaveform = _preferences.ShowWaveform;
         vm.ShowThumbnails = _preferences.ShowThumbnails;
+        RefreshDefaultMarkerSourceMenu();
         var desired = new Rect(double.IsFinite(_preferences.Left) ? _preferences.Left : 0,
             double.IsFinite(_preferences.Top) ? _preferences.Top : 0,
             Math.Max(1, double.IsFinite(_preferences.Width) ? _preferences.Width : 1280),
@@ -27,7 +28,9 @@ public partial class MainWindow
         Left = Math.Clamp(double.IsFinite(_preferences.Left) ? _preferences.Left : area.Left, area.Left, Math.Max(area.Left, area.Right - Width));
         Top = Math.Clamp(double.IsFinite(_preferences.Top) ? _preferences.Top : area.Top, area.Top, Math.Max(area.Top, area.Bottom - Height));
     }
-    private async Task SavePreferencesAsync(MainViewModel vm)
+    private Task SavePreferencesAsync(MainViewModel vm) => SavePreferencesSnapshotAsync(vm, false);
+
+    private async Task SavePreferencesSnapshotAsync(MainViewModel vm, bool saveMarkerSource)
     {
         var positions = new Dictionary<string, long>(_preferences.Positions ?? new(), StringComparer.OrdinalIgnoreCase);
         if (vm.SourcePath is { } source)
@@ -41,11 +44,28 @@ public partial class MainWindow
         try
         {
             var snapshot = _preferences;
-            await snapshot.SaveChangesAsync(_savedPreferences, vm.SourcePath);
+            await snapshot.SaveChangesAsync(_savedPreferences, vm.SourcePath, saveMarkerSource);
             _savedPreferences = snapshot;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         { vm.StatusOverride = "Preferences could not be saved. Project edits are saved separately."; }
+    }
+
+    private void RefreshDefaultMarkerSourceMenu()
+    {
+        if (DefaultImportedMarkers is null || DefaultAdTrimMarkers is null || DefaultNoMarkers is null) return;
+        DefaultImportedMarkers.IsChecked = _preferences.NewFileMarkerSource == NewFileMarkerSource.Imported;
+        DefaultAdTrimMarkers.IsChecked = _preferences.NewFileMarkerSource == NewFileMarkerSource.AdTrim;
+        DefaultNoMarkers.IsChecked = _preferences.NewFileMarkerSource == NewFileMarkerSource.None;
+    }
+
+    private async void OnDefaultMarkerSource(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string tag } || DataContext is not MainViewModel vm
+            || !Enum.TryParse<NewFileMarkerSource>(tag, out var source)) return;
+        _preferences = _preferences with { NewFileMarkerSource = source };
+        RefreshDefaultMarkerSourceMenu();
+        await SavePreferencesSnapshotAsync(vm, saveMarkerSource: true);
     }
 
     private void OnToggleCollapsed(object sender, RoutedEventArgs e)
