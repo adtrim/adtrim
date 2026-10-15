@@ -104,7 +104,7 @@ public sealed class ThumbnailServiceTests : IDisposable
         extract.Batches.Should().BeEmpty();
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task ExtractAsync_OneRunWritesATileAtEachKeyframeAtTheVideosShape()
     {
         // 4:3 anamorphic SD stored at 720x480: the tile must show the display shape, not the storage shape.

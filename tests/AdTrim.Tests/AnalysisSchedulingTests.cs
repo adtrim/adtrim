@@ -25,7 +25,7 @@ public sealed class AnalysisSchedulingTests : IDisposable
 
     private static MediaInfo Media() => new(20_000_000, "h264", 320, 180, new(10, 1), [new(1, "aac", 2, true)], 1);
 
-    [Fact]
+    [SkippableFact]
     public async Task OnlyAnAnalysisThatReallyWaitsSaysItIsWaiting()
     {
         var runner = AudioLevelServiceTests.Runner();
@@ -47,7 +47,7 @@ public sealed class AnalysisSchedulingTests : IDisposable
         second.Reports.Should().ContainSingle(r => r.Queued);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task PicturePassesReadNothingWhilePlaybackHoldsTheDisk()
     {
         var runner = AudioLevelServiceTests.Runner();

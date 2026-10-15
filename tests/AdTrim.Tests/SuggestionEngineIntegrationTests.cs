@@ -8,14 +8,14 @@ namespace AdTrim.Tests;
 [Collection(AnalysisGateCollection.Name)]
 public sealed class SuggestionEngineIntegrationTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task PrimarySurroundEvidenceUsesTheSourceClock(bool timestampOffset)
     {
         var root = FindRoot();
         Environment.SetEnvironmentVariable("ADTRIM_FFMPEG_DIR", Path.Combine(root, "binaries", "ffmpeg", "win-x64"));
-        var runner = new FfmpegRunner();
+        var runner = AudioLevelServiceTests.Runner();
         var directory = Path.Combine(Path.GetTempPath(), "adtrim-surround-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, "surround.mp4");
@@ -40,14 +40,14 @@ public sealed class SuggestionEngineIntegrationTests
         }
         finally { Directory.Delete(directory, recursive: true); }
     }
-    [Theory]
+    [SkippableTheory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task LearnedGraphicAndRepeatedUnitsFindALongBreakWithoutAudio(bool timestampOffset)
     {
         var root = FindRoot();
         Environment.SetEnvironmentVariable("ADTRIM_FFMPEG_DIR", Path.Combine(root, "binaries", "ffmpeg", "win-x64"));
-        var runner = new FfmpegRunner();
+        var runner = AudioLevelServiceTests.Runner();
         var directory = Path.Combine(Path.GetTempPath(), "adtrim-suggestion-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, "direct-cuts.mp4");
@@ -84,14 +84,14 @@ public sealed class SuggestionEngineIntegrationTests
         finally { Directory.Delete(directory, recursive: true); }
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task RecordingThatStartsInsideABreakReportsALowConfidenceReturnOnARealFrame()
     {
         // No graphic for the first 26 s and a cut at 25 s: the editor shows this as a red marker,
         // so it must come back mapped to a real frame with Low confidence, not as unmappable.
         var root = FindRoot();
         Environment.SetEnvironmentVariable("ADTRIM_FFMPEG_DIR", Path.Combine(root, "binaries", "ffmpeg", "win-x64"));
-        var runner = new FfmpegRunner();
+        var runner = AudioLevelServiceTests.Runner();
         var directory = Path.Combine(Path.GetTempPath(), "adtrim-suggestion-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, "starts-in-break.mp4");
@@ -113,13 +113,13 @@ public sealed class SuggestionEngineIntegrationTests
         finally { Directory.Delete(directory, recursive: true); }
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task OneAnalysisReportsOneProgressBarThatNeverRestarts()
     {
         // Two video passes used to each run 0-100%, which looked like the analysis ran twice.
         var root = FindRoot();
         Environment.SetEnvironmentVariable("ADTRIM_FFMPEG_DIR", Path.Combine(root, "binaries", "ffmpeg", "win-x64"));
-        var runner = new FfmpegRunner();
+        var runner = AudioLevelServiceTests.Runner();
         var directory = Path.Combine(Path.GetTempPath(), "adtrim-suggestion-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, "progress.mp4");

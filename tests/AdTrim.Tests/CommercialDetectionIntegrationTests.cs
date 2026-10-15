@@ -6,7 +6,7 @@ namespace AdTrim.Tests;
 
 public sealed class CommercialDetectionIntegrationTests
 {
-    [Theory]
+    [SkippableTheory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(true, true)]
@@ -14,7 +14,7 @@ public sealed class CommercialDetectionIntegrationTests
     {
         var root = FindRoot();
         Environment.SetEnvironmentVariable("ADTRIM_FFMPEG_DIR", Path.Combine(root, "binaries", "ffmpeg", "win-x64"));
-        var runner = new FfmpegRunner();
+        var runner = AudioLevelServiceTests.Runner();
         var directory = Path.Combine(Path.GetTempPath(), "adtrim-detector-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, "synthetic.mp4");

@@ -209,7 +209,7 @@ public sealed class AudioLevelServiceTests : IDisposable
         public void Report(double value) => report(value);
     }
 
-    [Theory]
+    [SkippableTheory]
     [InlineData("5.1", "ac3", false)]
     [InlineData("5.1", "aac", true)]
     [InlineData("stereo", "ac3", false)]
@@ -239,7 +239,7 @@ public sealed class AudioLevelServiceTests : IDisposable
         SHA256.HashData(await File.ReadAllBytesAsync(path)).Should().Equal(hash);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Analysis_UsesTheSuppliedAudioPassInsteadOfReadingTheAudioAgain()
     {
         var runner = Runner();
@@ -276,15 +276,17 @@ public sealed class AudioLevelServiceTests : IDisposable
 
     private static Models.MediaInfo Media() => new(10_000_000, "h264", 320, 180, new(30, 1), [new(1, "ac3", 6, true)], 1);
 
+    // The FFmpeg binaries are not in Git, so CI has none: tests that generate media skip there.
     internal static FfmpegRunner Runner()
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
             if (File.Exists(Path.Combine(directory.FullName, "AdTrim.sln")))
             {
                 Environment.SetEnvironmentVariable("ADTRIM_FFMPEG_DIR", Path.Combine(directory.FullName, "binaries", "ffmpeg", "win-x64"));
-                return new FfmpegRunner();
+                try { return new FfmpegRunner(); }
+                catch (FileNotFoundException ex) { throw new SkipException(ex.Message); }
             }
-        throw new DirectoryNotFoundException("Source checkout with bundled media tools required.");
+        throw new SkipException("Source checkout with bundled media tools required.");
     }
 
     public void Dispose()
