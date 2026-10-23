@@ -1,5 +1,5 @@
 {
-  "version": "2.0.0",
-  "summary": "Ad break suggestions, a thumbnail strip and an audio waveform with silences marked on the timeline. Select several markers at once, move between markers from the keyboard, and press F1 for every shortcut. Marker options are now under Tools > Ad break detection.",
+  "version": "2.1.0",
+  "summary": "Open and export MP4 or TS recordings, find recordings that still need exporting, and keep export status with each project. Export setup remembers your format and sidecar choice. This release also fixes preview seeking, opening audio and timing at cuts and joins.",
   "advisories": []
 }
