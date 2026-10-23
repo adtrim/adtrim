@@ -11,6 +11,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="..\..\src\AdTrim\Services\Mp4Comments.cs" Link="Services\Mp4Comments.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\SourceCommentService.cs" Link="Services\SourceCommentService.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\UnexportedFiles.cs" Link="Services\UnexportedFiles.cs"/>
     <Compile Include="..\..\src\AdTrim\Services\UpdatePreferences.cs" Link="Services\UpdatePreferences.cs"/>
     <Compile Include="..\..\src\AdTrim\Services\UpdateFeed.cs" Link="Services\UpdateFeed.cs"/>
     <Compile Include="..\..\src\AdTrim\Services\UpdateService.cs" Link="Services\UpdateService.cs"/>

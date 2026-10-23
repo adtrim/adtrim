@@ -1,11 +1,28 @@
 using AwesomeAssertions;
 using AdTrim.Services;
+using AdTrim.Models;
 using Xunit;
 
 namespace AdTrim.Tests;
 
 public class ExportNamingTests
 {
+    [Fact]
+    public void TsNamesAvoidExistingExportsAndNeverReuseTheSource()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), "adtrim-ts-naming-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            string source = Path.Combine(folder, "Show.ts");
+            File.WriteAllText(source, "source");
+            File.WriteAllText(Path.Combine(folder, "Show [AdTrim].ts"), "existing export");
+            Assert.Equal("Show [AdTrim 2].ts", ExportNaming.DeriveDefaultFilename(source, folder, ExportFormat.Ts));
+            Assert.Equal("Show [AdTrim].mp4", ExportNaming.DeriveDefaultFilename(source, folder));
+        }
+        finally { Directory.Delete(folder, true); }
+    }
+
     [Fact]
     public void DefaultFilename_LowercasesS00E00Token()
     {

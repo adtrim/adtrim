@@ -12,7 +12,7 @@ AdTrim is a *manual* editor: you mark the cut points, review transitions, and ex
 
 ## What it does
 
-- **Loads** `.mp4` recordings without re-muxing the source. (`.ts` support is planned, but not shipped yet.)
+- **Loads** `.mp4` and single-program MPEG transport stream (`.ts`) recordings without re-muxing the source. TS files containing multiple programs are rejected rather than selecting an unrelated audio track. Detected packet corruption and timestamp resets are rejected to avoid incomplete or shifted edits.
 - **Imports chapters** from MP4 files that already have `Commercial X` / `Part X` chapter atoms (e.g. Plex DVR post-processed output) and uses them as starting cut points.
 - **Separate recording windows** - use File > New window (Ctrl+N), or launch AdTrim again. Each window edits one recording. Opening a file from Explorer reuses an empty window or opens another; opening the same recording again activates its existing window.
 - **Timeline editing** - drop split markers, drag them to refine, toggle segments as kept/excluded, undo/redo freely.
@@ -23,8 +23,9 @@ AdTrim is a *manual* editor: you mark the cut points, review transitions, and ex
 - **Review workflow** - imported chapter titles remain visible. **Shift+C** confirms the current split and selects the next unconfirmed split; **N** moves to the next unconfirmed split without confirming.
 - **Frame-accurate refinement** - for each split, runs a local ffprobe pass to find the precise frame boundary, snapping the cut to a real keyframe / scene change.
 - **mpv-based preview** - fast scrubbing on MPEG-2 sources (50-150 ms per seek, vs. ~1 s with the LibVLC backend it replaced).
-- **Export** - produces an MP4 with libx264-encoded video (deinterlaced via bwdif) and AC3 audio stream-copied from the source.
-- **Source files are never modified.** All edits live in a `.adt.json` sidecar next to the recording. Delete the sidecar and you're back to the original.
+- **Export** - produces MP4 or TS with H.264 video, CPU bwdif deinterlacing, and the probe-selected primary audio stream copied from the source. MP4 is the initial default; AdTrim remembers the last format you selected, including after restart. **Delete project sidecar** starts off and also remembers your last selection; deletion happens only after a successful export. MP4 exports include named chapters. TS exports do not include chapter markers or chapter names; a notice appears when TS is selected. Unsupported audio/container combinations fail clearly without automatic audio conversion.
+- **Recorded video and audio are preserved.** Edits live in a `.adt.json` sidecar next to the recording. After a successful export, AdTrim records the export in the existing project sidecar. For MP4 sources, AdTrim also adds its version and the local export date to Windows Comments, preserving existing comment text and unrelated metadata. TS sources remain byte-for-byte unchanged and use the sidecar record only. Deleting the TS project sidecar loses its export status. Turn this off with **File > Add Comment to Source File on Export**; the setting is remembered. Unsupported or locked files are left unchanged with a warning, and the exported video is kept.
+- **Find recordings to export.** Use **File > View Unexported Files** to choose a folder. The folder tree opens with the root selected and expanded. Selecting any folder shows unexported files in that folder and all its subfolders; leading-dot folders are skipped. Double-click a file row or choose Open to edit it. Refresh rescans the selected folder and its subfolders, preserving the selection. Shows, seasons, and episode filenames use Windows natural ordering. MP4 Comments take precedence; only empty Comments fall back to the project sidecar's export record. TS files use their project sidecar export record and can be opened for editing. Files that could not be checked show an explanation. Missing markers do not prove a recording was never exported. No scan catalog or hidden metadata is added to the video.
 
 Exports default to the source folder with ` [AdTrim]` appended to the recording's
 name. If that name already exists, AdTrim uses ` [AdTrim 2]`, ` [AdTrim 3]`, and
@@ -35,6 +36,8 @@ Collapsed playback uses mpv's virtual timeline and bounded read-ahead, without r
 Moving or refining a split preserves the adjacent exclusion decisions. Splitting an excluded scene leaves both pieces excluded. Deleting a boundary between a kept and excluded scene keeps the merged scene; Undo restores the original decision.
 
 Project saves run in the background. The status changes to **Saved** only after writing succeeds; opening another file, closing a project, and exiting flush pending edits. If the recording's folder cannot be written, saves use `%LOCALAPPDATA%\AdTrim\projects`. Reopening uses the newest valid matching save, including that fallback. Corrupt and newer-version projects are preserved. To reset a project completely, remove its fallback save as well as its adjacent sidecar.
+
+Successful exports also save a structured `last_export` record in the existing project sidecar, containing the application, version, UTC export time, and source fingerprint. This happens even when source commenting is off; later project saves retain the record. Project schema 4 protects it from being overwritten by older AdTrim versions, and older projects remain readable. The scanner accepts records only when their size and modification time still match the source. Deleting the sidecar removes this record; if commenting is also off, no export marker remains for later scans.
 
 Waveform/thumbnail visibility, export acceleration, window bounds, and recent playback positions are stored separately in `%LOCALAPPDATA%\AdTrim\preferences.json`. Viewing and playback changes do not create project edits. The thumbnail strip and waveform are on for a fresh setup and can be turned off in the View menu.
 

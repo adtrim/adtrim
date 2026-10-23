@@ -10,7 +10,7 @@ Install the prerequisites using your distribution's package manager:
 sudo apt-get install --no-install-recommends build-essential mingw-w64 cmake ninja-build meson nasm pkg-config python3-jinja2 python3-packaging python3-setuptools git curl ca-certificates xz-utils autoconf automake libtool
 ```
 
-Place `archives/`, `sources.lock.json`, `unpack.py` and `build.sh` together, then run:
+Place `archives/`, `patches/`, `sources.lock.json`, `unpack.py` and `build.sh` together, then run:
 
 ```sh
 bash build.sh
@@ -24,4 +24,4 @@ The build retains software H.264, NVIDIA NVENC, Intel QSV and AMD AMF export sup
 
 The upstream source archives include their original licenses. Installer notices list the included components. Header libraries, shader generators and source inputs used to generate compiled code are included here too. Driver implementations and Windows system libraries are supplied by the operating system or hardware vendor and are not distributed in this package.
 
-The source revisions and archive hashes are in `sources.lock.json`. Build instructions adapt upstream build options; they do not patch the upstream source code. The source package supports rebuilding the components, without claiming byte-for-byte identical binaries across different toolchain versions.
+The source revisions and archive hashes are in `sources.lock.json`. The retained mpv patch adds five seconds of decode lead-in for precise MPEG-TS seeks, including internal EDL scene changes. Ordinary keyframe seeks and other formats are unchanged. The source package supports rebuilding the components, without claiming byte-for-byte identical binaries across different toolchain versions.

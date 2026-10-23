@@ -15,6 +15,7 @@ public partial class MainWindow
     {
         _preferences = await UserPreferences.LoadAsync();
         _savedPreferences = _preferences;
+        RefreshSourceCommentMenu();
         vm.ShowWaveform = _preferences.ShowWaveform;
         vm.ShowThumbnails = _preferences.ShowThumbnails;
         RefreshDefaultMarkerSourceMenu();
@@ -98,7 +99,7 @@ public partial class MainWindow
             var outputUs = map.ToOutput(sourceUs);
             vm.PlayheadUs = map.ToSource(outputUs);
             if (map.DurationUs == 0) _previewAfter.Stop();
-            else _previewAfter.Open(map.ToMpvEdl(vm.SourcePath), outputUs, playing, buffered: true);
+            else _previewAfter.Open(map.ToMpvEdl(vm.SourcePath, _media?.TimelineStartTimeUs ?? 0), outputUs, playing, buffered: true);
             vm.StatusOverride = map.DurationUs == 0 ? "All scenes are excluded." : "Collapsed preview. Click an eye icon to review that cut.";
         }
         else

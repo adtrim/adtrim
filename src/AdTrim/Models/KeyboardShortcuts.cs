@@ -43,6 +43,7 @@ public static class KeyboardShortcuts
         ]),
         ("File and view", [
             ("Ctrl+O", "Open a recording"),
+            ("Ctrl+Shift+O", "View unexported files"),
             ("Ctrl+N", "New window"),
             ("Ctrl+S", "Save the project"),
             ("Ctrl+W", "Close the project"),

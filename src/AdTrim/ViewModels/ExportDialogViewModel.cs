@@ -138,6 +138,32 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
     private readonly MainViewModel _project;
     private readonly MediaInfo? _media;
 
+    public IReadOnlyList<ExportFormat> FormatOptions { get; } = new[] { ExportFormat.Mp4, ExportFormat.Ts };
+    private ExportFormat _selectedFormat;
+    public ExportFormat SelectedFormat
+    {
+        get => _selectedFormat;
+        set
+        {
+            value = ExportFormats.Normalize(value);
+            bool automaticName = OutputFilename == _defaultOutputFilename;
+            if (!Set(ref _selectedFormat, value)) return;
+            OverwriteConfirmed = false;
+            if (automaticName) RefreshDefaultOutputFilename();
+            else if (!string.IsNullOrEmpty(OutputFilename)) OutputFilename = Path.ChangeExtension(OutputFilename, value.Extension());
+            Notify(nameof(IsTsExport));
+            Notify(nameof(ExtensionHint));
+            Notify(nameof(FormatLabel));
+            RefreshValidation();
+        }
+    }
+    public bool IsTsExport => SelectedFormat == ExportFormat.Ts;
+    public string SidecarDeletionHint => string.Equals(Path.GetExtension(_project.SourcePath), ".ts", StringComparison.OrdinalIgnoreCase)
+        ? "Also removes this recording's export status (.adt.json)"
+        : "Only after a successful export (.adt.json)";
+    public string FormatLabel => IsTsExport ? "MPEG transport stream (.ts)" : "MP4 (.mp4)";
+    public string ExtensionHint => SelectedFormat.Extension() + " added automatically";
+
     private string _outputFolder = "";
     public string OutputFolder
     {
@@ -182,8 +208,8 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
     public bool OverwriteConfirmed { get; set; }
 
     /// <summary>If true, MainWindow deletes the <c>.adt.json</c> sidecar
-    /// after a successful export. Off by default so users keep their split
-    /// history; turning it on is a "I'm done with this file" affordance.</summary>
+    /// after a successful export. Off until explicitly enabled; export setup
+    /// restores the user's remembered choice.</summary>
     private bool _deleteSidecarAfterExport;
     public bool DeleteSidecarAfterExport { get => _deleteSidecarAfterExport; set => Set(ref _deleteSidecarAfterExport, value); }
 
@@ -289,7 +315,7 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
     public void RefreshDefaultOutputFilename()
     {
         if (OutputFilename != _defaultOutputFilename) return;
-        _defaultOutputFilename = ExportNaming.DeriveDefaultFilename(_project.SourcePath, OutputFolder);
+        _defaultOutputFilename = ExportNaming.DeriveDefaultFilename(_project.SourcePath, OutputFolder, SelectedFormat);
         OutputFilename = _defaultOutputFilename;
     }
 
@@ -436,7 +462,7 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
                     : p.SegmentPercent == 0 ? "preparing" : null;
                 ProgressLine = p.Phase == ExportPhase.Validating
                     ? "Validating output…"
-                    : p.Phase == ExportPhase.Finalizing ? "Finalizing MP4…" : p.Message;
+                    : p.Phase == ExportPhase.Finalizing ? "Finalizing video…" : p.Message;
                 break;
             case ExportPhase.Done:
                 foreach (var part in Parts) part.Status = ExportPartStatus.Done;
@@ -496,8 +522,12 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
         }
     }
 
-    public void MarkComplete()
+    public string? SourceCommentNote { get; private set; }
+
+    public void MarkComplete(string? sourceCommentNote = null)
     {
+        SourceCommentNote = sourceCommentNote;
+        Notify(nameof(SourceCommentNote));
         _runTimer.Stop();
         StopTickTimer();
         foreach (var part in Parts) part.Status = ExportPartStatus.Done;
@@ -636,9 +666,9 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
         else if (!ExportNaming.IsValidFilename(OutputFilename))
             v.Add(new(ExportValidationKind.Blocking,
                 "Output filename contains characters that are not allowed."));
-        else if (!OutputFilename.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase))
+        else if (!OutputFilename.EndsWith(SelectedFormat.Extension(), StringComparison.OrdinalIgnoreCase))
             v.Add(new(ExportValidationKind.Blocking,
-                "Output filename must end with '.mp4'."));
+                $"Output filename must end with '{SelectedFormat.Extension()}'."));
 
         if (!string.IsNullOrEmpty(FullOutputPath) && File.Exists(FullOutputPath))
         {
@@ -656,7 +686,7 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
                              StringComparison.OrdinalIgnoreCase))
         {
             v.Add(new(ExportValidationKind.Blocking,
-                "Output path is identical to the source - refusing to overwrite the source MP4."));
+                "Output path is identical to the source - refusing to overwrite the source recording."));
         }
 
         return v;
@@ -687,7 +717,8 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
             FrameRate: _project.FrameRate,
             PrimaryAudioCodec: _media.PrimaryAudio?.Codec ?? "",
             Fingerprint: _project.SourceFingerprint,
-            Overwrite: OverwriteConfirmed);
+            Overwrite: OverwriteConfirmed,
+            Format: SelectedFormat);
     }
 
     /// <summary>Run validation and refresh ValidationIssues for inline rendering.</summary>

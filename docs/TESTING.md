@@ -26,6 +26,7 @@ synthetic media without needing private recordings:
 
 ```powershell
 dotnet run --project tools/AdTrim.Smoke -c Release
+powershell -File tools/verify-ts.ps1
 python tools/playback_probe.py
 python tools/benchmark-editing.py
 ```
@@ -34,6 +35,11 @@ The smoke tool generates a disposable recording and isolated preferences beneath
 its build directory. It checks editing, saves, reopening, collapsed playback, and
 window layout. Its optional file argument is for matching disposable test fixtures
 only: the tool edits their sidecars. Do not pass an original recording.
+
+The [TS workflow verification](ts-verification.md) command requires the bundled
+native tools and fails if any selected test is skipped. Run it before packaging
+media-handling changes. Source-only CI skips generated-media tests when those
+tools are absent; that CI result does not verify TS behavior.
 
 The native playback probe creates and removes synthetic media and checks kept
 audio, timing, and repeated-seek memory. It uses null output devices, so it does

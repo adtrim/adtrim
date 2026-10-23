@@ -50,7 +50,7 @@ public sealed class SuggestionEvidenceCollector(FfmpegRunner runner)
             audio ??= (stage, token) => new AudioLevelService(runner).MeasureAsync(path, media, token, progress: stage.Report);
             var levels = await audio(new StageProgress(f => progress?.Report(SuggestionEngine.StageProgress(0, f, media.DurationUs))), ct).ConfigureAwait(false);
             var probe = await runner.RunFfprobeAsync(["-v", "error", "-select_streams", "v:0",
-                "-read_intervals", "0%3", "-show_entries", "frame=interlaced_frame", "-of", "json", path], ct).ConfigureAwait(false);
+                "-read_intervals", "%+3", "-show_entries", "frame=interlaced_frame", "-of", "json", path], ct).ConfigureAwait(false);
             if (!probe.Success) throw new InvalidOperationException("Cannot inspect video field order: " + probe.Stderr);
             using var json = JsonDocument.Parse(probe.Stdout);
             bool fields = json.RootElement.GetProperty("frames").EnumerateArray()
@@ -79,9 +79,9 @@ public sealed class SuggestionEvidenceCollector(FfmpegRunner runner)
                 + "[scene]" + (fields ? "separatefields," : "")
                 + "scale=320:180,select='eq(n,0)+gt(scene\\,0.32)',metadata=print[sceneout];"
                 + "[sample]fps=1:start_time=0,scale=320:180,format=gray[samples]";
-            var args = new List<string> { "-nostdin", "-hide_banner", "-nostats", "-v", "info", "-copyts", "-i", path,
+            List<string> args = ["-nostdin", "-hide_banner", "-nostats", "-v", "info", .. FfmpegRunner.SourceTimestampArgs(media.TimelineStartTimeUs), "-i", path,
                 "-filter_complex", graph, "-map", "[blackout]", "-map", "[sceneout]", "-an", "-f", "null", "-",
-                "-map", "[samples]", "-an", "-f", "rawvideo", "pipe:1" };
+                "-map", "[samples]", "-an", "-f", "rawvideo", "pipe:1"];
             await ReadAsync(args, (frame, index) => { if (index % 5 == 0) graphic.Observe(frame); }, Diagnostic,
                 media.DurationUs, progress, ct, stage: 1).ConfigureAwait(false);
             if (limited) throw new InvalidOperationException("Too many transitions to analyze safely.");
@@ -89,7 +89,7 @@ public sealed class SuggestionEvidenceCollector(FfmpegRunner runner)
             var appearance = new List<byte>();
             // Runs without a station graphic too: the recording's own appearance is still evidence.
             bool learned = graphic.Complete();
-            await ReadAsync(["-nostdin", "-hide_banner", "-nostats", "-v", "error", "-copyts", "-i", path,
+            await ReadAsync(["-nostdin", "-hide_banner", "-nostats", "-v", "error", .. FfmpegRunner.SourceTimestampArgs(media.TimelineStartTimeUs), "-i", path,
                 "-map", "0:v:0", "-vf", "fps=1:start_time=0,scale=320:180,format=yuv444p", "-an", "-f", "rawvideo", "pipe:1"],
                 (frame, _) =>
                 {

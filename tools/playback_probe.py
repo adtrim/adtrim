@@ -100,28 +100,34 @@ def seek_benchmark(source, next_position):
     return {"seek_median_ms":round(statistics.median(samples),3),"seek_p95_ms":round(samples[int(len(samples)*.95)],3),
         "process_private_mib_every_20_seeks":[round(v/1048576,2) for v in memory_samples]}
 
-with probe_directory() as temp:
-    directory=Path(temp)
-    source=directory/"fixture,cut.mp4"
-    subprocess.run([str(ROOT/"binaries/ffmpeg/win-x64/ffmpeg.exe"), "-v","error","-y",
-        "-f","lavfi","-i","testsrc2=size=640x360:rate=60:duration=6",
-        "-f","lavfi","-i", "aevalsrc=0.2*sin(2*PI*if(lt(t\\,2)\\,440\\,if(lt(t\\,4)\\,1000\\,660))*t):s=48000:d=6",
-        "-vf","tinterlace=interleave_top", "-c:v","mpeg2video","-g","30","-flags","+ilme+ildct",
-        "-c:a","ac3","-shortest",str(source)],check=True)
-    before=hashlib.sha256(source.read_bytes()).hexdigest()
-    name=str(source)
-    edl="edl://"+";".join(f"%{len(name.encode())}%{name},{start},2" for start in [0,4])
-    results={"normal":run(name),"collapsed_software":run(edl),"collapsed_auto":run(edl,hardware="auto-safe")}
-    raw=directory/"joined.pcm"
-    results["capture"]=run(edl,capture=raw)
-    pcm=struct.unpack("<"+"h"*(raw.stat().st_size//2),raw.read_bytes())
-    def frequency(offset):
-        window=pcm[int(offset*48000):int((offset+.1)*48000)]
-        return sum(a<=0<b for a,b in zip(window,window[1:]))*10
-    results["normal_seek_stress"]=seek_benchmark(name,4.2)
-    results["collapsed_seek_stress"]=seek_benchmark(edl,2.2)
-    results["audio"]={"seconds":len(pcm)/48000,"before_hz":frequency(1.8),"after_hz":frequency(2.1)}
-    assert abs(len(pcm)/48000-4)<.01, results
-    assert abs(frequency(1.8)-440)<30 and abs(frequency(2.1)-660)<30, results
-    assert hashlib.sha256(source.read_bytes()).hexdigest()==before
-    print(json.dumps(results,indent=2))
+for container in ["mp4", "ts"]:
+    with probe_directory() as temp:
+        directory=Path(temp)
+        source=directory/("fixture,cut."+container)
+        subprocess.run([str(ROOT/"binaries/ffmpeg/win-x64/ffmpeg.exe"), "-v","error","-y",
+            "-f","lavfi","-i","testsrc2=size=640x360:rate=60:duration=6",
+            "-f","lavfi","-i", "aevalsrc=0.2*sin(2*PI*if(lt(t\\,2)\\,440\\,if(lt(t\\,4)\\,1000\\,660))*t):s=48000:d=6",
+            "-vf","tinterlace=interleave_top", "-c:v","mpeg2video","-g","30","-flags","+ilme+ildct",
+            "-c:a","ac3","-shortest", "-output_ts_offset", "120" if container=="ts" else "0", str(source)],check=True)
+        before=hashlib.sha256(source.read_bytes()).hexdigest()
+        name=str(source)
+        origin = 0.0
+        if container == "ts":
+            probe = json.loads(subprocess.check_output([str(ROOT/"binaries/ffmpeg/win-x64/ffprobe.exe"),
+                "-v", "error", "-show_format", "-of", "json", name]))
+            origin = float(probe["format"]["start_time"])
+        edl="edl://"+";".join(f"%{len(name.encode())}%{name},{origin+start:.6f},2" for start in [0,4])
+        results={"container":container,"normal":run(name),"collapsed_software":run(edl),"collapsed_auto":run(edl,hardware="auto-safe")}
+        raw=directory/"joined.pcm"
+        results["capture"]=run(edl,capture=raw)
+        pcm=struct.unpack("<"+"h"*(raw.stat().st_size//2),raw.read_bytes())
+        def frequency(offset):
+            window=pcm[int(offset*48000):int((offset+.1)*48000)]
+            return sum(a<=0<b for a,b in zip(window,window[1:]))*10
+        results["normal_seek_stress"]=seek_benchmark(name,4.2)
+        results["collapsed_seek_stress"]=seek_benchmark(edl,2.2)
+        results["audio"]={"seconds":len(pcm)/48000,"before_hz":frequency(1.8),"after_hz":frequency(2.1)}
+        assert abs(len(pcm)/48000-4)<.01, results
+        assert abs(frequency(1.8)-440)<30 and abs(frequency(2.1)-660)<30, results
+        assert hashlib.sha256(source.read_bytes()).hexdigest()==before
+        print(json.dumps(results,indent=2))

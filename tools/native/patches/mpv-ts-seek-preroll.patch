@@ -1,0 +1,17 @@
+--- a/demux/demux_lavf.c
++++ b/demux/demux_lavf.c
+@@ -1874,8 +1874,13 @@
+             seek_pts_av = seek_pts * priv->avfc->duration;
+         }
+     } else {
+-        if (!(flags & SEEK_FORWARD))
++        if (!(flags & SEEK_FORWARD)) {
+             seek_pts -= priv->seek_delay;
++            // MPEG-TS indexes can identify a non-keyframe as a seek point.
++            // Preroll here also covers internal EDL segment transitions.
++            if ((flags & SEEK_HR) && matches_avinputformat_name(priv, "mpegts"))
++                seek_pts -= 5.0;
++        }
+         seek_pts_av = seek_pts * AV_TIME_BASE;
+     }
+ 

@@ -13,11 +13,9 @@ public sealed class LibX264EncoderStrategy : IEncoderStrategy
 {
     public string DisplayName => "Software (H.264)";
 
-    // Coarse pre-roll before the fine accurate seek. Must exceed the source's
-    // worst-case GOP length; MPEG-2 broadcast captures typically use ~0.5s
-    // GOPs but we leave headroom for outliers. Increase if a future fixture
-    // shows GOPs > 2s.
-    private const double PreRollSec = 2.0;
+    // TS seeking can land after the preceding GOP. Decode a bounded lead-in
+    // before the accurate output seek, including long broadcast GOPs.
+    private const double TransportPreRollSec = 10.0;
 
     public IReadOnlyList<string> BuildSegmentArgs(
         string sourcePath,
@@ -33,7 +31,7 @@ public sealed class LibX264EncoderStrategy : IEncoderStrategy
         string filter, IReadOnlyList<string> encoderArgs)
     {
         // Two-stage seek: coarse `-ss` *before* `-i` jumps cheaply to a
-        // keyframe ~PreRollSec before the cut; fine `-ss` *after* `-i` then
+        // decoder lead-in before the cut; fine `-ss` *after* `-i` then
         // does the accurate decode-and-discard up to the requested frame.
         //
         // Single-stage `-ss <start> -i` was previously used and caused up to
@@ -47,7 +45,8 @@ public sealed class LibX264EncoderStrategy : IEncoderStrategy
         // other - the residual is the true AC3 packet alignment (~32ms).
         var startSec = segment.StartUs / 1_000_000.0;
         var endSec   = segment.EndUs   / 1_000_000.0;
-        var coarse   = Math.Max(0, startSec - PreRollSec);
+        bool transport = System.IO.Path.GetExtension(sourcePath).Equals(".ts", StringComparison.OrdinalIgnoreCase);
+        var coarse   = Math.Max(0, startSec - (transport ? TransportPreRollSec : 2.0));
         var fine     = startSec - coarse;
         var dur      = endSec - startSec;
 
@@ -65,8 +64,9 @@ public sealed class LibX264EncoderStrategy : IEncoderStrategy
             "-progress", "pipe:1",
         };
         args.AddRange(deviceArgs);
+        // Seeking to zero can discard audio preceding the first video keyframe.
+        if (coarse > 0) args.AddRange(new[] { "-ss", coarseStr });
         args.AddRange(new[] {
-            "-ss", coarseStr,
             "-i", sourcePath,
             "-ss", fineStr,
             "-t",  durStr,
@@ -75,10 +75,15 @@ public sealed class LibX264EncoderStrategy : IEncoderStrategy
             "-map_chapters", "-1",
             "-vf", filter,
         });
+        // TS-derived timestamps can make automatic sync drop a boundary frame even for CFR sources.
+        if (transport)
+            args.AddRange(new[] { "-fps_mode", "cfr" });
         args.AddRange(encoderArgs);
         args.AddRange(new[] {
             "-c:a", "copy",
-            "-avoid_negative_ts", "make_zero",
+            // MP4 can retain negative B-frame DTS. Shifting it to zero would
+            // move copied audio by an encoder-dependent amount on every part.
+            "-avoid_negative_ts", "disabled",
             "-f", "mp4",
             outputPath,
         });

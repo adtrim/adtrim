@@ -20,6 +20,11 @@ public sealed class FfmpegResult
 /// </summary>
 public sealed class FfmpegRunner
 {
+    // MP4 retains its original editor clock; TS uses timestamps relative to the container start.
+    internal static string[] SourceTimestampArgs(long timelineStartUs) => timelineStartUs == 0
+        ? ["-copyts"]
+        : ["-copyts", "-start_at_zero"];
+
     private readonly string _ffmpegDir;
 
     public string FfmpegPath { get; }

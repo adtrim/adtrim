@@ -27,6 +27,8 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
     private string? _currentPath;
     private bool _initialized;
     private volatile bool _loading;
+    private bool _fileLoaded;
+    private (long TimeUs, bool Exact)? _pendingSeek;
     private int _audioStream = -1;
     private readonly object _seekLock = new();
     private int _previousFrameSteps;
@@ -55,7 +57,7 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
             if (_ctx == IntPtr.Zero) return;
             BeginSeek();
             PreviousFrameTargetUs = timeUs;
-            Command(_ctx, "seek", ((knownPredecessorUs ?? timeUs) / 1_000_000m).ToString("0.######", CultureInfo.InvariantCulture), "absolute+exact");
+            SeekOrQueue(knownPredecessorUs ?? timeUs, true);
         }
     }
     public bool IsLoading => _loading;
@@ -267,7 +269,16 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
                         break;
                     }
                     case MpvEventId.FileLoaded:
-                        ApplyAudioStream();
+                        lock (_seekLock)
+                        {
+                            _fileLoaded = true;
+                            ApplyAudioStream();
+                            if (_pendingSeek is { } pending)
+                            {
+                                _pendingSeek = null;
+                                SeekOrQueue(pending.TimeUs, pending.Exact);
+                            }
+                        }
                         break;
                     case MpvEventId.PlaybackRestart:
                     {
@@ -340,7 +351,12 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
             BeginSeek();
             if (!_initialized) Initialize();
             _currentPath = path;
+            // TS seeks can land on the following GOP. Include enough preroll for broadcast GOPs.
+            mpv_set_property_string(_ctx, "hr-seek-demuxer-offset",
+                System.IO.Path.GetExtension(path).Equals(".ts", StringComparison.OrdinalIgnoreCase) ? "3" : "1");
             _loading = true;
+            _fileLoaded = false;
+            _pendingSeek = null;
             mpv_set_property_string(_ctx, "pause", play ? "no" : "yes");
             mpv_set_property_string(_ctx, "start", (startUs / 1_000_000m).ToString("0.######", CultureInfo.InvariantCulture));
             mpv_set_property_string(_ctx, "cache", buffered ? "yes" : "auto");
@@ -389,10 +405,9 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
         {
             BeginSeek();
             if (_ctx == IntPtr.Zero) return;
-            var sec = timeUs / 1_000_000.0;
             // mpv "seek <time> absolute" - seeks to absolute position in seconds.
             // Honors the current `hr-seek` setting (we configured it on init).
-            Command(_ctx, "seek", sec.ToString("0.######", CultureInfo.InvariantCulture), "absolute");
+            SeekOrQueue(timeUs, false);
         }
     }
 
@@ -410,9 +425,17 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
         {
             BeginSeek();
             if (_ctx == IntPtr.Zero) return;
-            var sec = timeUs / 1_000_000.0;
-            Command(_ctx, "seek", sec.ToString("0.######", CultureInfo.InvariantCulture), "absolute+exact");
+            SeekOrQueue(timeUs, true);
         }
+    }
+
+    private void SeekOrQueue(long timeUs, bool exact)
+    {
+        // A seek sent before loadfile finishes can be discarded by mpv. Keep
+        // only the latest scrub request and apply it when the file is ready.
+        if (_loading && !_fileLoaded) { _pendingSeek = (timeUs, exact); return; }
+        Command(_ctx, "seek", (timeUs / 1_000_000m).ToString("0.######", CultureInfo.InvariantCulture),
+            exact ? "absolute+exact" : "absolute");
     }
 
     /// <summary>

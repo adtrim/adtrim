@@ -41,22 +41,24 @@ public sealed class SuggestionEngineIntegrationTests
         finally { Directory.Delete(directory, recursive: true); }
     }
     [SkippableTheory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task LearnedGraphicAndRepeatedUnitsFindALongBreakWithoutAudio(bool timestampOffset)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task LearnedGraphicAndRepeatedUnitsFindALongBreakWithoutAudio(bool timestampOffset, bool transportStream)
     {
         var root = FindRoot();
         Environment.SetEnvironmentVariable("ADTRIM_FFMPEG_DIR", Path.Combine(root, "binaries", "ffmpeg", "win-x64"));
         var runner = AudioLevelServiceTests.Runner();
         var directory = Path.Combine(Path.GetTempPath(), "adtrim-suggestion-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, "direct-cuts.mp4");
+        var path = Path.Combine(directory, transportStream ? "direct-cuts.ts" : "direct-cuts.mp4");
         try
         {
             var args = new List<string> { "-v", "error", "-f", "lavfi", "-i", "color=white:s=320x180:r=10:d=1000",
                 "-vf", "geq=lum='if(between(T,150,469.99),24+188*mod(floor((T-150)/30),2),64+80*mod(floor(T/30),2))':cb=128:cr=128,drawbox=x=10:y=150:w=10:h=10:color=white:t=fill:enable='not(between(t,150,469.99))'",
                 "-an", "-c:v", "libx264", "-preset", "ultrafast", "-g", "10", "-pix_fmt", "yuv420p" };
-            if (timestampOffset) args.AddRange(["-output_ts_offset", "1.3"]);
+            if (timestampOffset) args.AddRange(["-output_ts_offset", transportStream ? "60000" : "1.3"]);
             args.Add(path);
             var created = await runner.RunFfmpegAsync(args);
             Assert.True(created.Success, created.Stderr);
@@ -67,7 +69,7 @@ public sealed class SuggestionEngineIntegrationTests
                 new CancelAtProgress(cancellation), cancellation.Token));
             var result = await new SuggestionEngine(runner).AnalyzeAsync(path, media);
             var proposal = Assert.Single(result.Breaks);
-            long offset = timestampOffset ? 1_300_000 : 0;
+            long offset = timestampOffset && !transportStream ? 1_300_000 : 0;
             Assert.Equal(150_000_000 + offset, proposal.StartUs);
             Assert.Equal(470_000_000 + offset, proposal.EndUs);
             Assert.False(proposal.AutoExclude);

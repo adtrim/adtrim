@@ -25,7 +25,7 @@ public sealed class AudioLevelService(FfmpegRunner? runner, string? cacheRoot = 
 
     private const string CacheExtension = ".adtlevels";
     private const string CacheMagic = "ADTLEVELS";
-    public const int CacheVersion = 1;
+    public const int CacheVersion = 2;
 
     /// <summary>How often a pass publishes the loudness measured so far.</summary>
     public static readonly TimeSpan PartialInterval = TimeSpan.FromMilliseconds(500);
@@ -123,8 +123,8 @@ public sealed class AudioLevelService(FfmpegRunner? runner, string? cacheRoot = 
         // both accepted 5.1 layouts start FL, FR, FC.
         string mix = dialogue ? "pan=4c|c0=c0|c1=c1|c2=c2|c3=0.5*c0+0.5*c1,"
             : audio.Channels >= 2 ? "pan=mono|c0=0.5*c0+0.5*c1," : "";
-        var args = new List<string> { "-nostdin", "-hide_banner", "-v", "error", "-copyts", "-i", sourcePath,
-            "-map", "0:" + stream, "-vn", "-af", mix + "aresample=" + SampleRate.ToString(CultureInfo.InvariantCulture) + ":first_pts=0" };
+        List<string> args = ["-nostdin", "-hide_banner", "-v", "error", .. FfmpegRunner.SourceTimestampArgs(media.TimelineStartTimeUs), "-i", sourcePath,
+            "-map", "0:" + stream, "-vn", "-af", mix + "aresample=" + SampleRate.ToString(CultureInfo.InvariantCulture) + ":first_pts=0"];
         if (!dialogue) args.AddRange(["-ac", "1"]);
         args.AddRange(["-f", "f32le", "pipe:1"]);
 

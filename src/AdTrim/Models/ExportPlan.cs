@@ -1,5 +1,14 @@
 namespace AdTrim.Models;
 
+public enum ExportFormat { Mp4, Ts }
+
+public static class ExportFormats
+{
+    public static ExportFormat Normalize(ExportFormat format) => format == ExportFormat.Ts ? ExportFormat.Ts : ExportFormat.Mp4;
+    public static string Extension(this ExportFormat format) => Normalize(format) == ExportFormat.Ts ? ".ts" : ".mp4";
+    public static bool IsSupportedSource(string path) => System.IO.Path.GetExtension(path).ToLowerInvariant() is ".mp4" or ".ts";
+}
+
 /// <summary>One kept segment in an export plan, with its source-time bounds.</summary>
 public sealed record ExportSegment(int Index, long StartUs, long EndUs, string PartTitle)
 {
@@ -19,7 +28,8 @@ public sealed record ExportPlan(
     Rational FrameRate,
     string PrimaryAudioCodec = "",
     SourceFingerprint? Fingerprint = null,
-    bool Overwrite = false)
+    bool Overwrite = false,
+    ExportFormat Format = ExportFormat.Mp4)
 {
     public long ExpectedOutputDurationUs => KeptSegments.Sum(s => s.DurationUs);
 }

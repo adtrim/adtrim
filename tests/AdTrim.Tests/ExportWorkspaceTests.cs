@@ -9,16 +9,18 @@ public sealed class ExportWorkspaceTests : IDisposable
     private readonly string _root = Path.Combine(AppContext.BaseDirectory, "cleanup-test-" + Guid.NewGuid().ToString("N"));
     private string Registry => Path.Combine(_root, "registry");
     private string Temp => Path.Combine(_root, "temp");
-    private ExportWorkspace Create()
+    private ExportWorkspace Create(string extension = ".mp4")
     {
         Directory.CreateDirectory(_root);
-        return ExportWorkspace.Create(Path.Combine(_root, "finished.mp4"), Registry, Temp);
+        return ExportWorkspace.Create(Path.Combine(_root, "finished" + extension), Registry, Temp);
     }
 
-    [Fact]
-    public async Task RecoverySkipsActiveExportThenRemovesItsAbandonedFiles()
+    [Theory]
+    [InlineData(".mp4")]
+    [InlineData(".ts")]
+    public async Task RecoverySkipsActiveExportThenRemovesItsAbandonedFiles(string extension)
     {
-        var workspace = Create();
+        var workspace = Create(extension);
         File.WriteAllText(Path.Combine(workspace.TempDirectory, "seg_000.mp4"), "temporary video");
         File.WriteAllText(workspace.StagingPath, "unfinished output");
         var source = Path.Combine(_root, "recording.mp4");
@@ -48,10 +50,12 @@ public sealed class ExportWorkspaceTests : IDisposable
         Assert.False(File.Exists(segment));
     }
 
-    [Fact]
-    public async Task UnknownFilesAndNestedDirectoriesAreNeverRecursivelyDeleted()
+    [Theory]
+    [InlineData(".mp4")]
+    [InlineData(".ts")]
+    public async Task UnknownFilesAndNestedDirectoriesAreNeverRecursivelyDeleted(string extension)
     {
-        using var workspace = Create();
+        using var workspace = Create(extension);
         var sentinel = Path.Combine(workspace.TempDirectory, "personal.mp4");
         File.WriteAllText(sentinel, "keep");
         Directory.CreateDirectory(Path.Combine(workspace.TempDirectory, "nested"));
@@ -77,6 +81,20 @@ public sealed class ExportWorkspaceTests : IDisposable
         Assert.Equal(1, await ExportWorkspace.RecoverAsync(Registry, tempRoot: Temp));
         Assert.True(File.Exists(protectedPath) || Directory.Exists(protectedPath));
         Assert.True(File.Exists(manifest));
+    }
+
+    [Fact]
+    public async Task InterruptedTsMuxIsRecoveredWithoutTouchingUnrelatedFiles()
+    {
+        var workspace = ExportWorkspace.Create(Path.Combine(_root, "finished.ts"), Registry, Temp);
+        Assert.EndsWith(".ts", workspace.StagingPath);
+        File.WriteAllText(workspace.StagingPath, "partial output");
+        File.WriteAllText(Path.Combine(workspace.TempDirectory, "audio-check.ts"), "audio probe");
+        File.WriteAllText(Path.Combine(workspace.TempDirectory, "seg_000.mp4"), "segment");
+        string stage = workspace.StagingPath;
+        workspace.Dispose();
+        Assert.Equal(0, await ExportWorkspace.RecoverAsync(Registry, tempRoot: Temp));
+        Assert.False(File.Exists(stage));
     }
 
     public void Dispose()

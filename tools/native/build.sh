@@ -100,6 +100,15 @@ build_ffmpeg() {
  mkdir -p build/ffmpeg
  (cd build/ffmpeg; "$ROOT/src/ffmpeg/configure" --prefix="$PREFIX" --arch=x86_64 --target-os=mingw32 --cross-prefix=x86_64-w64-mingw32- --cc="$CC" --cxx="$CXX" --enable-cross-compile --pkg-config=pkg-config --pkg-config-flags=--static --enable-gpl --enable-version3 --disable-shared --enable-static --disable-autodetect --enable-libx264 --enable-libdav1d --enable-libvpl --enable-amf --enable-nvenc --enable-nvdec --enable-ffnvcodec --enable-d3d11va --enable-dxva2 --enable-schannel --enable-zlib --disable-doc --disable-ffplay --extra-cflags="-I$PREFIX/include -D_WIN32_WINNT=0x0A00" --extra-ldflags="-L$PREFIX/lib -static -static-libgcc -static-libstdc++" --extra-libs=-lstdc++; make -j6; make install)
 }
+build_mpv() {
+ local patch_file=patches/mpv-ts-seek-preroll.patch
+ if git apply --check --directory=src/mpv "$patch_file"; then
+  git apply --directory=src/mpv "$patch_file"
+ else
+  git apply --reverse --check --directory=src/mpv "$patch_file"
+ fi
+ meson_build mpv --default-library shared --prefer-static -Dlibmpv=true -Dcplayer=true -Dlua=disabled -Djavascript=disabled -Dmanpage-build=disabled -Dwin32-smtc=disabled -Dd3d11=enabled -Dshaderc=enabled -Dspirv-cross=enabled -Dwasapi=enabled -Dgl-win32=enabled -Dbuild-date=false
+}
 step headers build_headers
 cp -r src/vulkan-headers/include/* "$PREFIX/include/"
 step x264 build_x264
@@ -118,7 +127,7 @@ cp "$PREFIX/lib/pkgconfig/spirv-cross-c.pc" "$PREFIX/lib/pkgconfig/spirv-cross-c
 echo 'Libs.private: -lspirv-cross-glsl -lspirv-cross-hlsl -lspirv-cross-msl -lspirv-cross-cpp -lspirv-cross-reflect -lspirv-cross-util -lspirv-cross-core -lstdc++' >> "$PREFIX/lib/pkgconfig/spirv-cross-c-shared.pc"
 step shaderc build_shaderc
 step libplacebo build_placebo
-step mpv meson_build mpv --default-library shared --prefer-static -Dlibmpv=true -Dcplayer=true -Dlua=disabled -Djavascript=disabled -Dmanpage-build=disabled -Dwin32-smtc=disabled -Dd3d11=enabled -Dshaderc=enabled -Dspirv-cross=enabled -Dwasapi=enabled -Dgl-win32=enabled -Dbuild-date=false
+step mpv build_mpv
 mkdir -p output
 cp "$PREFIX/bin/ffmpeg.exe" "$PREFIX/bin/ffprobe.exe" "$PREFIX/bin/libmpv-2.dll" output/
 x86_64-w64-mingw32-strip --strip-unneeded output/ffmpeg.exe output/ffprobe.exe output/libmpv-2.dll

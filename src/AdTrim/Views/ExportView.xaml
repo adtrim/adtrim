@@ -62,7 +62,7 @@
                   </ControlTemplate>
                 </ToggleButton.Template>
               </ToggleButton>
-              <TextBlock Text="{Binding DataContext.AccelerationLabel, RelativeSource={RelativeSource TemplatedParent}}"
+              <TextBlock Text="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"
                          Margin="10,8,30,8" IsHitTestVisible="False" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
               <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True">
                 <Border Background="{StaticResource Bg.Lane}" BorderBrush="{StaticResource Border.Strong}" BorderThickness="1"
@@ -77,6 +77,15 @@
           </ControlTemplate>
         </Setter.Value>
       </Setter>
+    </Style>
+    <Style x:Key="ExportSection" TargetType="Border">
+      <Setter Property="Background" Value="{StaticResource Bg.Surface2}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource Border.Subtle}"/>
+      <Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="8"/><Setter Property="Padding" Value="16"/>
+    </Style>
+    <Style x:Key="ExportSectionTitle" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource Text.Primary}"/><Setter Property="FontSize" Value="16"/>
+      <Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Margin" Value="0,0,0,12"/>
     </Style>
     <conv:TimeFormatConverter x:Key="TimeFmt"/>
     <conv:StatusKindToBrushConverter x:Key="StatusKindBrush"/>
@@ -122,183 +131,170 @@
       <!-- ====================================================== -->
       <!-- CONFIGURING VIEW                                        -->
       <!-- ====================================================== -->
-      <Grid Visibility="{Binding IsConfiguring, Converter={StaticResource Bool2Vis}}" MaxWidth="820" HorizontalAlignment="Stretch">
-        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-        <Grid>
+      <Grid x:Name="ConfigPanel" Visibility="{Binding IsConfiguring, Converter={StaticResource Bool2Vis}}" MaxWidth="820" HorizontalAlignment="Stretch" VerticalAlignment="Top">
         <Grid.RowDefinitions>
-          <RowDefinition Height="Auto"/>   <!-- Header -->
-          <RowDefinition Height="Auto"/>   <!-- Summary stats -->
-          <RowDefinition Height="Auto"/>   <!-- Output folder -->
-          <RowDefinition Height="Auto"/>   <!-- Output filename -->
-          <RowDefinition Height="Auto"/>   <!-- Post-export options -->
-          <RowDefinition Height="Auto"/>   <!-- Warning banner -->
+          <RowDefinition Height="*"/>
+          <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-
-        <!-- Header -->
-        <StackPanel Grid.Row="0" Margin="24,20,24,0">
-          <TextBlock Text="Export merged MP4" Style="{StaticResource Text.DialogTitle}"/>
-          <TextBlock Foreground="{StaticResource Text.Secondary}" FontSize="13" Margin="0,4,0,0"
-                     TextWrapping="Wrap">
-            Excluded segments will be cut and the remaining parts merged into a single file.
-          </TextBlock>
-        </StackPanel>
-
-        <!-- Duration summary -->
-        <Border Grid.Row="1" Margin="24,20,24,0"
-                Background="{StaticResource Bg.Surface2}"
-                BorderBrush="{StaticResource Border.Subtle}" BorderThickness="1"
-                CornerRadius="6" Padding="14,12">
-          <Grid>
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="Auto"/>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="Auto"/>
-              <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-
-            <StackPanel Grid.Column="0">
-              <TextBlock Text="SOURCE" Style="{StaticResource Text.SectionLabel}"
-                         Foreground="{StaticResource Text.Tertiary}" FontSize="11"/>
-              <TextBox Style="{StaticResource SelectableText}"
-                       Text="{Binding SourceDurationUs, Converter={StaticResource TimeFmt}, Mode=OneWay}"
-                       FontFamily="{StaticResource Font.Mono}" FontSize="18" FontWeight="Medium"
-                       Foreground="{StaticResource Text.Primary}" Margin="0,2,0,0"/>
-            </StackPanel>
-
-            <Rectangle Grid.Column="1" Width="1" Fill="{StaticResource Border.Subtle}" Margin="0,0,14,0"/>
-
-            <StackPanel Grid.Column="2">
-              <TextBlock Text="EXCLUDED" Style="{StaticResource Text.SectionLabel}"
-                         Foreground="{StaticResource Text.Tertiary}" FontSize="11"/>
-              <TextBox Style="{StaticResource SelectableText}"
-                       FontFamily="{StaticResource Font.Mono}" FontSize="18" FontWeight="Medium"
-                       Foreground="{StaticResource State.Warning}" Margin="0,2,0,0"
-                       Text="{Binding ExcludedDurationUs, Converter={StaticResource TimeFmt}, StringFormat=−{0}, Mode=OneWay}"/>
-            </StackPanel>
-
-            <Rectangle Grid.Column="3" Width="1" Fill="{StaticResource Border.Subtle}" Margin="0,0,14,0"/>
-
-            <StackPanel Grid.Column="4">
-              <TextBlock Text="FINAL" Style="{StaticResource Text.SectionLabel}"
-                         Foreground="{StaticResource Text.Tertiary}" FontSize="11"/>
-              <TextBox Style="{StaticResource SelectableText}"
-                       Text="{Binding FinalDurationUs, Converter={StaticResource TimeFmt}, Mode=OneWay}"
-                       FontFamily="{StaticResource Font.Mono}" FontSize="18" FontWeight="Medium"
-                       Foreground="{StaticResource State.Success}" Margin="0,2,0,0"/>
-            </StackPanel>
-          </Grid>
-        </Border>
-
-        <!-- Output folder -->
-        <StackPanel Grid.Row="2" Margin="24,20,24,0">
-          <TextBlock Text="Output folder" Style="{StaticResource DialogFieldLabel}"/>
-          <Grid>
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <TextBox Grid.Column="0"
-                     FontFamily="{StaticResource Font.Mono}" FontSize="13"
-                     Text="{Binding OutputFolder, UpdateSourceTrigger=PropertyChanged}"/>
-            <Button Grid.Column="1" Content="Browse…" Margin="6,0,0,0" Click="OnBrowseFolder"/>
-          </Grid>
-        </StackPanel>
-
-        <!-- Output filename -->
-        <StackPanel Grid.Row="3" Margin="24,14,24,0">
-          <Grid Margin="0,0,0,6">
-            <TextBlock Text="Output filename" Style="{StaticResource DialogFieldLabel}" Margin="0"/>
-            <TextBlock Text=".mp4 added automatically" HorizontalAlignment="Right"
-                       Foreground="{StaticResource Text.Tertiary}" FontSize="12"/>
-          </Grid>
-          <TextBox x:Name="OutputFilenameInput" FontFamily="{StaticResource Font.Mono}"
-                   Text="{Binding OutputFilename, UpdateSourceTrigger=PropertyChanged}"/>
-        </StackPanel>
-
-        <!-- Export options -->
-        <StackPanel Grid.Row="4" Margin="24,14,24,0">
-          <TextBlock Text="Export acceleration" Style="{StaticResource DialogFieldLabel}"/>
-          <DockPanel Margin="0,0,0,6" Height="{Binding ActualHeight, ElementName=OutputFilenameInput}">
-            <Button x:Name="EvaluationResultsButton" DockPanel.Dock="Right" Content="Results" Click="OnShowEvaluation" Margin="6,0,0,0"
-                    IsEnabled="{Binding CanOpenResults}"/>
-            <Button DockPanel.Dock="Right" Content="Evaluate options" Click="OnRecheckHardware" Margin="6,0,0,0"
-                    IsEnabled="{Binding CanCheckHardware}"/>
-            <ComboBox x:Name="AccelerationSelector" ItemsSource="{Binding AccelerationOptions}" SelectedItem="{Binding SelectedAcceleration}"
-                      DisplayMemberPath="DisplayName" IsEnabled="{Binding CanCheckHardware}"/>
-          </DockPanel>
-          <TextBlock Text="{Binding EncoderDescription}" Foreground="{StaticResource Text.Secondary}"
-                     TextWrapping="Wrap" FontSize="12" Margin="0,0,0,12"/>
-          <CheckBox x:Name="DeleteSidecarCheckBox" Margin="0,15,0,0" IsChecked="{Binding DeleteSidecarAfterExport, Mode=TwoWay}"
-                    AutomationProperties.Name="Delete project sidecar after successful export">
-            <CheckBox.Template>
-              <ControlTemplate TargetType="CheckBox">
-                <Border x:Name="Card" Background="{StaticResource Bg.Surface2}" BorderBrush="{StaticResource Border.Strong}"
-                        BorderThickness="1" CornerRadius="7" Padding="14,10">
-                  <Grid>
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <ScrollViewer x:Name="ConfigScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+          <StackPanel Margin="4,4,4,0">
+            <TextBlock Text="Export video" Foreground="{StaticResource Text.Primary}" FontSize="24" FontWeight="SemiBold"/>
+            <TextBlock Text="{Binding SourceDisplayName}" Foreground="{StaticResource Text.Primary}" FontSize="14" TextWrapping="Wrap" Margin="0,8,0,0"/>
+            <TextBlock Text="{Binding SourceSubtitle}" Foreground="{StaticResource Text.Secondary}" FontSize="13" TextWrapping="Wrap" Margin="0,3,0,0">
+                <TextBlock.Style><Style TargetType="TextBlock"><Style.Triggers><DataTrigger Binding="{Binding SourceSubtitle}" Value=""><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></TextBlock.Style>
+              </TextBlock>
+            <Border Margin="0,12,0,12" Background="{StaticResource Bg.Surface2}" BorderBrush="{StaticResource Border.Subtle}" BorderThickness="1" CornerRadius="6" Padding="14,12">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                  <TextBlock Text="ORIGINAL" Style="{StaticResource Text.SectionLabel}" Foreground="{StaticResource Text.Tertiary}" FontSize="11"/>
+                  <TextBox Style="{StaticResource SelectableText}" Text="{Binding SourceDurationUs, Converter={StaticResource TimeFmt}, Mode=OneWay}" FontFamily="{StaticResource Font.Mono}" FontSize="18" FontWeight="Medium" Foreground="{StaticResource Text.Primary}" Margin="0,2,0,0"/>
+                </StackPanel>
+                <Rectangle Grid.Column="1" Width="1" Fill="{StaticResource Border.Subtle}" Margin="0,0,14,0"/>
+                <StackPanel Grid.Column="2">
+                  <TextBlock Text="EXCLUDED" Style="{StaticResource Text.SectionLabel}" Foreground="{StaticResource Text.Tertiary}" FontSize="11"/>
+                  <TextBox Style="{StaticResource SelectableText}" FontFamily="{StaticResource Font.Mono}" FontSize="18" FontWeight="Medium" Foreground="{StaticResource State.Warning}" Margin="0,2,0,0" Text="{Binding ExcludedDurationUs, Converter={StaticResource TimeFmt}, StringFormat=−{0}, Mode=OneWay}"/>
+                </StackPanel>
+                <Rectangle Grid.Column="3" Width="1" Fill="{StaticResource Border.Subtle}" Margin="0,0,14,0"/>
+                <StackPanel Grid.Column="4">
+                  <TextBlock Text="EXPORTED" Style="{StaticResource Text.SectionLabel}" Foreground="{StaticResource Text.Tertiary}" FontSize="11"/>
+                  <TextBox Style="{StaticResource SelectableText}" Text="{Binding FinalDurationUs, Converter={StaticResource TimeFmt}, Mode=OneWay}" FontFamily="{StaticResource Font.Mono}" FontSize="18" FontWeight="Medium" Foreground="{StaticResource State.Success}" Margin="0,2,0,0"/>
+                </StackPanel>
+              </Grid>
+            </Border>
+            <StackPanel x:Name="ExportSettingsCards">
+              <Border Style="{StaticResource ExportSection}" Margin="0" x:Name="FormatCard">
+                <StackPanel>
+                  <TextBlock Text="File format" Style="{StaticResource ExportSectionTitle}"/>
+                  <ComboBox x:Name="FormatSelector" MinHeight="40" AutomationProperties.Name="Export file format" Tag="{Binding FormatLabel}" ItemsSource="{Binding FormatOptions}" SelectedItem="{Binding SelectedFormat}" SelectionChanged="OnFormatChanged" IsEnabled="{Binding CanCheckHardware}" Margin="0,0,0,6">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate>
+                        <TextBlock>
+                          <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                              <Setter Property="Text" Value="MP4 (.mp4)"/>
+                              <Style.Triggers>
+                                <DataTrigger Binding="{Binding}" Value="Ts">
+                                  <Setter Property="Text" Value="MPEG transport stream (.ts)"/>
+                                </DataTrigger>
+                              </Style.Triggers>
+                            </Style>
+                          </TextBlock.Style>
+                        </TextBlock>
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                    <ComboBox.ItemContainerStyle>
+                      <Style TargetType="ComboBoxItem">
+                        <Setter Property="Foreground" Value="{StaticResource Text.Primary}"/>
+                      </Style>
+                    </ComboBox.ItemContainerStyle>
+                  </ComboBox>
+                  <TextBlock Text="Your last choice is remembered." Foreground="{StaticResource Text.Secondary}" FontSize="12" Margin="0,6,0,0"/>
+                  <Border x:Name="TsChapterBanner" Background="{StaticResource State.WarningTint}" BorderBrush="{StaticResource State.Warning}" BorderThickness="3,0,0,0" CornerRadius="4" Padding="14" Margin="0,16,0,0" Visibility="{Binding IsTsExport, Converter={StaticResource Bool2Vis}}">
                     <StackPanel>
-                      <TextBlock Text="Delete project sidecar" Foreground="{StaticResource Text.Primary}" FontSize="13" FontWeight="SemiBold"/>
-                      <TextBlock Text="Only after a successful export (.adt.json)" Foreground="{StaticResource Text.Secondary}" FontSize="12" Margin="0,4,0,0"/>
+                      <TextBlock Text="No chapters in TS exports" Foreground="{StaticResource State.Warning}" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                      <TextBlock x:Name="TsChapterNotice" Text="TS exports do not include chapter markers or chapter names." Visibility="{Binding IsTsExport, Converter={StaticResource Bool2Vis}}" Foreground="{StaticResource Text.Primary}" FontSize="13" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                      <TextBlock Text="Choose MP4 to keep chapters." Foreground="{StaticResource Text.Primary}" FontSize="13" TextWrapping="Wrap" Margin="0,8,0,0"/>
                     </StackPanel>
-                    <Grid Grid.Column="1" Width="34" Height="20" Margin="16,0,0,0">
-                      <Border x:Name="Track" Background="{StaticResource Border.Strong}" CornerRadius="10"/>
-                      <Ellipse x:Name="Thumb" Width="14" Height="14" Margin="3,0" HorizontalAlignment="Left" Fill="{StaticResource Text.Secondary}"/>
-                    </Grid>
-                  </Grid>
-                </Border>
-                <ControlTemplate.Triggers>
-                  <Trigger Property="IsChecked" Value="True">
-                    <Setter TargetName="Track" Property="Background" Value="{StaticResource Accent.Base}"/>
-                    <Setter TargetName="Thumb" Property="HorizontalAlignment" Value="Right"/>
-                    <Setter TargetName="Thumb" Property="Fill" Value="White"/>
-                  </Trigger>
-                  <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Accent.Base}"/></Trigger>
-                  <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Accent.Base}"/></Trigger>
-                </ControlTemplate.Triggers>
-              </ControlTemplate>
-            </CheckBox.Template>
-          </CheckBox>
-        </StackPanel>
-
-        <!-- Inline validation banner - one row per issue, kind-colored.        -->
-        <!-- Empty collection collapses the row. ScrollViewer caps growth so    -->
-        <!-- adding/removing issues doesn't resize the (fixed-height) window -  -->
-        <!-- previously this row + SizeToContent="Height" produced visible      -->
-        <!-- flicker as validation churned during typing.                        -->
-        <ScrollViewer Grid.Row="5" Margin="24,14,24,0" MaxHeight="140"
-                      VerticalScrollBarVisibility="Auto"
-                      HorizontalScrollBarVisibility="Disabled">
-        <ItemsControl ItemsSource="{Binding ValidationIssues}">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate>
-              <Border Background="{Binding Kind, Converter={StaticResource StatusKindBannerBg}}"
-                      BorderBrush="{Binding Kind, Converter={StaticResource StatusKindBrush}}"
-                      BorderThickness="0,0,0,0"
-                      CornerRadius="4" Padding="12,10" Margin="0,0,0,6">
-                <StackPanel Orientation="Horizontal">
-                  <Path Width="14" Height="14" Stretch="Uniform" Margin="0,1,10,0"
-                        Stroke="{Binding Kind, Converter={StaticResource StatusKindBrush}}"
-                        StrokeThickness="1.6"
-                        Fill="Transparent" StrokeLineJoin="Round"
-                        Data="M12,4 L21,20 L3,20 Z M12,10 L12,14 M12,17 L12,17"/>
-                  <TextBlock Text="{Binding Message}" VerticalAlignment="Center"
-                             Foreground="{StaticResource Text.Primary}"
-                             TextWrapping="Wrap"/>
+                  </Border>
+                  <TextBlock Text="Chapter markers and names are included." Foreground="{StaticResource State.Success}" FontSize="13" TextWrapping="Wrap" Margin="0,16,0,0" Visibility="{Binding IsTsExport, Converter={StaticResource Bool2Collapse}}"/>
                 </StackPanel>
               </Border>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
+              <Border Style="{StaticResource ExportSection}" Margin="0,16,0,0" x:Name="DestinationCard">
+                <StackPanel>
+                  <TextBlock Text="Save your video" Style="{StaticResource ExportSectionTitle}"/>
+                  <StackPanel Margin="0">
+                    <TextBlock Text="Output folder" Style="{StaticResource DialogFieldLabel}"/>
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBox x:Name="OutputFolderInput" Padding="12,9" MinHeight="40" Grid.Column="0" FontFamily="{StaticResource Font.Mono}" FontSize="13" Text="{Binding OutputFolder, UpdateSourceTrigger=PropertyChanged}"/>
+                      <Button Grid.Column="1" Content="Browse…" Margin="6,0,0,0" Click="OnBrowseFolder"/>
+                    </Grid>
+                  </StackPanel>
+                  <StackPanel Margin="0,16,0,0">
+                    <Grid Margin="0,0,0,6">
+                      <TextBlock Text="Output filename" Style="{StaticResource DialogFieldLabel}" Margin="0"/>
+                      <TextBlock Text="{Binding ExtensionHint}" HorizontalAlignment="Right" Foreground="{StaticResource Text.Tertiary}" FontSize="12"/>
+                    </Grid>
+                    <TextBox x:Name="OutputFilenameInput" Padding="12,9" MinHeight="40" FontFamily="{StaticResource Font.Mono}" Text="{Binding OutputFilename, UpdateSourceTrigger=PropertyChanged}"/>
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+              <Border Style="{StaticResource ExportSection}" Margin="0,16,0,0" x:Name="AccelerationCard">
+                <StackPanel>
+                  <TextBlock Text="Export acceleration" Style="{StaticResource ExportSectionTitle}"/>
+                  <ComboBox x:Name="AccelerationSelector" Tag="{Binding AccelerationLabel}" ItemsSource="{Binding AccelerationOptions}" SelectedItem="{Binding SelectedAcceleration}" DisplayMemberPath="DisplayName" IsEnabled="{Binding CanCheckHardware}" Height="{Binding ActualHeight, ElementName=OutputFilenameInput}"/>
+                  <TextBlock Text="{Binding EncoderDescription}" Foreground="{StaticResource Text.Secondary}" TextWrapping="Wrap" FontSize="12" Margin="0,8,0,12"/>
+                  <StackPanel Orientation="Horizontal">
+                    <Button x:Name="EvaluationResultsButton" Content="Results" Click="OnShowEvaluation" Margin="0,0,8,0" IsEnabled="{Binding CanOpenResults}" Height="{Binding ActualHeight, ElementName=OutputFilenameInput}"/>
+                    <Button Content="Evaluate options" Click="OnRecheckHardware" Margin="0,0,8,0" IsEnabled="{Binding CanCheckHardware}" Height="{Binding ActualHeight, ElementName=OutputFilenameInput}"/>
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+              <Border Style="{StaticResource ExportSection}" Margin="0,16,0,0" x:Name="AfterExportCard">
+                <StackPanel>
+                  <TextBlock Text="After export" Style="{StaticResource ExportSectionTitle}"/>
+                  <CheckBox x:Name="DeleteSidecarCheckBox" Margin="0" IsChecked="{Binding DeleteSidecarAfterExport, Mode=TwoWay}"
+                            Checked="OnDeleteSidecarChanged" Unchecked="OnDeleteSidecarChanged"
+                            AutomationProperties.Name="Delete project sidecar after successful export" ToolTip="{Binding SidecarDeletionHint}">
+                    <CheckBox.Template>
+                      <ControlTemplate TargetType="CheckBox">
+                        <Border x:Name="Card" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" CornerRadius="7" Padding="2,6">
+                          <Grid>
+                            <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="*"/>
+                              <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                              <TextBlock Text="Delete project sidecar" Foreground="{StaticResource Text.Primary}" FontSize="13" FontWeight="SemiBold"/>
+                            </StackPanel>
+                            <Grid Grid.Column="1" Width="34" Height="20" Margin="16,0,0,0">
+                              <Border x:Name="Track" Background="{StaticResource Border.Strong}" CornerRadius="10"/>
+                              <Ellipse x:Name="Thumb" Width="14" Height="14" Margin="3,0" HorizontalAlignment="Left" Fill="{StaticResource Text.Secondary}"/>
+                            </Grid>
+                          </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                          <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Track" Property="Background" Value="{StaticResource Accent.Base}"/>
+                            <Setter TargetName="Thumb" Property="HorizontalAlignment" Value="Right"/>
+                            <Setter TargetName="Thumb" Property="Fill" Value="White"/>
+                          </Trigger>
+                          <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Accent.Base}"/>
+                          </Trigger>
+                          <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Accent.Base}"/>
+                          </Trigger>
+                        </ControlTemplate.Triggers>
+                      </ControlTemplate>
+                    </CheckBox.Template>
+                  </CheckBox>
+                  <TextBlock x:Name="SidecarDeletionNotice" Text="{Binding SidecarDeletionHint}" Foreground="{StaticResource Text.Secondary}" FontSize="12" TextWrapping="Wrap" Margin="2,8,2,0"/>
+                </StackPanel>
+              </Border>
+            </StackPanel>
+            <ItemsControl ItemsSource="{Binding ValidationIssues}" Margin="0,16,0,0">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Border Background="{Binding Kind, Converter={StaticResource StatusKindBannerBg}}" BorderBrush="{Binding Kind, Converter={StaticResource StatusKindBrush}}" BorderThickness="3,0,0,0" CornerRadius="4" Padding="14,12" Margin="0,0,0,8">
+                    <TextBlock Text="{Binding Message}" Foreground="{StaticResource Text.Primary}" TextWrapping="Wrap"/>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
         </ScrollViewer>
-
-        </Grid>
-        </ScrollViewer>
-        <!-- Actions stay visible while configuration scrolls. -->
-        <Border x:Name="ConfigFooter" Grid.Row="1" Background="Transparent"
-                BorderBrush="{StaticResource Border.Subtle}" BorderThickness="0,1,0,0"
-                Padding="20,14">
+        <Border x:Name="ConfigFooter" Grid.Row="1" Background="{StaticResource Bg.Surface2}" BorderBrush="{StaticResource Border.Subtle}" BorderThickness="1" CornerRadius="8" Margin="4,16,4,0" Padding="16">
           <Grid>
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="Auto"/>
@@ -306,15 +302,9 @@
               <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <Button Grid.Column="0" Content="Back to editing" Click="OnCancel"/>
-            <Button Grid.Column="2" Style="{StaticResource Button.Primary}" Click="OnExport"
-                    IsEnabled="{Binding CanCheckHardware}"
-                    Padding="14,8">
+            <Button x:Name="StartExportButton" Grid.Column="2" Style="{StaticResource Button.Primary}" Click="OnExport" IsEnabled="{Binding CanCheckHardware}" Padding="22,10" MinWidth="130">
               <StackPanel Orientation="Horizontal">
-                <Path Width="13" Height="13" Stretch="Uniform"
-                      Stroke="White" StrokeThickness="1.6" Fill="Transparent"
-                      StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                      Data="M12,4 L12,15 M7,10 L12,15 L17,10 M5,20 L19,20"
-                      Margin="0,0,6,0"/>
+                <Path Width="13" Height="13" Stretch="Uniform" Stroke="White" StrokeThickness="1.6" Fill="Transparent" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Data="M12,4 L12,15 M7,10 L12,15 L17,10 M5,20 L19,20" Margin="0,0,6,0"/>
                 <TextBlock Text="{Binding ExportButtonText}" Foreground="White"/>
               </StackPanel>
             </Button>
@@ -393,6 +383,9 @@
           <TextBlock x:Name="PartsSummaryText" Text="{Binding PartsSummary}" HorizontalAlignment="Center"
                      Foreground="{StaticResource Text.Secondary}" FontSize="12" Margin="0,16"
                      TextAlignment="Center" TextWrapping="Wrap"/>
+          <TextBlock Text="{Binding SourceCommentNote}" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="460"
+                     Foreground="{StaticResource Text.Secondary}" Margin="0,6,0,0"
+                     Visibility="{Binding IsCompleted, Converter={StaticResource Bool2Vis}}"/>
         </StackPanel>
         <!-- Error banner - only when in failed/cancelled state -->
         <Border x:Name="ProgressError" Grid.Row="1" Margin="24,12,24,0" Padding="12,10"
@@ -556,21 +549,20 @@
             <ItemsControl x:Name="ExportPartsList" Grid.Row="3" ItemsSource="{Binding Parts}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                  <Grid Margin="0,3">
+                  <Grid Margin="0,5">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="22"/>
                       <ColumnDefinition Width="*"/>
-                      <ColumnDefinition Width="220"/>
-                      <ColumnDefinition Width="76"/>
-                      <ColumnDefinition Width="80"/>
+                      <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
                     <!-- Status icon: queued = open circle, in-progress = filled
                          dot, done = check. We swap visibility per state. -->
-                    <Ellipse Grid.Column="0" Width="11" Height="11" StrokeThickness="1.5"
+                    <Ellipse Grid.Column="0" Grid.RowSpan="2" Width="11" Height="11" StrokeThickness="1.5"
                              Stroke="{StaticResource Border.Strong}" Fill="Transparent"
                              Visibility="{Binding IsQueued, Converter={StaticResource Bool2Vis}}"/>
-                    <Path Grid.Column="0" Width="11" Height="11" Stretch="Uniform"
+                    <Path Grid.Column="0" Grid.RowSpan="2" Width="11" Height="11" Stretch="Uniform"
                           Stroke="{StaticResource Accent.Base}" StrokeThickness="1.6"
                           StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                           Fill="Transparent"
@@ -592,35 +584,32 @@
                         </EventTrigger>
                       </Path.Triggers>
                     </Path>
-                    <Path Grid.Column="0" Width="12" Height="12" Stretch="Uniform"
+                    <Path Grid.Column="0" Grid.RowSpan="2" Width="12" Height="12" Stretch="Uniform"
                           Stroke="{StaticResource State.Success}" StrokeThickness="2"
                           StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                           Data="M5,12 L10,17 L19,7"
                           Visibility="{Binding IsDone, Converter={StaticResource Bool2Vis}}"/>
-                    <Path Grid.Column="0" Width="11" Height="11" Stretch="Uniform"
+                    <Path Grid.Column="0" Grid.RowSpan="2" Width="11" Height="11" Stretch="Uniform"
                           Stroke="{StaticResource State.Danger}" StrokeThickness="2"
                           StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                           Data="M6,6 L18,18 M18,6 L6,18"
                           Visibility="{Binding IsFailed, Converter={StaticResource Bool2Vis}}"/>
 
-                    <TextBlock x:Name="PartName" Grid.Column="1" Text="{Binding Label}"
+                    <TextBlock x:Name="PartName" Grid.Column="1" Grid.RowSpan="2" Text="{Binding Label}"
                                TextTrimming="CharacterEllipsis" ToolTip="{Binding Label}"
                                Foreground="{StaticResource Text.Primary}" FontWeight="Medium"
                                VerticalAlignment="Center" Margin="8,0,16,0"/>
                     <TextBlock x:Name="PartRange" Grid.Column="2" Text="{Binding TimeRange}"
                                FontFamily="{StaticResource Font.Mono}" FontSize="12"
                                Foreground="{StaticResource Text.Secondary}"
-                               VerticalAlignment="Center" Margin="0,0,16,0"
+                               VerticalAlignment="Center" Margin="0,0,0,0"
                                ToolTip="{Binding TimeRange}" TextTrimming="CharacterEllipsis"/>
-                    <TextBlock Grid.Column="3" Text="{Binding ElapsedFormatted}"
-                               FontFamily="{StaticResource Font.Mono}" FontSize="12"
-                               VerticalAlignment="Center" Margin="12,0,0,0"
-                               Foreground="{StaticResource Text.Secondary}"
-                               TextAlignment="Right"/>
-                    <TextBlock Grid.Column="4" Text="{Binding StatusText}" TextAlignment="Right"
-                               FontFamily="{StaticResource Font.Mono}" FontSize="12"
-                               VerticalAlignment="Center" Margin="12,0,0,0"
-                               Foreground="{StaticResource Text.Tertiary}"/>
+                    <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,4,0,0">
+                      <TextBlock Text="{Binding ElapsedFormatted}" FontFamily="{StaticResource Font.Mono}" FontSize="12"
+                                 Foreground="{StaticResource Text.Secondary}"/>
+                      <TextBlock Text="{Binding StatusText}" FontFamily="{StaticResource Font.Mono}" FontSize="12"
+                                 Foreground="{StaticResource Text.Tertiary}" Margin="12,0,0,0"/>
+                    </StackPanel>
                   </Grid>
                 </DataTemplate>
               </ItemsControl.ItemTemplate>

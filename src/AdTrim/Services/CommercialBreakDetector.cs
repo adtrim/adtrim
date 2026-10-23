@@ -97,8 +97,8 @@ public sealed class CommercialBreakDetector(FfmpegRunner runner)
             + "[scene]select='eq(n,0)+gt(scene\\,0.32)',metadata=print[sceneout]";
         if (media.PrimaryAudioIndex >= 0)
             graph += $";[0:{media.PrimaryAudioIndex}]silencedetect=n=-32dB:d=0.08[audioout]";
-        var args = new List<string> { "-hide_banner", "-nostats", "-v", "info", "-copyts", "-i", sourcePath,
-            "-filter_complex", graph, "-map", "[blackout]", "-map", "[sceneout]" };
+        List<string> args = ["-hide_banner", "-nostats", "-v", "info", .. FfmpegRunner.SourceTimestampArgs(media.TimelineStartTimeUs), "-i", sourcePath,
+            "-filter_complex", graph, "-map", "[blackout]", "-map", "[sceneout]"];
         if (media.PrimaryAudioIndex >= 0) args.AddRange(["-map", "[audioout]"]);
         args.AddRange(["-progress", "pipe:1", "-stats_period", "2", "-f", "null", "-"]);
         progress?.Report(new CommercialDetectionProgress(0, media.DurationUs, Queued: true));

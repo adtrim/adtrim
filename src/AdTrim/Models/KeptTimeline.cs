@@ -44,11 +44,12 @@ public sealed class KeptTimeline
         }
         return DurationUs;
     }
-    public string ToMpvEdl(string sourcePath)
+    public string ToMpvEdl(string sourcePath, long timelineStartTimeUs = 0)
     {
         if (Spans.Count == 0) throw new InvalidOperationException("No kept footage.");
+        // EDL offsets use demuxer timestamps, including the TS origin.
         var file = $"%{Encoding.UTF8.GetByteCount(sourcePath)}%{sourcePath}";
-        return "edl://" + string.Join(";", Spans.Select(s => file + "," + Seconds(s.StartUs) + "," + Seconds(s.DurationUs)));
+        return "edl://" + string.Join(";", Spans.Select(s => file + "," + Seconds(s.StartUs + timelineStartTimeUs) + "," + Seconds(s.DurationUs)));
     }
     private static string Seconds(long us) => (us / 1_000_000m).ToString("0.######", CultureInfo.InvariantCulture);
 }

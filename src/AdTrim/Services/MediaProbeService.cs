@@ -19,10 +19,11 @@ public sealed class MediaProbeService
     {
         var args = new[]
         {
-            "-v", "error",
+            "-v", System.IO.Path.GetExtension(path).Equals(".ts", StringComparison.OrdinalIgnoreCase) ? "warning" : "error",
             "-print_format", "json",
             "-show_format",
             "-show_streams",
+            "-show_programs",
             path,
         };
         var r = await _runner.RunFfprobeAsync(args, ct).ConfigureAwait(false);
@@ -31,6 +32,13 @@ public sealed class MediaProbeService
 
         using var doc = JsonDocument.Parse(r.Stdout);
         var root = doc.RootElement;
+
+        bool transportStream = root.TryGetProperty("format", out var container)
+            && container.TryGetProperty("format_name", out var formatName) && formatName.GetString() == "mpegts";
+        if (transportStream && root.TryGetProperty("programs", out var programs)
+            && programs.EnumerateArray().Count(p => p.TryGetProperty("streams", out var ps)
+                && ps.EnumerateArray().Any(s => s.TryGetProperty("codec_type", out var t) && t.GetString() is "video" or "audio")) > 1)
+            throw new NotSupportedException("This TS recording contains multiple programs. AdTrim currently supports single-program recordings only.");
 
         // Duration: prefer format.duration (seconds), convert to µs
         long durationUs = 0;
@@ -99,8 +107,15 @@ public sealed class MediaProbeService
             }
         }
 
+        if (durationUs <= 0 || string.IsNullOrEmpty(vCodec) || width <= 0 || height <= 0)
+            throw new InvalidOperationException("The recording has no usable video or duration. It may be incomplete or damaged.");
+        long timelineStartUs = 0;
+        if (transportStream && container.TryGetProperty("start_time", out var start)
+            && double.TryParse(start.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var startSeconds))
+            timelineStartUs = (long)Math.Round(startSeconds * 1_000_000.0);
+        if (transportStream) videoStartTimeUs -= timelineStartUs;
         var primary = SelectPrimaryAudio(audio);
-        return new MediaInfo(durationUs, vCodec, width, height, fps, audio, primary, videoStartTimeUs);
+        return new MediaInfo(durationUs, vCodec, width, height, fps, audio, primary, videoStartTimeUs, timelineStartUs);
     }
 
     /// <summary>

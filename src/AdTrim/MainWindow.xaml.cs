@@ -351,7 +351,15 @@ public partial class MainWindow : Window
         }
         else if (e.PropertyName == nameof(MpvPreviewViewModel.IsSeeking))
         {
-            if (DataContext is MainViewModel currentVm) MaybeResyncPanes(currentVm);
+            if (DataContext is MainViewModel currentVm)
+            {
+                // A repeated seek can finish at the same native position, so no
+                // PositionUs notification replaces the optimistic scrub position.
+                if (ReferenceEquals(sender, _previewAfter) && !_previewAfter.IsSeeking && !_previewAfter.IsLoading)
+                    currentVm.PlayheadUs = currentVm.IsCollapsed
+                        ? currentVm.KeptTimeline.ToSource(_previewAfter.PositionUs) : _previewAfter.PositionUs;
+                MaybeResyncPanes(currentVm);
+            }
         }
         else if (e.PropertyName == nameof(MpvPreviewViewModel.IsPlaying))
         {
@@ -692,6 +700,7 @@ public partial class MainWindow : Window
         var previousPosition = vm.PlayheadUs;
         try
         {
+            await Task.Run(() => SourceCommentService.Recover(path, _store!));
             _previewAfter.Open(path);
             _previewBefore.Open(path);
             VideoPlaceholder.Visibility = Visibility.Collapsed;
@@ -725,6 +734,7 @@ public partial class MainWindow : Window
             _media = probed;
             _sourceFingerprint = fingerprint;
             vm.SourceFingerprint = fingerprint;
+            vm.LastExport = null;
             _previewAfter.SelectAudioStream(_media.PrimaryAudioIndex);
             _previewBefore.SelectAudioStream(_media.PrimaryAudioIndex);
             vm.SourcePath = path;
@@ -942,6 +952,7 @@ public partial class MainWindow : Window
 
     private static void HydrateFromSidecar(MainViewModel vm, AdTrimProject proj)
     {
+        vm.LastExport = proj.LastExport;
         vm.ClearSelection();
         vm.Markers.Clear();
         vm.Segments.Clear();
@@ -1304,7 +1315,7 @@ public partial class MainWindow : Window
             vm.Markers.Where(m => !m.IsBookend).Select(m => new PersistedSplit(m.Id, m.TimeUs,
                 m.Source, m.OriginalTimeUs, m.Confidence, m.Confirmed, m.ChapterTitle)).ToList(),
             vm.ExcludedSegmentIds.ToList(), SidecarLocation.NextToSource, vm.Markers.FirstOrDefault()?.ChapterTitle,
-            vm.MarkerSetSource, vm.MarkerBaselineId);
+            vm.MarkerSetSource, vm.MarkerBaselineId, vm.LastExport);
         _saveInProgress = true;
         vm.SaveStatus = "Saving";
         try
@@ -1483,6 +1494,8 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (e.Key == Key.O && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
+        { OnViewUnexportedFiles(this, new RoutedEventArgs()); e.Handled = true; return; }
         if (e.Key == Key.P && Keyboard.Modifiers == ModifierKeys.None)
         { if (!e.IsRepeat) OnToggleCollapsed(this, new RoutedEventArgs()); e.Handled = true; return; }
         if (e.Key is Key.Home or Key.End && Keyboard.Modifiers == ModifierKeys.None && vm.IsFileLoaded)
@@ -1850,7 +1863,7 @@ public partial class MainWindow : Window
         if (DataContext is MainViewModel vm && BlockProjectSwitchForExport(vm)) return;
         var dlg = new Microsoft.Win32.OpenFileDialog
         {
-            Filter = "MP4 video (*.mp4)|*.mp4",
+            Filter = "Video recordings (*.mp4;*.ts)|*.mp4;*.ts|MP4 video (*.mp4)|*.mp4|MPEG transport stream (*.ts)|*.ts",
             CheckFileExists = true,
         };
         if (dlg.ShowDialog(this) == true) _ = OpenFileAsync(dlg.FileName);
@@ -1865,7 +1878,7 @@ public partial class MainWindow : Window
         if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
         var files = (string[])e.Data.GetData(DataFormats.FileDrop);
         var first = files.FirstOrDefault(f =>
-            string.Equals(Path.GetExtension(f), ".mp4", StringComparison.OrdinalIgnoreCase));
+            ExportFormats.IsSupportedSource(f));
         if (first is not null) _ = OpenFileAsync(first);
     }
 
@@ -1948,6 +1961,7 @@ public partial class MainWindow : Window
         vm.MarkerSetSource = MarkerSetSource.Unknown;
         vm.MarkerBaselineId = null;
         vm.SourceFingerprint = null;
+        vm.LastExport = null;
         vm.SaveStatus = "";
         vm.CommandStack.Clear();
         vm.IsDirty = false;
@@ -2103,7 +2117,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnExport(object sender, RoutedEventArgs e)
+    private async void OnExport(object sender, RoutedEventArgs e)
     {
         if (DataContext is not MainViewModel vm) return;
 
@@ -2142,13 +2156,15 @@ public partial class MainWindow : Window
         CancelThumbnailLoad(vm, false);
         var dlg = new ExportView();
         _activeExportDialog = dlg;
-        dlg.Bind(vm, _media, _preferences.ExportAcceleration);
+        var exportPreferences = await UserPreferences.LoadAsync();
+        dlg.Bind(vm, _media, _preferences.ExportAcceleration, exportPreferences.ExportFormat, exportPreferences.DeleteSidecarAfterExport);
         dlg.Closed += async (_, _) =>
         {
             if (dlg.DataContext is ExportDialogViewModel completed)
             { _preferences = _preferences with { ExportAcceleration = !completed.CanCheckHardware ? _preferences.ExportAcceleration : completed.SelectedAcceleration.Id }; await SavePreferencesAsync(vm); }
         };
         dlg.AttachExportRunner(_ffmpeg, statusBarProgress);
+        dlg.AfterSuccessfulExportAsync = ct => RecordSuccessfulExportAsync(vm, dlg, ct);
         dlg.ExportFinished += (_, _) => HandleExportFinished(vm, dlg);
         dlg.Closed += (_, _) =>
         {
@@ -2177,10 +2193,10 @@ public partial class MainWindow : Window
         {
             case ExportDialogOutcome.Completed when plan is not null:
                 vm.ClearStatus();
-                var sidecarNote = MaybeDeleteSidecar(plan.SourcePath, dlg.ShouldDeleteSidecarAfterSuccess);
-                vm.Banner = new BannerInfo(StatusKind.Success,
+                var sidecarNote = dlg.SourceCommentFailed ? " Project sidecars were kept." : MaybeDeleteSidecar(plan.SourcePath, dlg.ShouldDeleteSidecarAfterSuccess);
+                vm.Banner = new BannerInfo(dlg.SourceCommentFailed ? StatusKind.Warning : StatusKind.Success,
                     "Export complete.",
-                    $"Wrote {Path.GetFileName(plan.OutputPath)}.{sidecarNote}",
+                    $"Wrote {Path.GetFileName(plan.OutputPath)}. {dlg.SourceCommentNote}{sidecarNote}",
                     new[]
                     {
                         new BannerAction("Show in Explorer", () => RevealInExplorer(plan.OutputPath)),

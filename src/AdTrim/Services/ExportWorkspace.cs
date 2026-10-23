@@ -1,4 +1,5 @@
 using System.IO;
+using AdTrim.Models;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -21,11 +22,12 @@ public sealed class ExportWorkspace : IDisposable
 
     public static ExportWorkspace Create(string destination, string? registry = null, string? tempRoot = null)
     {
+        if (!ExportFormats.IsSupportedSource(destination)) throw new ArgumentException("Output must end in .mp4 or .ts.", nameof(destination));
         var id = Guid.NewGuid().ToString("N");
         var directory = Path.Combine(registry ?? Registry, id);
         var record = new Record(1, id,
             Path.GetFullPath(Path.Combine(tempRoot ?? DefaultTempRoot, "exp-" + id)),
-            Path.Combine(Path.GetDirectoryName(Path.GetFullPath(destination))!, ".adtrim-" + id + ".mp4"));
+            Path.Combine(Path.GetDirectoryName(Path.GetFullPath(destination))!, ".adtrim-" + id + Path.GetExtension(destination).ToLowerInvariant()));
         Directory.CreateDirectory(directory);
         var lease = new FileStream(Path.Combine(directory, "lease"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         try
@@ -111,7 +113,8 @@ public sealed class ExportWorkspace : IDisposable
             && Path.IsPathFullyQualified(record.TempDirectory) && Path.IsPathFullyQualified(record.StagingPath)
             && string.Equals(Path.GetDirectoryName(Path.GetFullPath(record.TempDirectory)), Path.GetFullPath(tempRoot), StringComparison.OrdinalIgnoreCase)
             && Path.GetFileName(record.TempDirectory) == "exp-" + record.Id
-            && Path.GetFileName(record.StagingPath) == ".adtrim-" + record.Id + ".mp4";
+            && (Path.GetFileName(record.StagingPath) == ".adtrim-" + record.Id + ".mp4"
+                || Path.GetFileName(record.StagingPath) == ".adtrim-" + record.Id + ".ts");
 
     private static bool DeleteOwnedFiles(Record record, string tempRoot)
     {
@@ -123,7 +126,7 @@ public sealed class ExportWorkspace : IDisposable
             foreach (var file in Directory.EnumerateFiles(record.TempDirectory))
             {
                 var name = Path.GetFileName(file);
-                if (HasReparsePoint(file) || !(name is "concat.txt" or "chapters.ffmetadata"
+                if (HasReparsePoint(file) || !(name is "concat.txt" or "chapters.ffmetadata" or "audio-check.mp4" or "audio-check.ts"
                     || Regex.IsMatch(name, @"^seg_[0-9]+\.mp4$"))) continue;
                 File.Delete(file);
             }

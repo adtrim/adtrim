@@ -5,7 +5,7 @@ namespace AdTrim.Services;
 /// <summary>Review-only sequence suggestions from learned graphics and picture transitions.</summary>
 public sealed class SuggestionEngine(FfmpegRunner runner)
 {
-    public const string Version = "commercial-v3-preview-18";
+    public const string Version = "commercial-v3-preview-19";
     // Some programs fade up through several seconds of black; all 3-10 s black
     // intervals in the reviewed recordings were break transitions.
     internal const long MaximumBlackTransitionUs = 10_000_000;

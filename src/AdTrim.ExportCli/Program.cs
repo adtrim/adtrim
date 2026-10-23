@@ -7,7 +7,7 @@ using AdTrim.Services;
 // Standalone export driver for export validation.
 //
 // Usage:
-//   export-cli --in <source.mp4> --out <output.mp4> [--exclude 0,2,4,...] [--overwrite]
+//   export-cli --in <source.mp4|source.ts> --out <output.mp4|output.ts> [--exclude 0,2,4,...] [--overwrite]
 //
 // Segments are derived from chapter-imported splits + [0, duration] bookends.
 // `--exclude` takes zero-based segment indices to drop. If omitted, every
@@ -39,7 +39,7 @@ for (int i = 0; i < args.Length; i++)
 
 if (inPath is null || outPath is null)
 {
-    Console.Error.WriteLine("usage: export-cli --in <source.mp4> --out <output.mp4> [--exclude 0,2,4,...] [--overwrite]");
+    Console.Error.WriteLine("usage: export-cli --in <source.mp4|source.ts> --out <output.mp4|output.ts> [--exclude 0,2,4,...] [--overwrite]");
     return 64;
 }
 
@@ -110,7 +110,8 @@ var plan = new ExportPlan(
     PrimaryAudioCodec: media.PrimaryAudio?.Codec ?? "",
     Fingerprint: new SourceFingerprint(new FileInfo(inPath).Length,
         new DateTimeOffset(File.GetLastWriteTimeUtc(inPath)).ToUnixTimeMilliseconds(), media.DurationUs),
-    Overwrite: overwrite);
+    Overwrite: overwrite,
+    Format: Path.GetExtension(outPath).Equals(".ts", StringComparison.OrdinalIgnoreCase) ? ExportFormat.Ts : ExportFormat.Mp4);
 
 
 var lastPercent = -1;

@@ -123,6 +123,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public HashSet<string> ExcludedSegmentIds { get; } = new();
 
     public SourceFingerprint? SourceFingerprint { get; set; }
+    private ExportProvenance? _lastExport;
+    public ExportProvenance? LastExport
+    {
+        get => _lastExport;
+        set { if (Set(ref _lastExport, value)) MarkDirty(); }
+    }
     private MarkerSetSource _markerSetSource = MarkerSetSource.Unknown;
     public MarkerSetSource MarkerSetSource
     {

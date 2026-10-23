@@ -17,17 +17,31 @@ using System.Runtime.InteropServices;
 
 internal static partial class Program
 {
+    private static async Task WaitForExportSetupAsync(MainWindow window)
+    {
+        for (int i = 0; i < 250; i++)
+        {
+            if (((ContentControl)window.FindName("ExportHost")).Content is AdTrim.Views.ExportView { IsLoaded: true, DataContext: ExportDialogViewModel }) return;
+            await Task.Delay(20);
+        }
+        throw new InvalidOperationException("Export setup did not open.");
+    }
+
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--check-sidecar-preference")
+            return UserPreferences.LoadAsync().GetAwaiter().GetResult().DeleteSidecarAfterExport == bool.Parse(args[1]) ? 0 : 1;
         if (args.Length == 3 && args[0] == "--website") return CaptureWebsite(args[1], args[2]);
+        if (args.Length == 1 && args[0] == "--ts") return RunTransportStreamSmoke();
+        if (args.Length == 1 && args[0] == "--source-comments") return RunSourceCommentSmoke();
         if (args.Length > 1) throw new ArgumentException("Pass no arguments to generate a fixture, or one disposable fixture path.");
         var source = args.Length == 0 ? PrepareFixture().GetAwaiter().GetResult() : Path.GetFullPath(args[0]);
         var directory = Path.Combine(Path.GetDirectoryName(source)!, "smoke-state");
         Directory.CreateDirectory(directory);
         Environment.SetEnvironmentVariable("ADTRIM_DATA_DIR", directory);
         File.WriteAllText(Path.Combine(directory, "preferences.json"),
-            System.Text.Json.JsonSerializer.Serialize(new { OutputFolder = directory }));
+            System.Text.Json.JsonSerializer.Serialize(new { OutputFolder = directory, AddSourceExportComment = false }));
         var hash = SHA256.HashData(File.ReadAllBytes(source));
         var app = new App();
         app.InitializeComponent();
@@ -301,7 +315,7 @@ internal static partial class Program
                         { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent };
                     keyHandler.Invoke(window, new object[] { window, key });
                     Require(key.Handled && vm.IsCollapsed == (toggle == 0),
-                        "P toggles collapsed scenes even with a split selected");
+                        $"P toggles collapsed scenes even with a split selected (handled={key.Handled}, collapsed={vm.IsCollapsed}, busy={vm.IsBusy}, modifiers={System.Windows.Input.Keyboard.Modifiers}, focus={System.Windows.Input.Keyboard.FocusedElement?.GetType().Name})");
                     foreach (var boundaryKey in new[] { System.Windows.Input.Key.End, System.Windows.Input.Key.Home })
                     {
                         var boundaryEvent = new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,
@@ -517,9 +531,10 @@ internal static partial class Program
                 {
                     OutputFolder = Path.GetDirectoryName(source)!, OutputFilename = Path.GetFileName(source), OverwriteConfirmed = true,
                 };
-                Require(protectionVm.Validate().Any(v => v.Kind == ExportValidationKind.Blocking && v.Message.Contains("source MP4")),
+                Require(protectionVm.Validate().Any(v => v.Kind == ExportValidationKind.Blocking && v.Message.Contains("source recording")),
                     "Source overwrite stays blocked even with overwrite confirmation");
                 Invoke(window, "OnExport", window, new RoutedEventArgs());
+                await WaitForExportSetupAsync(window);
                 var folderDialog = (AdTrim.Views.ExportView)((ContentControl)window.FindName("ExportHost")).Content;
                 var folderVm = (ExportDialogViewModel)folderDialog.DataContext;
                 folderVm.ShowEvaluation = true;
@@ -555,6 +570,7 @@ internal static partial class Program
                 folderVm.OutputFolder = directory;
                 folderDialog.Close();
                 Invoke(window, "OnExport", window, new RoutedEventArgs());
+                await WaitForExportSetupAsync(window);
                 folderDialog = (AdTrim.Views.ExportView)((ContentControl)window.FindName("ExportHost")).Content;
                 Require(((ExportDialogViewModel)folderDialog.DataContext).OutputFolder == Path.GetDirectoryName(source),
                     "Every new export dialog defaults to the current recording's folder");
@@ -622,7 +638,7 @@ internal static partial class Program
                     $"Measured stitching progress drives its own countdown between callbacks ({stitchEstimate} -> {progressVm.RemainingFormatted}, {progressVm.Parts.Last().Percent})");
                 progressVm.UpdateProgress(new(ExportPhase.Finalizing, 2, 2, 1, 0.98, "Finalizing MP4…"));
                 Require(progressVm.RemainingFormatted == "" && progressVm.IsProgressIndeterminate
-                    && progressVm.TimeHeadline == "Finalizing MP4…", "MP4 finalization never shows a stale countdown");
+                    && progressVm.TimeHeadline == "Finalizing video…", "MP4 finalization never shows a stale countdown");
                 progressDialog.UpdateLayout();
                 Capture(progressDialog, Path.Combine(directory, "finalizing-mp4.png"));
                 progressVm.BeginExport(plan);
@@ -771,7 +787,8 @@ internal static partial class Program
                 Require(chapters.Success && chapterJson.RootElement.GetProperty("chapters").EnumerateArray()
                     .Select(c => c.GetProperty("tags").GetProperty("title").GetString())
                     .SequenceEqual(new[] { chapterName, "Final scene" }), "Exported MP4 preserves exact chapter names");
-                Require(hash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(source))), "Source unchanged");
+                await CheckSourceComments(app, source, directory);
+                Require(hash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(source))), "Source unchanged when source commenting is off");
                 if (Environment.GetEnvironmentVariable("ADTRIM_TEST_HARDWARE") == "1")
                     await HardwareChecks.RunAsync(window, directory, vm, media);
                 await CheckIrregularFrames(window, directory);
@@ -798,6 +815,8 @@ internal static partial class Program
         ((MainViewModel)second.DataContext).Segments[0].State = SegmentState.Excluded;
         Invoke(original, "OnExport", original, new RoutedEventArgs());
         Invoke(second, "OnExport", second, new RoutedEventArgs());
+        await WaitForExportSetupAsync(original);
+        await WaitForExportSetupAsync(second);
         var firstView = (AdTrim.Views.ExportView)((ContentControl)original.FindName("ExportHost")).Content;
         var secondView = (AdTrim.Views.ExportView)((ContentControl)second.FindName("ExportHost")).Content;
         var firstVm = (ExportDialogViewModel)firstView.DataContext;
@@ -1102,12 +1121,16 @@ internal static partial class Program
     {
         var before = (MpvPreviewViewModel)typeof(MainWindow).GetField("_previewBefore", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
         var after = (MpvPreviewViewModel)typeof(MainWindow).GetField("_previewAfter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+        before.Pause(); after.Pause();
+        for (int i = 0; i < 250 && (before.IsPlaying || after.IsPlaying); i++) await Task.Delay(20);
+        Require(!before.IsPlaying && !after.IsPlaying, "Frame-pair checks begin paused");
         var rate = vm.FrameRate;
         vm.FrameRate = new(60, 1); // The fixture decodes at 30 fps, despite this advertised rate.
         async Task Check(string action)
         {
             await Task.Delay(300);
-            for (int i = 0; i < 150 && (before.IsSeeking || after.IsSeeking || before.IsLoading || after.IsLoading); i++)
+            for (int i = 0; i < 500 && (before.IsSeeking || after.IsSeeking || before.IsLoading || after.IsLoading
+                || typeof(MainWindow).GetField("_frameRecovery", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window) is not null); i++)
                 await Task.Delay(20);
             var delta = after.PositionUs - before.PositionUs;
             Require(!before.IsSeeking && !after.IsSeeking && Math.Abs(delta - 33_333) <= 2,
@@ -1122,6 +1145,15 @@ internal static partial class Program
             {
                 Invoke(window, "SeekTo", vm, target, true);
                 await Check("Seek");
+                Require(Math.Abs(after.PositionUs - target) < 50_000,
+                    "An exact seek reaches its requested position, including immediately after a timeline reload");
+            }
+            foreach (var target in new long[] { 3_135_000, 6_735_000, 8_135_000 })
+            {
+                Invoke(window, "SeekTo", vm, target, false);
+                await Check("Timeline click");
+                Require(((FrameworkElement)window.FindName("NoFrameOverlay")).Visibility != Visibility.Visible,
+                    "Timeline click displays the preceding frame");
             }
             foreach (var direction in new[] { 1, -1, 1, 1, -1 })
             {
@@ -1184,7 +1216,10 @@ internal static partial class Program
         var content = (FrameworkElement)window.Content;
         content.UpdateLayout();
         var image = new RenderTargetBitmap((int)content.ActualWidth, (int)content.ActualHeight, 96, 96, PixelFormats.Pbgra32);
-        image.Render(content);
+        var visual = new DrawingVisual();
+        using (var drawing = visual.RenderOpen())
+            drawing.DrawRectangle(new VisualBrush(content), null, new Rect(0, 0, content.ActualWidth, content.ActualHeight));
+        image.Render(visual);
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(image));
         using var stream = File.Create(path);

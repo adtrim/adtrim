@@ -1,4 +1,5 @@
 using System.IO;
+using AdTrim.Models;
 using System.Text.Json;
 
 namespace AdTrim.Services;
@@ -14,7 +15,10 @@ public sealed record UserPreferences
     // New installs show both; a saved file keeps its own values.
     public bool ShowWaveform { get; init; } = true;
     public bool ShowThumbnails { get; init; } = true;
+    public ExportFormat ExportFormat { get; init; } = ExportFormat.Mp4;
+    public bool DeleteSidecarAfterExport { get; init; }
     public string ExportAcceleration { get; init; } = "automatic";
+    public bool AddSourceExportComment { get; init; } = true;
     public NewFileMarkerSource NewFileMarkerSource { get; init; } = NewFileMarkerSource.Imported;
     public double Left { get; init; }
     public double Top { get; init; }
@@ -28,7 +32,11 @@ public sealed record UserPreferences
     {
         var path = Path.Combine(DataDirectory, "preferences.json");
         if (!File.Exists(path)) return new();
-        try { return JsonSerializer.Deserialize<UserPreferences>(await File.ReadAllTextAsync(path)) ?? new(); }
+        try
+        {
+            var loaded = JsonSerializer.Deserialize<UserPreferences>(await File.ReadAllTextAsync(path)) ?? new();
+            return loaded with { ExportFormat = ExportFormats.Normalize(loaded.ExportFormat) };
+        }
         catch (JsonException) { return new(); }
         catch (IOException) { return new(); }
         catch (UnauthorizedAccessException) { return new(); }
@@ -50,10 +58,35 @@ public sealed record UserPreferences
             {
                 ShowWaveform = ShowWaveform != previous.ShowWaveform ? ShowWaveform : latest.ShowWaveform,
                 ShowThumbnails = ShowThumbnails != previous.ShowThumbnails ? ShowThumbnails : latest.ShowThumbnails,
+                ExportFormat = ExportFormats.Normalize(ExportFormat != previous.ExportFormat ? ExportFormat : latest.ExportFormat),
+                DeleteSidecarAfterExport = DeleteSidecarAfterExport != previous.DeleteSidecarAfterExport ? DeleteSidecarAfterExport : latest.DeleteSidecarAfterExport,
                 ExportAcceleration = ExportAcceleration != previous.ExportAcceleration ? ExportAcceleration : latest.ExportAcceleration,
+                AddSourceExportComment = AddSourceExportComment != previous.AddSourceExportComment ? AddSourceExportComment : latest.AddSourceExportComment,
                 NewFileMarkerSource = saveMarkerSource || NewFileMarkerSource != previous.NewFileMarkerSource ? NewFileMarkerSource : latest.NewFileMarkerSource,
                 Positions = positions,
             }).WriteAsync();
+        }
+        finally { SaveGate.Release(); }
+    }
+
+    public static async Task SaveExportFormatAsync(ExportFormat format)
+    {
+        await SaveGate.WaitAsync();
+        try
+        {
+            var latest = await LoadAsync();
+            await (latest with { ExportFormat = ExportFormats.Normalize(format) }).WriteAsync();
+        }
+        finally { SaveGate.Release(); }
+    }
+
+    public static async Task SaveDeleteSidecarAfterExportAsync(bool delete)
+    {
+        await SaveGate.WaitAsync();
+        try
+        {
+            var latest = await LoadAsync();
+            await (latest with { DeleteSidecarAfterExport = delete }).WriteAsync();
         }
         finally { SaveGate.Release(); }
     }

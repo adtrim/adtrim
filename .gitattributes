@@ -1,4 +1,6 @@
 tools/native/* text eol=lf
+# Unified-diff context lines retain their required leading spaces.
+tools/native/patches/*.patch text eol=lf -whitespace
 binaries/native-build.json text eol=lf
 # Preserve upstream notice text byte-for-byte.
 installer/licenses/native/** -text -whitespace

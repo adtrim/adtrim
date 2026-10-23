@@ -12,9 +12,8 @@ Included components:
   Upstream mpv license: LICENSE.libmpv.txt; GPLv3: LICENSE.FFmpeg.txt.
 - Native dependencies, headers and shader build inputs:
   See native/COMPONENTS.txt and the accompanying per-component notices.
-  Matching source archive: Media-Sources-AdTrim-v1.1.0.tar.gz
-  Original archive (same contents): AdTrim-Media-Sources-v1.1.0.tar.gz
-  Download: https://github.com/adtrim/adtrim/releases/tag/v1.1.0
+  Matching source archive: Media-Sources-AdTrim-v2.0.13.tar.gz
+  Download: https://github.com/adtrim/adtrim/releases/download/v2.1.0/Media-Sources-AdTrim-v2.0.13.tar.gz
   The archive includes source snapshots, hashes and build instructions.
 - Microsoft .NET 10.0.12.
   License: LICENSE.dotnet.txt; dependencies: ThirdPartyNotices.dotnet.txt.

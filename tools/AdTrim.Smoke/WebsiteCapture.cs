@@ -67,9 +67,17 @@ internal static partial class Program
                 CaptureWebsiteEditor(window, Path.Combine(output, "timeline-hero.png"), scratch);
                 await CaptureWebsiteTimelineAsync(window, vm, output, media.DurationUs);
                 Invoke(window, "OnExport", window, new RoutedEventArgs());
+                await WaitForExportSetupAsync(window);
                 var view = (AdTrim.Views.ExportView)((ContentControl)window.FindName("ExportHost")).Content;
                 var exportVm = (ExportDialogViewModel)view.DataContext;
                 exportVm.OutputFolder = @"C:\Videos\Big Buck Bunny";
+                for (int i = 0; i < 250 && !exportVm.CanCheckHardware; i++) await Task.Delay(20);
+                Require(exportVm.CanCheckHardware, "Website export setup is ready");
+                exportVm.SelectedFormat = ExportFormat.Mp4;
+                Capture(window, Path.Combine(output, "export-setup-mp4.png"));
+                exportVm.SelectedFormat = ExportFormat.Ts;
+                Capture(window, Path.Combine(output, "export-setup-ts.png"));
+                exportVm.SelectedFormat = ExportFormat.Mp4;
                 var plan = new ExportPlan(source, Path.Combine(exportVm.OutputFolder, exportVm.OutputFilename), media.DurationUs,
                     1, vm.Segments.Where(s => s.State != SegmentState.Excluded).Select((s, i) => new ExportSegment(i + 1, s.StartUs, s.EndUs, s.Label ?? $"Part {i + 1}")).ToArray(), vm.FrameRate);
                 exportVm.BeginExport(plan);

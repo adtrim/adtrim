@@ -1,4 +1,5 @@
 using System.IO;
+using AdTrim.Models;
 using System.Text.RegularExpressions;
 
 namespace AdTrim.Services;
@@ -30,7 +31,7 @@ public static class ExportNaming
         @"[<>:""/\\|?*\x00-\x1F]", RegexOptions.Compiled);
 
     /// <summary>Choose an unused export name without changing the source file.</summary>
-    public static string DeriveDefaultFilename(string? sourcePath, string? outputFolder = null)
+    public static string DeriveDefaultFilename(string? sourcePath, string? outputFolder = null, ExportFormat format = ExportFormat.Mp4)
     {
         var name = string.IsNullOrEmpty(sourcePath) ? "export" : Path.GetFileNameWithoutExtension(sourcePath);
         name = S00E00Rx.Replace(name, m => m.Value.ToLowerInvariant());
@@ -39,7 +40,7 @@ public static class ExportNaming
         for (int number = 1; ; number++)
         {
             var suffix = number == 1 ? "AdTrim" : $"AdTrim {number}";
-            var candidate = $"{name} [{suffix}].mp4";
+            var candidate = $"{name} [{suffix}]{format.Extension()}";
             if (string.IsNullOrEmpty(folder)) return candidate;
             var path = Path.Combine(folder, candidate);
             if (!File.Exists(path) && !Directory.Exists(path)

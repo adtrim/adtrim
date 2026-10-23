@@ -163,13 +163,17 @@ public sealed class RefineService
     private async Task<IReadOnlyList<(long timeUs, char pictType)>> EnumerateCandidatesAsync(
         string sourcePath, long winStartUs, long winEndUs, CancellationToken ct)
     {
-        var startSec = (winStartUs / 1_000_000.0).ToString("0.000", CultureInfo.InvariantCulture);
+        // ffprobe returns transport PTS; the editor and mpv use a timeline relative to the TS start.
+        long originUs = Path.GetExtension(sourcePath).Equals(".ts", StringComparison.OrdinalIgnoreCase)
+            ? (await new MediaProbeService(_runner).ProbeAsync(sourcePath, ct).ConfigureAwait(false)).TimelineStartTimeUs : 0;
+        // Do not seek at the beginning: TS keyframe seeking can skip the opening GOP.
+        var startSec = winStartUs == 0 ? "" : ((winStartUs + originUs) / 1_000_000m).ToString("0.000000", CultureInfo.InvariantCulture);
 
         var args = new[]
         {
             "-v", "error",
             "-select_streams", "v:0",
-            "-read_intervals", $"{startSec}%{(winEndUs / 1_000_000m).ToString("0.######", CultureInfo.InvariantCulture)}",
+            "-read_intervals", $"{startSec}%{((winEndUs + originUs) / 1_000_000m).ToString("0.######", CultureInfo.InvariantCulture)}",
             "-show_entries", "frame=pts_time,pict_type",
             "-of", "json",
             sourcePath,
@@ -178,7 +182,7 @@ public sealed class RefineService
         if (!r.Success)
             throw new InvalidOperationException($"ffprobe show_frames failed (exit {r.ExitCode}): {r.Stderr}");
 
-        return ParseCandidates(r.Stdout);
+        return ParseCandidates(r.Stdout).Select(f => (f.timeUs - originUs, f.pictType)).ToArray();
     }
 
     public async Task<long?> FindBoundaryFrameAsync(string sourcePath, long timeUs, long durationUs, CancellationToken ct)
@@ -226,11 +230,12 @@ public sealed class RefineService
         var gate = new object();
         int cornerWidth = width * 3 / 10, cornerHeight = height * 3 / 10;
         long start = Math.Max(0, blackStart - 1_000_000);
-        var args = new[] { "-nostdin", "-hide_banner", "-v", "info",
+        var media = await new MediaProbeService(_runner).ProbeAsync(sourcePath, ct).ConfigureAwait(false);
+        string[] args = ["-nostdin", "-hide_banner", "-v", "info",
             "-ss", (start / 1_000_000.0).ToString("0.000", CultureInfo.InvariantCulture),
             "-t", ((blackEnd - start + 200_000) / 1_000_000.0).ToString("0.000", CultureInfo.InvariantCulture),
-            "-copyts", "-i", sourcePath, "-map", "0:v:0", "-an", "-vf", "showinfo,format=gray",
-            "-fps_mode", "passthrough", "-f", "rawvideo", "pipe:1" };
+            .. FfmpegRunner.SourceTimestampArgs(media.TimelineStartTimeUs), "-i", sourcePath, "-map", "0:v:0", "-an", "-vf", "showinfo,format=gray",
+            "-fps_mode", "passthrough", "-f", "rawvideo", "pipe:1"];
         var result = await _runner.RunFfmpegBinaryAsync(args, async stream =>
         {
             var buffer = new byte[width * height];

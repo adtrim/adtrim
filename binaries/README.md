@@ -22,6 +22,8 @@ The project copies them into build and publish output. The .NET runtime is bundl
 
 FFmpeg/ffprobe and libmpv's embedded FFmpeg use FFmpeg 9.0.2, revision `946fcce07b`. libmpv uses mpv revision `3186d369f9`. The build retains libx264, AMD AMF, NVIDIA NVENC and Intel QSV, Windows graphics/audio output, and the codecs and filters used by AdTrim. Other optional third-party features are not enabled.
 
+The v2.0.13 media source package retains a targeted mpv patch for precise TS seeking and collapsed-preview scene changes. FFmpeg and the upstream dependency revisions are unchanged.
+
 The native input revisions and hashes are in `tools/native/sources.lock.json`. The output hashes and matching source archive are recorded in `native-build.json`. Required notices are in `installer/licenses/`, copied beside the application. FFmpeg and the combined libmpv build are distributed under GPLv3 with matching source access.
 
 ## Updating
@@ -31,7 +33,7 @@ The native input revisions and hashes are in `tools/native/sources.lock.json`. T
 3. Run application tests, synthetic playback/frame-position checks and hardware export checks. Compare performance with the previous binaries. Record unavailable hardware explicitly.
 4. Prepare the matching source archive and notices. Update `native-build.json` with the resulting binary and source-archive hashes. A checksum alone does not establish corresponding-source completeness.
 5. Update `check-ffmpeg-version.ps1` after an actual advisory review. Its current minimum is 9.0.2. Run the normal publish and installer commands; do not bypass either payload or version checks.
-6. Publish the source archive and its checksum alongside the installer, maintaining the source link in the installed notices.
+6. Publish the source archive alongside the installer and record its checksum privately, maintaining the source link in the installed notices.
 
 ## Development override
 

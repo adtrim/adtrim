@@ -29,7 +29,8 @@ public sealed record MediaInfo(
     Rational FrameRate,
     IReadOnlyList<AudioStream> AudioStreams,
     int PrimaryAudioIndex,
-    long VideoStartTimeUs = 0)
+    long VideoStartTimeUs = 0,
+    long TimelineStartTimeUs = 0)
 {
     public AudioStream? PrimaryAudio =>
         AudioStreams.FirstOrDefault(a => a.Index == PrimaryAudioIndex);

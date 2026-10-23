@@ -6,6 +6,17 @@ namespace AdTrim.Services;
 
 public static class ExportSafety
 {
+    public static void EnsureMetadataWritable(string path)
+    {
+        var attributes = File.GetAttributes(path);
+        if ((attributes & (FileAttributes.ReadOnly | FileAttributes.ReparsePoint)) != 0)
+            throw new IOException("Read-only files and filesystem links are not changed by source commenting.");
+        if (!OperatingSystem.IsWindows()) return;
+        using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (!GetFileInformationByHandle(handle, out var info) || info.Links != 1)
+            throw new IOException("Source commenting requires a recording without hard-link aliases.");
+    }
+
     public static void EnsureDifferentFiles(string source, string destination)
     {
         if (SameFile(source, destination))

@@ -60,6 +60,8 @@ public sealed class ExportService
     private async Task RunAttemptAsync(ExportPlan plan, IProgress<ExportProgress>? progress, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        if (!Enum.IsDefined(plan.Format) || !Path.GetExtension(plan.OutputPath).Equals(plan.Format.Extension(), StringComparison.OrdinalIgnoreCase))
+            throw new ExportException("The output filename does not match the selected file format.");
         ExportSafety.EnsureDifferentFiles(plan.SourcePath, plan.OutputPath);
         if (File.Exists(plan.OutputPath) && !plan.Overwrite)
             throw new ExportException("Output already exists. Confirm overwrite first.");
@@ -87,6 +89,8 @@ public sealed class ExportService
 
         try
         {
+            await ValidateAudioCopyAsync(plan, current, tempDir, ct).ConfigureAwait(false);
+
             // Phase 1: per-segment intermediates.
             //
             // Overall progress is weighted by *source duration*, not segment
@@ -98,6 +102,8 @@ public sealed class ExportService
             // settings, so source-duration weighting is a much closer proxy
             // for wall-clock cost.
             var intermediatePaths = new List<string>();
+            var intermediateStartsUs = new List<long>();
+            var intermediateVideoStartsUs = new List<long>();
             int total = plan.KeptSegments.Count;
             long totalDurationUs = Math.Max(1, plan.KeptSegments.Sum(s => s.DurationUs));
             long completedBeforeUs = 0;
@@ -153,6 +159,12 @@ public sealed class ExportService
                     throw new ExportException($"Segment {segIndex1Based} produced no output: {outPath}");
 
                 intermediatePaths.Add(outPath);
+                var timing = await ProbeSegmentTimingAsync(outPath, ct).ConfigureAwait(false);
+                long measuredMs = timing.DurationMs;
+                intermediateStartsUs.Add(timing.StartUs);
+                intermediateVideoStartsUs.Add(timing.VideoStartUs);
+                if (Math.Abs(measuredMs * 1000 - seg.DurationUs) > Math.Max(200_000, 2_000_000 / Math.Max(1, current.FrameRate.AsDouble)))
+                    throw new ExportException($"Part {segIndex1Based} duration differs from the requested material. Output was not published.");
                 completedBeforeUs += segDurationUs;
             }
 
@@ -163,11 +175,12 @@ public sealed class ExportService
                 0, 0.95, "Preparing parts and chapters…"));
 
             var concatPath = Path.Combine(tempDir, "concat.txt");
-            await WriteConcatListAsync(concatPath, intermediatePaths, ct).ConfigureAwait(false);
+            await WriteConcatListAsync(concatPath, intermediatePaths, plan.KeptSegments, intermediateStartsUs, ct).ConfigureAwait(false);
 
             var chapterPath = Path.Combine(tempDir, "chapters.ffmetadata");
-            var cumulativeMs = await BuildChapterMetadataAsync(
-                chapterPath, intermediatePaths, plan.KeptSegments, ct).ConfigureAwait(false);
+            long cumulativeMs = (long)Math.Round(plan.ExpectedOutputDurationUs / 1000.0);
+            if (plan.Format == ExportFormat.Mp4)
+                await BuildChapterMetadataAsync(chapterPath, plan.KeptSegments, intermediateStartsUs[0], intermediateVideoStartsUs, ct).ConfigureAwait(false);
 
             // Provenance markers, embedded in the MP4 itself. These travel
             // with the file across copies / downloads / cloud roundtrips,
@@ -183,21 +196,27 @@ public sealed class ExportService
             // Windows Explorer Details column without needing a column
             // customization.
             //
-            //   comment       → Windows Explorer "Comments"
-            //   creation_time → Windows Explorer "Media created"
+            //   comment       -> Windows Explorer "Comments"
+            //   creation_time -> Windows Explorer "Media created"
             var creationTime = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
-            var muxArgs = new[]
+            var muxArgs = new List<string>
             {
                 "-y", "-hide_banner", "-nostats", "-progress", "pipe:1", "-stats_period", "0.2",
                 "-f", "concat", "-safe", "0", "-i", concatPath,
-                "-i", chapterPath,
-                "-map", "0", "-map_metadata", "1", "-map_chapters", "1",
-                "-c", "copy",
-                "-metadata", $"comment=Edited by AdTrim {AppVersion.Display}",
-                "-metadata", $"creation_time={creationTime}",
-                "-movflags", "+faststart",
-                staging,
             };
+            if (plan.Format == ExportFormat.Mp4)
+            {
+                muxArgs.AddRange(new[] { "-i", chapterPath, "-map", "0", "-map_metadata", "1", "-map_chapters", "1",
+                    "-c", "copy", "-metadata", $"comment=Edited by AdTrim {AppVersion.Display}",
+                    "-metadata", $"creation_time={creationTime}", "-movflags", "+faststart", "-f", "mp4" });
+            }
+            else
+            {
+                muxArgs.AddRange(new[] { "-map", "0:v:0", "-map", "0:a:0", "-map_metadata", "-1", "-map_chapters", "-1",
+                    // A shared audio PES would hide timestamp gaps at joins.
+                    "-c", "copy", "-pes_payload_size", "0", "-f", "mpegts" });
+            }
+            muxArgs.Add(staging);
             var muxTimer = System.Diagnostics.Stopwatch.StartNew();
             var muxLock = new object();
             bool finalizing = false;
@@ -271,14 +290,22 @@ public sealed class ExportService
     }
 
     private static async Task WriteConcatListAsync(
-        string path, IEnumerable<string> intermediatePaths, CancellationToken ct)
+        string path, IReadOnlyList<string> intermediatePaths, IReadOnlyList<ExportSegment> segments,
+        IReadOnlyList<long> startsUs, CancellationToken ct)
     {
         var sb = new StringBuilder();
-        foreach (var p in intermediatePaths)
+        for (int i = 0; i < intermediatePaths.Count; i++)
         {
             // Concat demuxer requires file paths quoted and forward-slashed for safety.
-            var escaped = p.Replace("\\", "/").Replace("'", "'\\''");
+            var escaped = intermediatePaths[i].Replace("\\", "/").Replace("'", "'\\''");
             sb.Append("file '").Append(escaped).Append("'\n");
+            // Packet tails can exceed the cut by one audio frame. Using their
+            // container durations here would accumulate padding at every join.
+            // The concat demuxer subtracts each file's start_time. Compensate
+            // for differing encoder offsets without seeking past opening audio.
+            long durationUs = segments[i].DurationUs + (i + 1 < startsUs.Count ? startsUs[i + 1] - startsUs[i] : 0);
+            sb.Append("duration ").Append((durationUs / 1_000_000m)
+                .ToString("0.000000", CultureInfo.InvariantCulture)).Append('\n');
         }
         // FFmpeg's concat demuxer rejects the UTF-8 BOM (`Encoding.UTF8`
         // emits one by default). Use a BOM-less UTF-8 encoder.
@@ -287,24 +314,26 @@ public sealed class ExportService
 
     /// <summary>
     /// Build the FFMETADATA1 chapter file. Chapter timecodes are cumulative
-    /// durations measured from the intermediate files via ffprobe, NOT from
-    /// the source plan - that's what avoids drift from re-encode rounding.
+    /// requested durations used by the concat list. Copied packet tails must
+    /// not accumulate padding in either the timeline or its chapters.
     /// </summary>
-    private async Task<long> BuildChapterMetadataAsync(
+    private static async Task BuildChapterMetadataAsync(
         string outPath,
-        IReadOnlyList<string> intermediatePaths,
         IReadOnlyList<ExportSegment> segments,
+        long firstStartUs,
+        IReadOnlyList<long> videoStartsUs,
         CancellationToken ct)
     {
         var sb = new StringBuilder();
         sb.AppendLine(";FFMETADATA1");
 
-        long cumMs = 0;
-        for (int i = 0; i < intermediatePaths.Count; i++)
+        long cumulativeUs = 0;
+        for (int i = 0; i < segments.Count; i++)
         {
-            var dur = await ProbeDurationMsAsync(intermediatePaths[i], ct).ConfigureAwait(false);
-            var startMs = cumMs;
-            var endMs = cumMs + dur;
+            long startMs = i == 0 ? 0 : (long)Math.Round((cumulativeUs + videoStartsUs[i] - firstStartUs) / 1000.0);
+            cumulativeUs += segments[i].DurationUs;
+            long endUs = i + 1 == segments.Count ? cumulativeUs : cumulativeUs + videoStartsUs[i + 1] - firstStartUs;
+            long endMs = Math.Max(startMs + 1, (long)Math.Round(endUs / 1000.0));
             sb.AppendLine("[CHAPTER]");
             sb.AppendLine("TIMEBASE=1/1000");
             sb.AppendLine($"START={startMs.ToString(CultureInfo.InvariantCulture)}");
@@ -313,26 +342,34 @@ public sealed class ExportService
                 .Replace("=", "\\=").Replace(";", "\\;").Replace("#", "\\#")
                 .Replace("\r\n", "\n").Replace("\r", "\n").Replace("\n", "\\\n");
             sb.AppendLine($"title={title}");
-            cumMs = endMs;
         }
         await File.WriteAllTextAsync(outPath, sb.ToString(), Utf8NoBom, ct).ConfigureAwait(false);
-        return cumMs;
     }
 
-    private async Task<long> ProbeDurationMsAsync(string path, CancellationToken ct)
+    private async Task<(long DurationMs, long StartUs, long VideoStartUs)> ProbeSegmentTimingAsync(string path, CancellationToken ct)
     {
         var args = new[]
         {
             "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=nokey=1:noprint_wrappers=1",
+            "-show_entries", "format=duration,start_time:stream=codec_type,start_time",
+            "-of", "json",
             path,
         };
         var r = await _runner.RunFfprobeAsync(args, ct).ConfigureAwait(false);
         if (!r.Success || string.IsNullOrWhiteSpace(r.Stdout))
             throw new ExportException($"Failed to probe segment duration: {path}");
-        var sec = double.Parse(r.Stdout.Trim(), CultureInfo.InvariantCulture);
-        return (long)Math.Round(sec * 1000.0);
+        using var doc = JsonDocument.Parse(r.Stdout);
+        var format = doc.RootElement.GetProperty("format");
+        long Us(JsonElement value, string name)
+        {
+            if (!value.TryGetProperty(name, out var item)
+                || !decimal.TryParse(item.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds))
+                throw new ExportException("Encoded part timing could not be verified. Output was not published.");
+            return (long)Math.Round(seconds * 1_000_000);
+        }
+        var video = doc.RootElement.GetProperty("streams").EnumerateArray()
+            .First(s => s.GetProperty("codec_type").GetString() == "video");
+        return ((long)Math.Round(Us(format, "duration") / 1000.0), Us(format, "start_time"), Us(video, "start_time"));
     }
 
     private async Task ValidateOutputAsync(ExportPlan plan, long expectedDurationMs, CancellationToken ct)
@@ -357,10 +394,14 @@ public sealed class ExportService
         using var doc = JsonDocument.Parse(r.Stdout);
         var root = doc.RootElement;
 
+        if (!root.TryGetProperty("format", out var outputFormat) || !outputFormat.TryGetProperty("format_name", out var outputName)
+            || (plan.Format == ExportFormat.Ts ? outputName.GetString() != "mpegts" : !(outputName.GetString() ?? "").Split(',').Contains("mp4")))
+            throw new ExportException("Output container does not match the selected file format.");
         int nbChapters = root.TryGetProperty("chapters", out var chs) ? chs.GetArrayLength() : 0;
-        if (nbChapters != plan.KeptSegments.Count)
+        int expectedChapters = plan.Format == ExportFormat.Mp4 ? plan.KeptSegments.Count : 0;
+        if (nbChapters != expectedChapters)
             throw new ExportException(
-                $"Output has {nbChapters} chapters, expected {plan.KeptSegments.Count}.");
+                $"Output has {nbChapters} chapters, expected {expectedChapters}.");
 
         if (root.TryGetProperty("streams", out var streams))
         {
@@ -411,6 +452,29 @@ public sealed class ExportService
             if (Math.Abs(actualMs - expectedDurationMs) > 200)
                 throw new ExportException(
                     $"Output duration {actualMs}ms differs from expected {expectedDurationMs}ms by >200ms.");
+            if (Math.Abs(actualMs * 1000 - plan.ExpectedOutputDurationUs) > Math.Max(200_000, plan.KeptSegments.Count * 2_000_000 / Math.Max(1, plan.FrameRate.AsDouble)))
+                throw new ExportException("Output duration differs from the requested material. Output was not published.");
+        }
+        else throw new ExportException("Output duration could not be verified.");
+
+
+    }
+
+    private async Task ValidateAudioCopyAsync(ExportPlan plan, MediaInfo media, string tempDir, CancellationToken ct)
+    {
+        if (media.PrimaryAudio is not { } audio || audio.Index != plan.PrimaryAudioStreamIndex
+            || (!string.IsNullOrEmpty(plan.PrimaryAudioCodec) && plan.PrimaryAudioCodec != audio.Codec))
+            throw new ExportException("The selected source audio changed. Reopen the recording before exporting.");
+        if (plan.Format == ExportFormat.Ts && audio.Codec is not ("aac" or "ac3" or "eac3" or "mp2" or "mp3" or "dts"))
+            throw new ExportException($"Audio codec '{audio.Codec}' cannot be copied to a supported TS audio stream. Choose MP4 or another source; audio is not converted automatically.");
+        foreach (var format in plan.Format == ExportFormat.Ts ? new[] { "mp4", "mpegts" } : new[] { "mp4" })
+        {
+            string check = Path.Combine(tempDir, format == "mp4" ? "audio-check.mp4" : "audio-check.ts");
+            var args = new[] { "-y", "-v", "error", "-i", plan.SourcePath, "-map", $"0:{audio.Index}",
+                "-t", "0.1", "-c:a", "copy", "-map_metadata", "-1", "-map_chapters", "-1", "-f", format, check };
+            var result = await _runner.RunFfmpegAsync(args, ct: ct).ConfigureAwait(false);
+            if (!result.Success)
+                throw new ExportException($"Audio codec '{audio.Codec}' could not be copied to {(format == "mp4" ? "the MP4 segment format" : "TS")}. Audio is not converted automatically.\n{Tail(result.Stderr, 600)}");
         }
     }
 

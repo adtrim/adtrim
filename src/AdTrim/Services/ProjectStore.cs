@@ -62,6 +62,50 @@ public sealed class ProjectStore
         yield return AppDataFallbackPathFor(sourcePath);
     }
 
+    public bool HasExportRecord(string sourcePath)
+    {
+        var source = new FileInfo(sourcePath);
+        Exception? failure = null;
+        foreach (var path in CandidateSidecarPathsFor(sourcePath).Where(File.Exists))
+        {
+            try
+            {
+                if (new FileInfo(path).Length > 16 * 1024 * 1024) throw new InvalidDataException("The project is too large to check safely.");
+                var project = JsonSerializer.Deserialize<AdTrimProject>(File.ReadAllBytes(path), JsonOpts);
+                if (project is null || project.SchemaVersion > AdTrimProject.CurrentSchemaVersion || Validate(project) is not null)
+                    throw new InvalidDataException("The project export record could not be verified.");
+                if (project.LastExport is { } export && export.SourceFingerprint == project.Fingerprint
+                    && export.SourceFingerprint.SizeBytes == source.Length
+                    && export.SourceFingerprint.ModifiedUnixMs == new DateTimeOffset(source.LastWriteTimeUtc).ToUnixTimeMilliseconds())
+                    return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            { failure ??= ex; }
+        }
+        if (failure is not null) throw new InvalidDataException("A project sidecar's export status could not be checked. " + failure.Message, failure);
+        return false;
+    }
+
+    internal Dictionary<string, (byte[] Before, byte[] After)> FingerprintUpdates(string sourcePath, SourceFingerprint before, SourceFingerprint after)
+    {
+        var result = new Dictionary<string, (byte[], byte[])>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in CandidateSidecarPathsFor(sourcePath).Where(File.Exists))
+        {
+            if (new FileInfo(path).Length > 16 * 1024 * 1024) throw new IOException("The project is too large to update safely.");
+            var bytes = File.ReadAllBytes(path);
+            var project = JsonSerializer.Deserialize<AdTrimProject>(bytes, JsonOpts);
+            if (project is null || project.SchemaVersion > AdTrimProject.CurrentSchemaVersion || Validate(project) is not null
+                || project.Fingerprint.SizeBytes != before.SizeBytes || project.Fingerprint.DurationUs != before.DurationUs)
+                throw new IOException("An existing project cannot be safely updated for the source comment.");
+            var json = System.Text.Json.Nodes.JsonNode.Parse(bytes)!;
+            var fingerprint = json["fingerprint"]!;
+            fingerprint["size_bytes"] = after.SizeBytes;
+            fingerprint["modified_unix_ms"] = after.ModifiedUnixMs;
+            result[path] = (bytes, Encoding.UTF8.GetBytes(json.ToJsonString(JsonOpts)));
+        }
+        return result;
+    }
+
     /// <summary>
     /// Load + validate against the source file's current size+duration.
     /// Caller supplies the freshly-probed MediaInfo so we don't probe twice.
@@ -131,6 +175,10 @@ public sealed class ProjectStore
             || project.Splits is null || project.ExcludedSegmentIds is null || string.IsNullOrWhiteSpace(project.SourcePath))
             return "Project is missing required data.";
         if (!Enum.IsDefined(project.MarkerSetSource)) return "Invalid marker source.";
+        if (project.LastExport is { } export && (export.Application != "AdTrim"
+            || !Version.TryParse(export.Version, out _) || export.ExportedAtUtc <= DateTimeOffset.UnixEpoch
+            || export.SourceFingerprint is null || export.SourceFingerprint.SizeBytes < 0 || export.SourceFingerprint.DurationUs <= 0))
+            return "Invalid export record.";
         long duration = project.Fingerprint.DurationUs;
         if (duration <= 0 || project.Media.DurationUs != duration || project.Fingerprint.SizeBytes < 0)
             return "Invalid source metadata.";

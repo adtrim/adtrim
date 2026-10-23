@@ -148,6 +148,11 @@ Section "Install"
   WriteRegStr HKCU "${VERB_KEY}"          "Icon" "$INSTDIR\${EXE_NAME},0"
   WriteRegStr HKCU "${VERB_KEY}\command"  ""     '"$INSTDIR\${EXE_NAME}" "%1"'
 
+  !define TS_VERB_KEY "Software\Classes\SystemFileAssociations\.ts\shell\EditWithAdTrim"
+  WriteRegStr HKCU "${TS_VERB_KEY}" "" "Edit with ${APPNAME}"
+  WriteRegStr HKCU "${TS_VERB_KEY}" "Icon" "$INSTDIR\${EXE_NAME},0"
+  WriteRegStr HKCU "${TS_VERB_KEY}\command" "" '"$INSTDIR\${EXE_NAME}" "%1"'
+
   ; --- Start Menu shortcuts ---
   CreateDirectory "$SMPROGRAMS\${APPNAME}"
   CreateShortcut  "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk" "$INSTDIR\${EXE_NAME}" "" "$INSTDIR\${EXE_NAME}" 0
@@ -166,6 +171,7 @@ Section "Uninstall"
   ReadRegStr $0 HKCU "Software\${APPNAME}" "InstallDir"
   StrCmp $0 $INSTDIR 0 skipRegistration
   DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\.mp4\shell\EditWithAdTrim"
+  DeleteRegKey HKCU "Software\Classes\SystemFileAssociations\.ts\shell\EditWithAdTrim"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
   DeleteRegKey HKCU "Software\${APPNAME}"
   Delete "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk"

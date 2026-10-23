@@ -21,6 +21,9 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
     public bool ShouldDeleteSidecarAfterSuccess => _vm?.DeleteSidecarAfterExport ?? false;
 
     public bool IsExportInFlight { get; private set; }
+    public Func<CancellationToken, Task<string?>>? AfterSuccessfulExportAsync { get; set; }
+    public string? SourceCommentNote { get; private set; }
+    public bool SourceCommentFailed { get; set; }
 
     public event EventHandler? ExportFinished;
 
@@ -65,10 +68,15 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
         while (IsExportInFlight) await Task.Delay(25);
     }
 
-    public void Bind(MainViewModel project, MediaInfo? media, string? preferredAcceleration = null)
+    public void Bind(MainViewModel project, MediaInfo? media, string? preferredAcceleration = null, ExportFormat format = ExportFormat.Mp4,
+        bool deleteSidecarAfterExport = false)
     {
         _preferredAcceleration = preferredAcceleration;
-        _vm = new ExportDialogViewModel(project, media);
+        _vm = new ExportDialogViewModel(project, media)
+        {
+            SelectedFormat = ExportFormats.Normalize(format),
+            DeleteSidecarAfterExport = deleteSidecarAfterExport,
+        };
         DataContext = _vm;
         _vm.RefreshValidation();
     }
@@ -77,6 +85,27 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
     {
         _runner = runner;
         _externalProgress = externalProgress;
+    }
+
+    public Task FormatSaveTask { get; private set; } = Task.CompletedTask;
+    public Task SidecarPreferenceSaveTask { get; private set; } = Task.CompletedTask;
+
+    private async void OnDeleteSidecarChanged(object sender, RoutedEventArgs e)
+    {
+        if (_vm is null || !IsLoaded || IsExportInFlight) return;
+        SidecarPreferenceSaveTask = UserPreferences.SaveDeleteSidecarAfterExportAsync(DeleteSidecarCheckBox.IsChecked == true);
+        try { await SidecarPreferenceSaveTask; }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        { _vm.ValidationIssues.Add(new(ExportValidationKind.Warning, "The sidecar deletion preference could not be remembered. " + ex.Message)); }
+    }
+
+    private async void OnFormatChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_vm is null || !IsLoaded || FormatSelector.SelectedItem is not ExportFormat format || IsExportInFlight) return;
+        FormatSaveTask = UserPreferences.SaveExportFormatAsync(format);
+        try { await FormatSaveTask; }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        { _vm.ValidationIssues.Add(new(ExportValidationKind.Warning, "The export format could not be remembered. " + ex.Message)); }
     }
 
     private void OnCancel(object sender, RoutedEventArgs e)
@@ -159,7 +188,15 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
         try
         {
             await ExportTask;
-            _vm.MarkComplete();
+            SourceCommentNote = null;
+            SourceCommentFailed = false;
+            if (AfterSuccessfulExportAsync is not null)
+            {
+                _vm.UpdateProgress(new(ExportPhase.Finalizing, 0, 0, 1, 0.99, "Recording the successful export..."));
+                try { SourceCommentNote = await AfterSuccessfulExportAsync(_exportCts.Token); }
+                catch (Exception ex) { SourceCommentFailed = true; SourceCommentNote = "Source comment was not added: " + ex.Message; }
+            }
+            _vm.MarkComplete(SourceCommentNote);
             Outcome = ExportDialogOutcome.Completed;
         }
         catch (OperationCanceledException)

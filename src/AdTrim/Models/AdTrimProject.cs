@@ -6,6 +6,9 @@ public enum MarkerSetSource { Imported, AdTrim, Unknown, Blank }
 
 public sealed record SourceFingerprint(long SizeBytes, long ModifiedUnixMs, long DurationUs);
 
+public sealed record ExportProvenance(string Application, string Version, DateTimeOffset ExportedAtUtc,
+    SourceFingerprint SourceFingerprint);
+
 public sealed record PersistedSplit(
     string Id,
     long TimeUs,
@@ -31,7 +34,8 @@ public sealed record AdTrimProject(
     SidecarLocation SidecarLocation,
     string? StartChapterTitle = null,
     MarkerSetSource MarkerSetSource = MarkerSetSource.Unknown,
-    string? MarkerBaselineId = null)
+    string? MarkerBaselineId = null,
+    ExportProvenance? LastExport = null)
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 }

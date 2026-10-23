@@ -26,7 +26,7 @@ public sealed partial class ExportDialogViewModel
         ExportDialogMode.Completed => "Your video is ready",
         ExportDialogMode.Cancelled => "Export cancelled",
         ExportDialogMode.Failed => "Export could not finish",
-        _ when _progressPhase == ExportPhase.Finalizing => "Finalizing MP4…",
+        _ when _progressPhase == ExportPhase.Finalizing => "Finalizing video…",
         _ when _progressPhase == ExportPhase.Validating => "Checking your video…",
         _ when _progressPhase == ExportPhase.Concatenating && string.IsNullOrEmpty(RemainingFormatted) => ProgressLine,
         _ => string.IsNullOrEmpty(RemainingFormatted) ? "Estimating time remaining..." : RemainingFormatted,

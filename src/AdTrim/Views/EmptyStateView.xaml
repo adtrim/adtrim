@@ -31,14 +31,14 @@
                HorizontalAlignment="Center" Margin="0,0,0,18"
                RenderOptions.BitmapScalingMode="HighQuality"/>
 
-        <TextBlock Text="Drop an MP4 to start editing"
+        <TextBlock Text="Drop an MP4 or TS file to start editing"
                    Style="{StaticResource Text.DropCta}"
                    HorizontalAlignment="Center"/>
 
         <TextBlock TextAlignment="Center" TextWrapping="Wrap"
                    Foreground="{StaticResource Text.Secondary}" FontSize="14"
                    Margin="0,8,0,18">
-          AdTrim reads chapter markers embedded by ComSkip and lets you refine commercial breaks, then exports a clean merged MP4.
+          AdTrim reads chapter markers embedded by ComSkip and lets you refine commercial breaks, then exports a clean merged MP4 or TS.
         </TextBlock>
 
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
@@ -66,7 +66,7 @@
           <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
             <Ellipse Width="6" Height="6" Fill="{StaticResource Text.Tertiary}" Margin="0,0,8,0"/>
             <TextBlock Foreground="{StaticResource Text.Tertiary}" FontSize="12"
-                       Text="Tip: right-click an MP4 in Explorer and choose &quot;Edit with AdTrim&quot;"/>
+                       Text="Tip: right-click an MP4 or TS in Explorer and choose &quot;Edit with AdTrim&quot;"/>
           </StackPanel>
         </Border>
       </StackPanel>
