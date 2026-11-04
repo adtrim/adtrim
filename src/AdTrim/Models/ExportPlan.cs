@@ -45,6 +45,8 @@ public enum ExportPhase
     Validating,
     Done,
     Failed,
+    // After the output is published: export record and optional source comment.
+    RecordingExport,
 }
 
 public sealed record ExportProgress(
@@ -56,4 +58,5 @@ public sealed record ExportProgress(
     string Message,
     string? EncoderName = null,
     string? FallbackNotice = null,
-    double? RemainingSeconds = null);
+    double? RemainingSeconds = null,
+    string? Detail = null);

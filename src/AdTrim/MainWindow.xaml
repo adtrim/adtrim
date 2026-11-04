@@ -9,8 +9,9 @@
         xmlns:views="clr-namespace:AdTrim.Views"
         AllowDrop="True"
         Drop="OnDrop"
-        SourceInitialized="OnSourceInitialized"
         SizeChanged="OnWindowSizeChanged"
+        StateChanged="OnWindowStateChanged"
+        LocationChanged="OnWindowLocationChanged"
         Title="AdTrim"
         Icon="pack://application:,,,/icon-512.png"
         Width="1280" Height="720"
@@ -102,7 +103,7 @@
           <Button x:Name="MinButton" Style="{StaticResource WindowControlButton}" Click="OnMinimize">
             <Path Stroke="{StaticResource Text.Secondary}" StrokeThickness="1" Data="M0,5 L10,5"/>
           </Button>
-          <Button x:Name="MaxButton" Style="{StaticResource WindowControlButton}" Click="OnMaximize">
+          <Button x:Name="MaxButton" ToolTip="Maximize" AutomationProperties.Name="Maximize" Style="{StaticResource WindowControlButton}" Click="OnMaximize">
             <Path x:Name="MaxButtonIcon" Stroke="{StaticResource Text.Secondary}" StrokeThickness="1"
                   Data="M0.5,0.5 L9.5,0.5 L9.5,9.5 L0.5,9.5 Z"/>
           </Button>

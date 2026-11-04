@@ -48,6 +48,21 @@ internal static partial class Program
         {
             await window.Ready;
             var vm = (MainViewModel)window.DataContext;
+            Invoke(window, "ReleaseAudioPass", vm);
+            Invoke(window, "CancelThumbnailLoad", vm, true);
+            string thumbnailRoot = Path.Combine(directory, "comment-thumbnails"), audioRoot = Path.Combine(directory, "comment-levels");
+            var thumbnails = new ThumbnailService(new FfmpegRunner(), thumbnailRoot);
+            var tiles = await thumbnails.ExtractAsync(source, sourceMedia.DurationUs, [0]);
+            Require(tiles.Count == 1, "Comment-cache regression has a real cached thumbnail");
+            var audio = new AudioLevelService(new FfmpegRunner(), audioRoot);
+            var levels = new AudioLevels([20, 40, 60], [true]);
+            audio.SaveCached(source, sourceMedia.PrimaryAudioIndex, sourceMedia.DurationUs, levels);
+            typeof(MainWindow).GetField("_thumbnails", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, thumbnails);
+            typeof(MainWindow).GetField("_audioLevels", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, audio);
+            var suggestions = new MarkerSuggestionStore();
+            var proposal = AdTrim.Commands.ReplaceMarkerSetCommand.Capture(vm) with { Source = AdTrim.Models.MarkerSetSource.AdTrim, BaselineId = null };
+            proposal = proposal with { BaselineId = proposal.ContentId() };
+            suggestions.Save(suggestions.Key(source, vm.SourceFingerprint!), proposal);
             var toggle = (MenuItem)window.FindName("SourceCommentMenu");
             Require(!toggle.IsChecked, "Source-comment opt-out loads from the isolated preferences");
             var fileMenu = (MenuItem)toggle.Parent;
@@ -77,6 +92,13 @@ internal static partial class Program
             Require(setup.IsCompleted && !export.SourceCommentFailed, $"Actual export completes its source-comment phase: {export.SourceCommentNote}; mode={setup.Mode}; error={setup.ErrorMessage}; validation={string.Join("; ", setup.Validate().Select(v => v.Message))}");
             Require(Mp4Comments.HasExportLabel(Mp4Comments.Read(source)), "Source receives a discoverable successful-export comment");
             Require(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(source))) != hash, "Commenting changes source metadata only after successful export");
+            var updatedFingerprint = vm.SourceFingerprint!;
+            Require(vm.HasAdTrimAnalysis && suggestions.Load(suggestions.Key(source, updatedFingerprint), sourceMedia.DurationUs)?.BaselineId == proposal.BaselineId,
+                "Actual export retains the original ad-break proposal under the updated source identity");
+            Require(thumbnails.LoadCached(source, sourceMedia.DurationUs).Count >= 1,
+                "Actual export retains cached thumbnails after adding its comment");
+            Require(audio.TryLoadCached(source, sourceMedia.PrimaryAudioIndex, sourceMedia.DurationUs, out var retainedLevels)
+                && retainedLevels.Loudness.SequenceEqual(levels.Loudness), "Actual export retains cached audio levels");
             var media = await new MediaProbeService(new FfmpegRunner()).ProbeAsync(source);
             var saved = new ProjectStore().Load(source, media);
             Require(saved.Project is not null && saved.Status != SidecarLoadStatus.FingerprintMismatch, "Retained project matches the marked source");

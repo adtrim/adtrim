@@ -162,6 +162,10 @@ public class EditingRegressionTests
     {
         var map = new KeptTimeline(new[] { new Segment { StartUs = 1_234_567, EndUs = 2_345_678 } });
         Assert.Equal("edl://%6%a,b.mp,1.234567,1.111111", map.ToMpvEdl("a,b.mp"));
+        // mpv opens EDL entries itself, so a long entry uses the extended-length form and its byte count.
+        string longPath = @"C:\" + string.Join(@"\", Enumerable.Repeat("A folder name long enough", 12)) + @"\é.mp4";
+        string native = @"\\?\" + longPath;
+        Assert.Equal($"edl://%{System.Text.Encoding.UTF8.GetByteCount(native)}%{native},1.234567,1.111111", map.ToMpvEdl(longPath));
         Assert.Equal("edl://%6%a,b.mp,122.634567,1.111111", map.ToMpvEdl("a,b.mp", 121_400_000));
         Assert.StartsWith("edl://%2%", map.ToMpvEdl("é"));
     }

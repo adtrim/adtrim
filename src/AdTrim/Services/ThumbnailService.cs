@@ -26,16 +26,25 @@ public sealed class ThumbnailService
         _cacheRoot = cacheRoot ?? DefaultCacheRoot;
     }
 
-    public static string DefaultCacheRoot => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "AdTrim",
-        "thumbnails");
+    public static string DefaultCacheRoot => Path.Combine(AppDataDirectory.Path, "thumbnails");
 
     /// <summary>Folder-name suffix of the format this version writes (see <see cref="MediaCacheCleanup"/>).</summary>
     public static string CurrentFolderSuffix => $"_h{TileHeight}_v{CacheVersion}";
 
     public static string CacheDirectoryFor(string sourcePath, long durationUs, string cacheRoot, int cacheVersion = CacheVersion)
         => Path.Combine(cacheRoot, $"{FrameCacheService.ComputeSourceHash(sourcePath)}_d{durationUs}_h{TileHeight}_v{cacheVersion}");
+
+    public void PreserveAfterMetadataUpdate(string sourcePath, SourceFingerprint before)
+    {
+        var oldDirectory = Path.Combine(_cacheRoot,
+            $"{FrameCacheService.ComputeSourceHash(sourcePath, before)}_d{before.DurationUs}{CurrentFolderSuffix}");
+        var newDirectory = CacheDirectoryFor(sourcePath, before.DurationUs, _cacheRoot);
+        if (oldDirectory == newDirectory || !Directory.Exists(oldDirectory)) return;
+        Directory.CreateDirectory(newDirectory);
+        foreach (var file in Directory.EnumerateFiles(oldDirectory, "*.jpg"))
+            if (long.TryParse(Path.GetFileNameWithoutExtension(file), NumberStyles.None, CultureInfo.InvariantCulture, out _))
+                File.Copy(file, Path.Combine(newDirectory, Path.GetFileName(file)), overwrite: true);
+    }
 
     /// <summary>The cache time a request for <paramref name="timeUs"/> is fetched at.</summary>
     public static long Snap(long timeUs, long durationUs)

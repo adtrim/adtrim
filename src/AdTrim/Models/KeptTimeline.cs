@@ -47,7 +47,8 @@ public sealed class KeptTimeline
     public string ToMpvEdl(string sourcePath, long timelineStartTimeUs = 0)
     {
         if (Spans.Count == 0) throw new InvalidOperationException("No kept footage.");
-        // EDL offsets use demuxer timestamps, including the TS origin.
+        // EDL offsets use demuxer timestamps, including the TS origin. mpv opens each entry itself.
+        sourcePath = AdTrim.Services.NativePath.ForNative(sourcePath);
         var file = $"%{Encoding.UTF8.GetByteCount(sourcePath)}%{sourcePath}";
         return "edl://" + string.Join(";", Spans.Select(s => file + "," + Seconds(s.StartUs + timelineStartTimeUs) + "," + Seconds(s.DurationUs)));
     }

@@ -22,6 +22,23 @@ internal static class MonitorBounds
         return new Rect(transform.Transform(new Point(info.Work.Left, info.Work.Top)),
             transform.Transform(new Point(info.Work.Right, info.Work.Bottom)));
     }
+    // Windows keeps an invisible resize frame outside the maximized work area.
+    // Custom chrome extends content into it, so inset content by that frame.
+    public static Thickness MaximizedInsets(Window window)
+    {
+        var handle = new WindowInteropHelper(window).Handle;
+        var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+        if (!GetMonitorInfo(MonitorFromWindow(handle, 2), ref info) || !GetWindowRect(handle, out var bounds))
+            return new Thickness(0);
+        var dpi = VisualTreeHelper.GetDpi(window);
+        return new Thickness(Math.Max(0, info.Work.Left - bounds.Left) / dpi.DpiScaleX,
+            Math.Max(0, info.Work.Top - bounds.Top) / dpi.DpiScaleY,
+            Math.Max(0, bounds.Right - info.Work.Right) / dpi.DpiScaleX,
+            Math.Max(0, bounds.Bottom - info.Work.Bottom) / dpi.DpiScaleY);
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rect);
     [StructLayout(LayoutKind.Sequential)]
     private struct NativeRect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)]

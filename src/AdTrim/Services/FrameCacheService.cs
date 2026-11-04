@@ -42,9 +42,7 @@ public sealed class FrameCacheService
     public FrameCacheService(FfmpegRunner runner)
     {
         _runner = runner;
-        _rootDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "AdTrim", "framecache");
+        _rootDir = Path.Combine(AppDataDirectory.Path, "framecache");
         Directory.CreateDirectory(_rootDir);
     }
 
@@ -56,8 +54,13 @@ public sealed class FrameCacheService
     public static string ComputeSourceHash(string sourcePath)
     {
         var fi = new FileInfo(sourcePath);
-        var key = $"{Path.GetFullPath(sourcePath).ToLowerInvariant()}|{fi.Length}|" +
-                  $"{new DateTimeOffset(fi.LastWriteTimeUtc).ToUnixTimeMilliseconds()}";
+        return ComputeSourceHash(sourcePath, new(fi.Length,
+            new DateTimeOffset(fi.LastWriteTimeUtc).ToUnixTimeMilliseconds(), 0));
+    }
+
+    internal static string ComputeSourceHash(string sourcePath, AdTrim.Models.SourceFingerprint fingerprint)
+    {
+        var key = $"{Path.GetFullPath(sourcePath).ToLowerInvariant()}|{fingerprint.SizeBytes}|{fingerprint.ModifiedUnixMs}";
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(key));
         var sb = new StringBuilder(16);
         for (int i = 0; i < 8; i++) sb.Append(bytes[i].ToString("x2"));

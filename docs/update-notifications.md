@@ -40,8 +40,14 @@ cached feed can survive a network failure regardless of its age. Failed checks n
 report that the installation is current.
 
 The per-user updates-state.json stores the last verified feed/signature, revision
-and bounded reminder history. It is not a defense against an attacker who already
-controls the local account. A first installation has no prior revision to compare;
+and bounded reminder history. A separate updates-revision.json keeps the highest
+accepted revision and its digest, so a damaged or reset cache cannot re-admit an
+older signed announcement. Cache revision and digest fields never override that
+record. Migration or recovery derives them from the cached announcement only after
+verifying its signature and checking it against the independent record. These files
+resist accidental corruption only: they are not a
+defense against an attacker who already controls the local account and can delete
+or edit both. A first installation has no prior revision to compare;
 an attacker controlling delivery could replay an older signed announcement to it.
 There is no time limit on this replay risk. Previously observed revisions prevent
 rollback on returning installations. Signatures do not prove freshness. Blocking

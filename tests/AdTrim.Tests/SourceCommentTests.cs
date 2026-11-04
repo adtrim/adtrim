@@ -26,7 +26,7 @@ public sealed class SourceCommentTests : IDisposable
     }
     private static byte[] U32(uint n) { var b = new byte[4]; BinaryPrimitives.WriteUInt32BigEndian(b, n); return b; }
     private static byte[] Value(string text, uint locale = 0) => Box("data", U32(1), U32(locale), Encoding.UTF8.GetBytes(text));
-    private string Fixture(string name = "source.mp4", uint locale = 0, bool tail = false, string comment = "Original user comment")
+    private string Fixture(string name = "source.mp4", uint locale = 0, bool tail = false, string comment = "Original user comment", int mediaBytes = 4)
     {
         var ftyp = Box("ftyp", Encoding.ASCII.GetBytes("isom"), U32(512), Encoding.ASCII.GetBytes("isom"));
         var keys = Box("keys", U32(0), U32(3), Box("mdta", Encoding.UTF8.GetBytes("comment")),
@@ -39,7 +39,7 @@ public sealed class SourceCommentTests : IDisposable
             Box("udta", meta, Box("chpl", new byte[] { 1, 2, 3, 4 })));
         var initial = Movie(0);
         var movie = Movie((uint)(ftyp.Length + (tail ? 0 : initial.Length) + 8));
-        var media = Box("mdat", new byte[] { 11, 22, 33, 44 });
+        var media = Box("mdat", new byte[] { 11, 22, 33, 44 }.Concat(new byte[Math.Max(0, mediaBytes - 4)]).ToArray());
         var uuid = Box("uuid", Encoding.ASCII.GetBytes("opaque-test-data-preserved"));
         var bytes = tail ? ftyp.Concat(media).Concat(movie).Concat(uuid).ToArray() : ftyp.Concat(movie).Concat(media).Concat(uuid).ToArray();
         string path = FilePath(name);
@@ -66,6 +66,50 @@ public sealed class SourceCommentTests : IDisposable
         uint offset = BinaryPrimitives.ReadUInt32BigEndian(raw.AsSpan(stco + 12));
         Assert.Equal(new byte[] { 11, 22, 33, 44 }, raw.AsSpan((int)offset, 4).ToArray());
         Assert.Equal(hash, Hash(source));
+    }
+
+    [Fact]
+    public async Task VerifiedCommentUpdatePreservesCachesWithoutTrustingLaterExternalChanges()
+    {
+        string source = Fixture();
+        var before = ProjectStore.FingerprintOf(source, _media.DurationUs);
+        var suggestions = new MarkerSuggestionStore(_directory);
+        var state = new AdTrim.Commands.MarkerSetState([], [], "Original proposal", MarkerSetSource.AdTrim, null);
+        state = state with { BaselineId = state.ContentId() };
+        suggestions.Save(suggestions.Key(source, before), state);
+        string thumbnailRoot = FilePath("thumbnails"), audioRoot = FilePath("levels");
+        var thumbnails = new ThumbnailService(null, thumbnailRoot);
+        string oldTiles = ThumbnailService.CacheDirectoryFor(source, before.DurationUs, thumbnailRoot);
+        Directory.CreateDirectory(oldTiles);
+        byte[] image = [1, 2, 3];
+        await File.WriteAllBytesAsync(Path.Combine(oldTiles, "0.jpg"), image);
+        await File.WriteAllBytesAsync(Path.Combine(oldTiles, "0.jpg.tmp.jpg"), [4]);
+        var audio = new AudioLevelService(null, audioRoot);
+        var levels = new AudioLevels([20, 40, 60], [true]);
+        audio.SaveCached(source, 1, before.DurationUs, levels);
+
+        var after = await SourceCommentService.MarkAsync(source, before, new ProjectStore(dataDirectory: _directory), default);
+        Assert.NotEqual(before, after);
+        suggestions.PreserveAfterMetadataUpdate(source, before, after);
+        thumbnails.PreserveAfterMetadataUpdate(source, before);
+        audio.PreserveAfterMetadataUpdate(source, 1, before);
+
+        Assert.Equal(state.BaselineId, suggestions.Load(suggestions.Key(source, after), after.DurationUs)?.BaselineId);
+        var tile = thumbnails.LoadCached(source, after.DurationUs).Nearest(0);
+        Assert.NotNull(tile);
+        Assert.Equal(image, await File.ReadAllBytesAsync(tile.Value.Path));
+        Assert.NotEqual(Path.Combine(oldTiles, "0.jpg"), tile.Value.Path);
+        Assert.Single(Directory.GetFiles(Path.GetDirectoryName(tile.Value.Path)!));
+        Assert.True(audio.TryLoadCached(source, 1, after.DurationUs, out var loaded));
+        Assert.Equal(levels.Loudness, loaded.Loudness);
+        Assert.Equal(levels.CentreDialogue, loaded.CentreDialogue);
+        Assert.True(File.Exists(Path.Combine(oldTiles, "0.jpg")));
+
+        using (var file = File.Open(source, FileMode.Append)) file.WriteByte(99);
+        var external = ProjectStore.FingerprintOf(source, after.DurationUs);
+        Assert.Null(suggestions.Load(suggestions.Key(source, external), external.DurationUs));
+        Assert.Equal(0, thumbnails.LoadCached(source, external.DurationUs).Count);
+        Assert.False(audio.TryLoadCached(source, 1, external.DurationUs, out _));
     }
 
     [Fact]
@@ -105,6 +149,176 @@ public sealed class SourceCommentTests : IDisposable
         Assert.Equal(SidecarLoadStatus.Loaded, store.Load(source, _media).Status);
         Assert.False(SourceCommentService.HasPendingUpdate(source));
         Assert.False(File.Exists(source + ".adtrim-export-comment.bak"));
+    }
+
+    // Records every report and can act at the start of a named step, to inject a fault there.
+    private sealed class RecordingProgress(Action<string>? atStep = null) : IProgress<SourceCommentProgress>
+    {
+        private readonly HashSet<string> _started = new();
+        public List<SourceCommentProgress> Values { get; } = new();
+        public void Report(SourceCommentProgress value)
+        {
+            Values.Add(value);
+            if (_started.Add((value.Restoring ? "restore:" : "") + value.Step)) atStep?.Invoke(value.Step);
+        }
+        public IEnumerable<string> Steps => Values.Where(v => !v.Restoring && v.Step != "").Select(v => v.Step).Distinct();
+    }
+
+    // Changes one media byte in place and keeps the size and modified time, so only a content read can notice.
+    private static void TamperKeepingFingerprint(string path)
+    {
+        var modified = File.GetLastWriteTimeUtc(path);
+        var bytes = File.ReadAllBytes(path);
+        int media = bytes.AsSpan().IndexOf(new byte[] { 11, 22, 33, 44 }) + 100;
+        bytes[media] ^= 0xFF;
+        File.WriteAllBytes(path, bytes);
+        File.SetLastWriteTimeUtc(path, modified);
+    }
+
+    private const int LargeMedia = 3 << 20;
+
+    [Fact]
+    public async Task CommentProgressFollowsTheFiveVerifiedPassesAndOnlyCompletesAfterCommit()
+    {
+        // The step can take minutes on a network share: progress must move through each pass and
+        // must not reach 100% before the replaced file is verified and committed.
+        string tracked = Fixture("tracked.mp4", mediaBytes: LargeMedia), plain = Fixture("plain.mp4", mediaBytes: LargeMedia);
+        var progress = new RecordingProgress();
+        await SourceCommentService.MarkAsync(tracked, ProjectStore.FingerprintOf(tracked, _media.DurationUs),
+            new ProjectStore(FilePath("fallback")), default, progress);
+        await SourceCommentService.MarkAsync(plain, ProjectStore.FingerprintOf(plain, _media.DurationUs),
+            new ProjectStore(FilePath("fallback")), default);
+
+        Assert.Equal(Hash(plain), Hash(tracked));
+        Assert.True(Mp4Comments.HasExportLabel(Mp4Comments.Read(tracked)));
+        var fractions = progress.Values.Select(v => v.Fraction).ToList();
+        Assert.Equal(fractions.OrderBy(v => v), fractions);
+        Assert.DoesNotContain(progress.Values, v => v.Restoring);
+        Assert.Equal(new[] { SourceCommentService.CopyingStep, SourceCommentService.CheckingStep,
+            SourceCommentService.RecheckingStep, SourceCommentService.VerifyingStep }, progress.Steps);
+        // Copy (2) + check (1) + recheck (1) come before the final verification pass (1).
+        double verifyStart = progress.Values.First(v => v.Step == SourceCommentService.VerifyingStep).Fraction;
+        Assert.InRange(verifyStart, 0.75, 0.85);
+        Assert.InRange(fractions[^2], 0.95, 0.99);
+        Assert.Equal(1.0, fractions[^1]);
+        Assert.Single(fractions, f => f == 1.0);
+        Assert.False(File.Exists(tracked + ".adtrim-export-comment.bak"));
+        Assert.Empty(Directory.GetFiles(_directory, "tracked.mp4.adtrim-comment-*"));
+    }
+
+    [Fact]
+    public async Task RepeatingAnIdenticalCommentReadsOnlyTheIndexAndReportsCompletion()
+    {
+        string source = Fixture(mediaBytes: LargeMedia);
+        var store = new ProjectStore(FilePath("fallback"));
+        var marked = await SourceCommentService.MarkAsync(source, ProjectStore.FingerprintOf(source, _media.DurationUs), store, default);
+        string hash = Hash(source);
+        var modified = File.GetLastWriteTimeUtc(source);
+        var progress = new RecordingProgress();
+
+        var again = await SourceCommentService.MarkAsync(source, marked, store, default, progress);
+
+        Assert.Equal(marked, again);
+        Assert.Equal(hash, Hash(source));
+        Assert.Equal(modified, File.GetLastWriteTimeUtc(source));
+        Assert.Equal(new[] { 1.0 }, progress.Values.Select(v => v.Fraction));
+        Assert.Empty(Directory.GetFiles(_directory, "source.mp4.adtrim-*"));
+    }
+
+    [Fact]
+    public async Task TheCopyReadBackCatchesAStagedWriteThatDoesNotMatchTheSource()
+    {
+        // The single read-back replaces the old side-by-side comparison; it must still reject a bad copy.
+        string source = Fixture(mediaBytes: LargeMedia), stage = FilePath("staged.mp4");
+        string hash = Hash(source);
+        var error = await Assert.ThrowsAsync<IOException>(() => Mp4Comments.StageAsync(source, stage, "2.0.1", new(2026, 10, 22), default,
+            checking: () => TamperKeepingFingerprint(stage)));
+        Assert.Contains("preservation check failed", error.Message);
+        Assert.Equal(hash, Hash(source));
+    }
+
+    [Fact]
+    public async Task StagingHashesMatchIndependentReadsOfBothFiles()
+    {
+        string source = Fixture(mediaBytes: LargeMedia), stage = FilePath("staged.mp4");
+        var result = await Mp4Comments.StageAsync(source, stage, "2.0.1", new(2026, 10, 22), default);
+        Assert.Equal(Hash(source), result.SourceHash);
+        Assert.Equal(Hash(stage), result.StagedHash);
+        Assert.True(Mp4Comments.NeedsUpdate(source, "2.0.1", new(2026, 10, 22)));
+        Assert.False(Mp4Comments.NeedsUpdate(stage, "2.0.1", new(2026, 10, 22)));
+        Assert.True(Mp4Comments.NeedsUpdate(stage, "2.0.1", new(2026, 10, 23)));
+    }
+
+    [Fact]
+    public async Task AContentChangeBeforeReplacementIsCaughtByTheRecheckAndNothingIsReplaced()
+    {
+        string source = Fixture(mediaBytes: LargeMedia);
+        var fingerprint = ProjectStore.FingerprintOf(source, _media.DurationUs);
+        var progress = new RecordingProgress(step => { if (step == SourceCommentService.RecheckingStep) TamperKeepingFingerprint(source); });
+        var error = await Assert.ThrowsAsync<IOException>(() => SourceCommentService.MarkAsync(source, fingerprint,
+            new ProjectStore(FilePath("fallback")), default, progress));
+        Assert.Contains("changed during comment preparation", error.Message);
+        Assert.False(Mp4Comments.HasExportLabel(Mp4Comments.Read(source)));
+        Assert.False(SourceCommentService.HasPendingUpdate(source));
+        Assert.Empty(Directory.GetFiles(_directory, "source.mp4.adtrim-*"));
+        Assert.DoesNotContain(progress.Values, v => v.Fraction == 1.0);
+    }
+
+    [Fact]
+    public async Task CancellingWhileCopyingLeavesTheSourceAndNoRecoveryFiles()
+    {
+        string source = Fixture(mediaBytes: LargeMedia);
+        string hash = Hash(source);
+        using var stop = new CancellationTokenSource();
+        var progress = new RecordingProgress(step => { if (step == SourceCommentService.CopyingStep) stop.Cancel(); });
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => SourceCommentService.MarkAsync(source,
+            ProjectStore.FingerprintOf(source, _media.DurationUs), new ProjectStore(FilePath("fallback")), stop.Token, progress));
+        Assert.Equal(hash, Hash(source));
+        Assert.False(SourceCommentService.HasPendingUpdate(source));
+        Assert.Empty(Directory.GetFiles(_directory, "source.mp4.adtrim-*"));
+        Assert.DoesNotContain(progress.Values, v => v.Restoring || v.Fraction == 1.0);
+    }
+
+    [Fact]
+    public async Task CancellingAfterReplacementRestoresTheOriginalAndSaysSo()
+    {
+        string source = Fixture(mediaBytes: LargeMedia);
+        string hash = Hash(source);
+        var store = new ProjectStore(FilePath("fallback"));
+        var fingerprint = ProjectStore.FingerprintOf(source, _media.DurationUs);
+        var project = new AdTrimProject(3, source, fingerprint, _media, new(), new() { "segment-0-1000000" }, SidecarLocation.NextToSource);
+        store.Save(project);
+        string sidecar = File.ReadAllText(store.SidecarPathFor(source));
+        using var stop = new CancellationTokenSource();
+        var progress = new RecordingProgress(step => { if (step == SourceCommentService.VerifyingStep) stop.Cancel(); });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => SourceCommentService.MarkAsync(source, fingerprint, store, stop.Token, progress));
+
+        Assert.Equal(hash, Hash(source));
+        Assert.Equal(sidecar, File.ReadAllText(store.SidecarPathFor(source)));
+        Assert.False(SourceCommentService.HasPendingUpdate(source));
+        Assert.Empty(Directory.GetFiles(_directory, "source.mp4.adtrim-*"));
+        var restoring = progress.Values.Where(v => v.Restoring).ToList();
+        Assert.NotEmpty(restoring);
+        Assert.All(restoring, v => Assert.Equal(SourceCommentService.RestoringStep, v.Step));
+        Assert.DoesNotContain(progress.Values, v => v.Fraction == 1.0);
+    }
+
+    [Fact]
+    public async Task AChangeAfterReplacementFailsVerificationAndKeepsTheOriginalInItsBackup()
+    {
+        string source = Fixture(mediaBytes: LargeMedia);
+        string hash = Hash(source);
+        var progress = new RecordingProgress(step => { if (step == SourceCommentService.VerifyingStep) TamperKeepingFingerprint(source); });
+
+        await Assert.ThrowsAsync<IOException>(() => SourceCommentService.MarkAsync(source,
+            ProjectStore.FingerprintOf(source, _media.DurationUs), new ProjectStore(FilePath("fallback")), default, progress));
+
+        // The unknown file is neither the original nor the verified update, so recovery refuses to guess.
+        Assert.True(SourceCommentService.HasPendingUpdate(source));
+        Assert.Equal(hash, Hash(source + ".adtrim-export-comment.bak"));
+        Assert.Contains(progress.Values, v => v.Restoring);
+        Assert.DoesNotContain(progress.Values, v => v.Fraction == 1.0);
     }
 
     [Fact]

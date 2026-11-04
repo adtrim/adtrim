@@ -73,7 +73,7 @@
   </ItemGroup>
 
   <ItemGroup><Compile Include="..\..\src\AdTrim\Services\ExportSafety.cs" Link="Services\ExportSafety.cs" /></ItemGroup>
-  <ItemGroup><Compile Include="..\..\src\AdTrim\Models\KeptTimeline.cs" Link="Models\KeptTimeline.cs"/><Compile Include="..\..\src\AdTrim\Services\ProjectSession.cs" Link="Services\ProjectSession.cs"/></ItemGroup>
+  <ItemGroup><Compile Include="..\..\src\AdTrim\Services\NativePath.cs" Link="Services\NativePath.cs"/><Compile Include="..\..\src\AdTrim\Services\AppDataDirectory.cs" Link="Services\AppDataDirectory.cs"/><Compile Include="..\..\src\AdTrim\Models\KeptTimeline.cs" Link="Models\KeptTimeline.cs"/><Compile Include="..\..\src\AdTrim\Services\ProjectSession.cs" Link="Services\ProjectSession.cs"/></ItemGroup>
 <ItemGroup>
     <Compile Include="..\..\src\AdTrim\Services\HardwareExportException.cs" Link="Services\HardwareExportException.cs" />
     <Compile Include="..\..\src\AdTrim\Encoders\HardwareEncoderStrategy.cs" Link="Encoders\HardwareEncoderStrategy.cs" />

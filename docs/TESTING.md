@@ -25,16 +25,34 @@ With the bundled FFmpeg and libmpv components present, these tools exercise
 synthetic media without needing private recordings:
 
 ```powershell
-dotnet run --project tools/AdTrim.Smoke -c Release
+powershell -File tools/run-smoke.ps1
 powershell -File tools/verify-ts.ps1
 python tools/playback_probe.py
 python tools/benchmark-editing.py
 ```
 
-The smoke tool generates a disposable recording and isolated preferences beneath
-its build directory. It checks editing, saves, reopening, collapsed playback, and
-window layout. Its optional file argument is for matching disposable test fixtures
-only: the tool edits their sidecars. Do not pass an original recording.
+`run-smoke.ps1` runs every UI smoke check, each in its own process: the full
+application run (editing, saves, reopening, collapsed playback, export, source
+comments and their progress), open recovery, window lifecycle, window state
+across monitors, the TS workflow, and recordings at paths longer than 260
+characters. It prints a summary with passes, failures, and checks that were
+skipped or unavailable, such as hardware adapters that are not present or
+multi-monitor checks on a single display. Each check uses its own short folder in
+the temp directory, or below `-Root`; synthetic media and caches are removed when
+the check finishes. Add `-KeepFailedFixtures` to keep the media of a failed check,
+and `-Hardware` to include the hardware export checks described below.
+
+A single check can also be run directly, for example
+`dotnet run --project tools/AdTrim.Smoke -c Release -- --open-recovery`. Modes are
+`--open-recovery`, `--lifecycle`, `--window-state <folder>`, `--ts`,
+`--source-comments` and `--long-path`; no argument runs the full application
+check. `ADTRIM_SMOKE_ROOT` chooses the folder for synthetic media (at most 100
+characters, so ordinary checks never become long-path tests), and
+`ADTRIM_SMOKE_KEEP_FAILED=1` keeps a failed check's media. The tool removes the
+media it created when it exits, including when setup throws before a UI check starts.
+A cleanup failure makes the command fail and reports the remaining folder. Its optional file argument is for matching
+disposable test fixtures only: the tool edits their sidecars and never removes
+them. Do not pass an original recording.
 
 The [TS workflow verification](ts-verification.md) command requires the bundled
 native tools and fails if any selected test is skipped. Run it before packaging

@@ -26,6 +26,7 @@
     <Compile Include="..\AdTrim\Services\CommercialBreakDetector.cs" Link="Services\CommercialBreakDetector.cs"/>
     <Compile Include="..\AdTrim\Services\RecurringGraphic.cs" Link="Services\RecurringGraphic.cs"/>
     <Compile Include="..\AdTrim\Services\SuggestionEvidence.cs" Link="Services\SuggestionEvidence.cs"/>
+    <Compile Include="..\AdTrim\Services\AppDataDirectory.cs" Link="Services\AppDataDirectory.cs"/>
     <Compile Include="..\AdTrim\Services\AudioLevelService.cs" Link="Services\AudioLevelService.cs"/>
     <Compile Include="..\AdTrim\Services\MediaCacheCleanup.cs" Link="Services\MediaCacheCleanup.cs"/>
     <Compile Include="..\AdTrim\Services\FrameCacheService.cs" Link="Services\FrameCacheService.cs"/>

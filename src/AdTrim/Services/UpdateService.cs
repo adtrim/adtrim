@@ -85,7 +85,7 @@ public sealed class UpdateService
             }
             Notice ??= CachedNotice();
         }
-        // An unreadable saved state is reported by the network check that follows.
+        // Disk failures must not prevent a later network check.
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException) { }
         finally
         {
@@ -144,17 +144,77 @@ public sealed class UpdateService
     private async Task LoadAsync(CancellationToken ct)
     {
         var path = Path.Combine(_directory, "updates-state.json");
-        if (!File.Exists(path)) return;
-        if (new FileInfo(path).Length > 160_000) throw new InvalidDataException("Update state too large.");
-        var state = JsonSerializer.Deserialize<UpdateState>(await File.ReadAllTextAsync(path, ct)) ?? new();
-        if (state.History is null || state.History.Seen is null || state.History.Seen.Count > 128
-            || state.History.Seen.Values.Any(v => v is null)) throw new InvalidDataException("Invalid update history.");
-        _state = state;
+        try
+        {
+            if (File.Exists(path))
+            {
+                if (new FileInfo(path).Length > 160_000) throw new InvalidDataException("Update state too large.");
+                var state = JsonSerializer.Deserialize<UpdateState>(await File.ReadAllTextAsync(path, ct)) ?? new();
+                if (state.History is null || state.History.Seen is null || state.History.Seen.Count > 128
+                    || state.History.Seen.Values.Any(v => v is null)) state.History = new();
+                _state = state;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException)
+        {
+            // Keep the file until a verified announcement can replace it.
+            _state = new();
+        }
+        // Only the separate record and verified announcement bytes establish the revision and digest.
+        // The cache's copies of those fields can be damaged even when its JSON still parses.
+        var floor = await ReadRevisionFloorAsync(ct);
+        _state.Revision = floor?.Revision ?? 0;
+        _state.Digest = floor?.Digest;
+        try
+        {
+            if (_state.Feed is null || _state.Signature is null) return;
+            var cached = UpdateFeedReader.Verify(_state.Feed, _state.Signature, _publicKey, DateTimeOffset.UtcNow, _state.Revision);
+            var digest = Convert.ToHexString(SHA256.HashData(_state.Feed));
+            if (cached.Revision == _state.Revision && _state.Digest is not null && digest != _state.Digest)
+                throw new InvalidDataException("Update revision was reused.");
+            _state.Revision = cached.Revision;
+            _state.Digest = digest;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or JsonException or CryptographicException or ArgumentException or FormatException)
+        {
+            _state.Feed = null;
+            _state.Signature = null;
+            return;
+        }
+        if (floor is null || floor.Revision < _state.Revision || floor.Digest is null)
+        {
+            try { await WriteRevisionFloorAsync(ct); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
+    private sealed record RevisionFloor(long Revision, string? Digest);
+    private string RevisionPath => Path.Combine(_directory, "updates-revision.json");
+
+    private async Task<RevisionFloor?> ReadRevisionFloorAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (!File.Exists(RevisionPath) || new FileInfo(RevisionPath).Length > 1024) return null;
+            var floor = JsonSerializer.Deserialize<RevisionFloor>(await File.ReadAllTextAsync(RevisionPath, ct));
+            return floor is { Revision: > 0 } ? floor : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return null; }
+    }
+
+    private async Task WriteRevisionFloorAsync(CancellationToken ct)
+    {
+        Directory.CreateDirectory(_directory);
+        var temporary = RevisionPath + ".tmp";
+        await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(new RevisionFloor(_state.Revision, _state.Digest)), ct);
+        File.Move(temporary, RevisionPath, overwrite: true);
     }
 
     private async Task SaveAsync(CancellationToken ct)
     {
         Directory.CreateDirectory(_directory);
+        // The revision is recorded before the cache, so an interrupted save cannot leave it behind.
+        if (_state.Revision > 0) await WriteRevisionFloorAsync(ct);
         var path = Path.Combine(_directory, "updates-state.json");
         var temporary = path + ".tmp";
         await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(_state), ct);

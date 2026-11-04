@@ -1,5 +1,5 @@
 {
-  "version": "2.1.0",
-  "summary": "Open and export MP4 or TS recordings, find recordings that still need exporting, and keep export status with each project. Export setup remembers your format and sidecar choice. This release also fixes preview seeking, opening audio and timing at cuts and joins.",
+  "version": "2.1.6",
+  "summary": "Fix window maximize and restore, open recordings at long paths, and keep your edits intact when another file cannot open. Adding source export comments does less file copying and shows progress. Damaged settings can be reset, and update checks recover from damaged cached data.",
   "advisories": []
 }

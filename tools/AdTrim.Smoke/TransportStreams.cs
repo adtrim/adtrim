@@ -105,8 +105,13 @@ internal static partial class Program
             .Invoke(new object[] { dropData, DragDropKeyStates.None, DragDropEffects.Copy, dropWindow, new Point() });
         typeof(MainWindow).GetMethod("OnDrop", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)!
             .Invoke(dropWindow, new object[] { dropWindow, drop });
+        for (int i = 0; i < 500; i++)
+        {
+            var current = (MainViewModel)dropWindow.DataContext;
+            if (current.SourcePath == droppedSource && !current.IsBusy) break;
+            await Task.Delay(20);
+        }
         var droppedVm = (MainViewModel)dropWindow.DataContext;
-        for (int i = 0; i < 500 && (droppedVm.SourcePath != droppedSource || droppedVm.IsBusy); i++) await Task.Delay(20);
         Require(droppedVm.IsFileLoaded && droppedVm.SourcePath == droppedSource, "Dropping an uppercase TS file opens it and ignores unsupported files");
         await CheckFramePair(dropWindow, droppedVm);
         dropWindow.Close();

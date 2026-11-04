@@ -36,5 +36,7 @@
     <Compile Include="..\AdTrim\Services\ExportWorkspace.cs" Link="Services\ExportWorkspace.cs"/>
     <Compile Include="..\AdTrim\Services\ExportDiskGuard.cs" Link="Services\ExportDiskGuard.cs"/>
     <Compile Include="..\AdTrim\Services\UserPreferences.cs" Link="Services\UserPreferences.cs"/>
+    <Compile Include="..\AdTrim\Services\AppDataDirectory.cs" Link="Services\AppDataDirectory.cs"/>
+    <Compile Include="..\AdTrim\Services\NativePath.cs" Link="Services\NativePath.cs"/>
   </ItemGroup>
 </Project>

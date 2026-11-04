@@ -87,6 +87,12 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
         _externalProgress = externalProgress;
     }
 
+    /// <summary>Shows the source-comment step under way and how far the whole operation is.</summary>
+    public void ReportSourceCommentProgress(SourceCommentProgress p)
+        => _vm?.UpdateProgress(new(ExportPhase.RecordingExport, 0, 0, p.Fraction, 0.99,
+            p.Restoring ? "Restoring the original source file" : "Adding the export comment to the source file",
+            Detail: string.IsNullOrEmpty(p.Step) ? null : p.Step));
+
     public Task FormatSaveTask { get; private set; } = Task.CompletedTask;
     public Task SidecarPreferenceSaveTask { get; private set; } = Task.CompletedTask;
 
@@ -192,7 +198,7 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
             SourceCommentFailed = false;
             if (AfterSuccessfulExportAsync is not null)
             {
-                _vm.UpdateProgress(new(ExportPhase.Finalizing, 0, 0, 1, 0.99, "Recording the successful export..."));
+                _vm.UpdateProgress(new(ExportPhase.RecordingExport, 0, 0, 0, 0.99, "Recording the successful export..."));
                 try { SourceCommentNote = await AfterSuccessfulExportAsync(_exportCts.Token); }
                 catch (Exception ex) { SourceCommentFailed = true; SourceCommentNote = "Source comment was not added: " + ex.Message; }
             }

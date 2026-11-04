@@ -47,7 +47,8 @@ public sealed class ExportDiskGuard : IAsyncDisposable
 
     private static long AvailableBytes(string path)
     {
-        if (!GetDiskFreeSpaceEx(Path.TrimEndingDirectorySeparator(path) + Path.DirectorySeparatorChar, out var available, out _, out _))
+        // A direct Win32 call: long folders need the extended-length form.
+        if (!GetDiskFreeSpaceEx(NativePath.ForNative(Path.TrimEndingDirectorySeparator(path) + Path.DirectorySeparatorChar), out var available, out _, out _))
             throw new ExportException($"Cannot check available disk space at {path}.", new Win32Exception(Marshal.GetLastWin32Error()));
         return (long)Math.Min(available, (ulong)long.MaxValue);
     }

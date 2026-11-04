@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using AdTrim.Commands;
+using AdTrim.Models;
 using AdTrim.ViewModels;
 using AdTrim.Services;
 using System.IO;
@@ -15,6 +16,7 @@ public partial class MainWindow
     {
         _preferences = await UserPreferences.LoadAsync();
         _savedPreferences = _preferences;
+        if (await UserPreferences.IsDamagedAsync()) ShowDamagedPreferencesBanner();
         RefreshSourceCommentMenu();
         vm.ShowWaveform = _preferences.ShowWaveform;
         vm.ShowThumbnails = _preferences.ShowThumbnails;
@@ -24,10 +26,16 @@ public partial class MainWindow
             Math.Max(1, double.IsFinite(_preferences.Width) ? _preferences.Width : 1280),
             Math.Max(1, double.IsFinite(_preferences.Height) ? _preferences.Height : 720));
         var area = MonitorBounds.WorkArea(this, desired);
+        // Older builds saved a work-area-sized normal window as fake maximize.
+        bool legacyMaximized = _preferences.IsMaximized is null
+            && Math.Abs(desired.Left - area.Left) <= 2 && Math.Abs(desired.Top - area.Top) <= 2
+            && Math.Abs(desired.Width - area.Width) <= 2 && Math.Abs(desired.Height - area.Height) <= 2;
+        if (legacyMaximized) _preferences = _preferences with { Width = 1280, Height = 720 };
         Width = Math.Clamp(double.IsFinite(_preferences.Width) ? _preferences.Width : 1280, MinWidth, Math.Max(MinWidth, area.Width));
         Height = Math.Clamp(double.IsFinite(_preferences.Height) ? _preferences.Height : 720, MinHeight, Math.Max(MinHeight, area.Height));
         Left = Math.Clamp(double.IsFinite(_preferences.Left) ? _preferences.Left : area.Left, area.Left, Math.Max(area.Left, area.Right - Width));
         Top = Math.Clamp(double.IsFinite(_preferences.Top) ? _preferences.Top : area.Top, area.Top, Math.Max(area.Top, area.Bottom - Height));
+        if (_preferences.IsMaximized == true || legacyMaximized) SystemCommands.MaximizeWindow(this);
     }
     private Task SavePreferencesAsync(MainViewModel vm) => SavePreferencesSnapshotAsync(vm, false);
 
@@ -40,8 +48,10 @@ public partial class MainWindow
             positions[source] = vm.PlayheadUs;
         }
         while (positions.Count > 20) positions.Remove(positions.Keys.First());
+        var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
         _preferences = _preferences with { ShowWaveform = vm.ShowWaveform, ShowThumbnails = vm.ShowThumbnails,
-            Left = Left, Top = Top, Width = Width, Height = Height, Positions = positions };
+            Left = bounds.Left, Top = bounds.Top, Width = bounds.Width, Height = bounds.Height,
+            IsMaximized = _lastNonMinimizedState == WindowState.Maximized, Positions = positions };
         try
         {
             var snapshot = _preferences;
@@ -49,7 +59,39 @@ public partial class MainWindow
             _savedPreferences = snapshot;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        { vm.StatusOverride = "Preferences could not be saved. Project edits are saved separately."; }
+        {
+            vm.StatusOverride = "Preferences could not be saved. Project edits are saved separately.";
+            if (ex is DamagedPreferencesException) ShowDamagedPreferencesBanner();
+        }
+    }
+
+    // Saves refuse to overwrite a damaged settings file; this offers the way out.
+    private void ShowDamagedPreferencesBanner()
+    {
+        if (DataContext is not MainViewModel vm) return;
+        vm.Banner = new BannerInfo(StatusKind.Warning, "Saved settings are damaged.",
+            "Settings changes cannot be saved until they are reset. Reset keeps a copy of the damaged file and saves the settings this window is using now"
+            + (_preferences.AddSourceExportComment ? "." : ", with source export comments off."),
+            new[] { new BannerAction("Reset settings", () => _ = ResetDamagedPreferencesAsync(), IsPrimary: true) });
+    }
+
+    private async Task ResetDamagedPreferencesAsync()
+    {
+        try
+        {
+            var snapshot = _preferences;
+            var kept = await UserPreferences.ResetDamagedAsync(snapshot);
+            _savedPreferences = snapshot;
+            RefreshSourceCommentMenu();
+            RefreshDefaultMarkerSourceMenu();
+            if (DataContext is MainViewModel vm)
+                vm.Banner = kept is null ? null : new BannerInfo(StatusKind.Success, "Settings were reset.",
+                    $"The damaged file was kept as {Path.GetFileName(kept)}.", Array.Empty<BannerAction>());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, "Settings could not be reset. " + ex.Message, "Settings", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void RefreshDefaultMarkerSourceMenu()
@@ -87,11 +129,7 @@ public partial class MainWindow
         vm.ClearSelection();
         vm.RefreshKeptTimeline();
         vm.IsCollapsed = collapsed;
-        CollapseToggle.IsChecked = collapsed;
-        PaneAGrid.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
-        Grid.SetColumn(PaneBGrid, collapsed ? 0 : 1);
-        Grid.SetColumnSpan(PaneBGrid, collapsed ? 2 : 1);
-        NoFrameOverlay.Visibility = Visibility.Collapsed;
+        SetRecordingPaneLayout(collapsed);
         if (collapsed)
         {
             _previewAfter.SetMuted(muted);
@@ -115,6 +153,15 @@ public partial class MainWindow
         }
         UpdateTimelineLayout(true);
         ApplyAspectFit();
+    }
+
+    private void SetRecordingPaneLayout(bool collapsed)
+    {
+        CollapseToggle.IsChecked = collapsed;
+        PaneAGrid.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+        Grid.SetColumn(PaneBGrid, collapsed ? 0 : 1);
+        Grid.SetColumnSpan(PaneBGrid, collapsed ? 2 : 1);
+        NoFrameOverlay.Visibility = Visibility.Collapsed;
     }
 
     private void OnConfirmAndNext(object sender, RoutedEventArgs e)

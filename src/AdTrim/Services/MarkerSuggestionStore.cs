@@ -60,6 +60,12 @@ public sealed class MarkerSuggestionStore
         Trim();
     }
 
+    public void PreserveAfterMetadataUpdate(string sourcePath, SourceFingerprint before, SourceFingerprint after)
+    {
+        var state = Load(Key(sourcePath, before), before.DurationUs);
+        if (state is not null) Save(Key(sourcePath, after), state);
+    }
+
     private void Trim()
     {
         var entries = new DirectoryInfo(_directory).GetFiles("*.json").OrderBy(f => f.LastAccessTimeUtc).ToArray();

@@ -77,14 +77,22 @@ public sealed class AudioLevelService(FfmpegRunner? runner, string? cacheRoot = 
         return runs;
     }
 
-    public static string DefaultCacheRoot => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AdTrim", "audio-levels");
+    public static string DefaultCacheRoot => Path.Combine(AppDataDirectory.Path, "audio-levels");
 
     public static string CachePathFor(string sourcePath, int audioStreamIndex, long durationUs,
         string cacheRoot, int cacheVersion = CacheVersion)
     {
         var hash = FrameCacheService.ComputeSourceHash(sourcePath);
         return Path.Combine(cacheRoot, $"{hash}_a{audioStreamIndex}_d{durationUs}_v{cacheVersion}{CacheExtension}");
+    }
+
+    public void PreserveAfterMetadataUpdate(string sourcePath, int audioStreamIndex, SourceFingerprint before)
+    {
+        if (cacheRoot is null) return;
+        var oldPath = Path.Combine(cacheRoot,
+            $"{FrameCacheService.ComputeSourceHash(sourcePath, before)}_a{audioStreamIndex}_d{before.DurationUs}_v{CacheVersion}{CacheExtension}");
+        var newPath = CachePathFor(sourcePath, audioStreamIndex, before.DurationUs, cacheRoot);
+        if (oldPath != newPath && File.Exists(oldPath)) File.Copy(oldPath, newPath, overwrite: true);
     }
 
     /// <summary>Starts a pass that several consumers can join; see <see cref="AudioLevelPass"/>.</summary>

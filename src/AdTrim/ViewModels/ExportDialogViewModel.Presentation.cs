@@ -28,11 +28,13 @@ public sealed partial class ExportDialogViewModel
         ExportDialogMode.Failed => "Export could not finish",
         _ when _progressPhase == ExportPhase.Finalizing => "Finalizing video…",
         _ when _progressPhase == ExportPhase.Validating => "Checking your video…",
+        _ when _progressPhase == ExportPhase.RecordingExport => string.IsNullOrEmpty(RemainingFormatted) ? "Finishing up…" : RemainingFormatted,
         _ when _progressPhase == ExportPhase.Concatenating && string.IsNullOrEmpty(RemainingFormatted) => ProgressLine,
         _ => string.IsNullOrEmpty(RemainingFormatted) ? "Estimating time remaining..." : RemainingFormatted,
     };
     public ExportPartItem? CurrentPart => IsExporting ? Parts.FirstOrDefault(p => p.IsInProgress) : null;
-    public string CurrentPartHeading => CurrentPart is { Index: > 0 } part ? $"Encoding {part.Label}" : ProgressLine;
+    public string CurrentPartHeading => _progressPhase == ExportPhase.RecordingExport ? _recordingHeading
+        : CurrentPart is { Index: > 0 } part ? $"Encoding {part.Label}" : ProgressLine;
     public string PartsSummary => $"{_project.Segments.Count(s => !s.IsExcluded)} parts kept · {_project.Segments.Count(s => s.IsExcluded)} removed";
 
     private void RefreshPresentation()

@@ -30,11 +30,23 @@ internal static partial class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        int result = 1;
+        try { result = RunMode(args); }
+        catch (Exception ex) { Console.Error.WriteLine(ex); }
+        return CleanUpOwnedFixtures(result);
+    }
+
+    private static int RunMode(string[] args)
+    {
+        if (args.Length == 2 && args[0] == "--window-state") return RunWindowStateSmoke(args[1]);
+        if (args.Length == 1 && args[0] == "--lifecycle") return RunLifecycleSmoke();
+        if (args.Length == 1 && args[0] == "--open-recovery") return RunOpenRecoverySmoke();
         if (args.Length == 2 && args[0] == "--check-sidecar-preference")
             return UserPreferences.LoadAsync().GetAwaiter().GetResult().DeleteSidecarAfterExport == bool.Parse(args[1]) ? 0 : 1;
         if (args.Length == 3 && args[0] == "--website") return CaptureWebsite(args[1], args[2]);
         if (args.Length == 1 && args[0] == "--ts") return RunTransportStreamSmoke();
         if (args.Length == 1 && args[0] == "--source-comments") return RunSourceCommentSmoke();
+        if (args.Length == 1 && args[0] == "--long-path") return RunLongPathSmoke();
         if (args.Length > 1) throw new ArgumentException("Pass no arguments to generate a fixture, or one disposable fixture path.");
         var source = args.Length == 0 ? PrepareFixture().GetAwaiter().GetResult() : Path.GetFullPath(args[0]);
         var directory = Path.Combine(Path.GetDirectoryName(source)!, "smoke-state");
@@ -138,6 +150,7 @@ internal static partial class Program
                     .OfType<System.Windows.Shapes.Rectangle>().All(line => line.Height >= 0),
                     "Playback updates before layout cannot produce a negative height");
                 earlyTimeline.DataContext = null;
+                await window.Ready.WaitAsync(TimeSpan.FromSeconds(20));
                 var vm = (MainViewModel)window.DataContext;
                 for (int i = 0; i < 250 && (!vm.IsFileLoaded || vm.IsBusy); i++) await Task.Delay(20);
                 Require(window.Ready.IsCompletedSuccessfully && vm.IsFileLoaded && !vm.IsBusy, "Launch-file startup completes");
@@ -519,6 +532,7 @@ internal static partial class Program
                 for (int i = 0; i < 100 && vm.SourcePath is not null; i++) await Task.Delay(20);
                 Require(vm.SourcePath is null, "Close flushes pending changes");
                 await window.OpenFileAsync(source);
+                vm = (MainViewModel)window.DataContext;
                 Require(!vm.IsCollapsed && ((System.Windows.Controls.Primitives.ToggleButton)window.FindName("CollapseToggle")).IsChecked == false,
                     "Closing collapsed playback restores Edit view on reopen");
                 Require(!vm.Markers[1].Confirmed && !vm.Markers[2].Confirmed, "Reopen restores final saved decisions");
@@ -641,6 +655,21 @@ internal static partial class Program
                     && progressVm.TimeHeadline == "Finalizing video…", "MP4 finalization never shows a stale countdown");
                 progressDialog.UpdateLayout();
                 Capture(progressDialog, Path.Combine(directory, "finalizing-mp4.png"));
+                progressDialog.ReportSourceCommentProgress(new(false, "", 0));
+                Require(progressVm.CurrentPartHeading == "Adding the export comment to the source file" && progressVm.ProgressPercentText == "99%"
+                    && progressVm.TimeHeadline == "Finishing up…" && progressVm.Parts.All(p => p.IsDone),
+                    "The source-comment step names itself instead of showing a frozen finalization");
+                await Task.Delay(1100);
+                progressDialog.ReportSourceCommentProgress(new(false, SourceCommentService.CheckingStep, 0.25));
+                Require(progressVm.ProgressLine == "Checking the copy · 25%" && progressVm.ProgressPercentText == "99%"
+                    && progressVm.RemainingFormatted.EndsWith("remaining") && progressVm.TimeHeadline == progressVm.RemainingFormatted,
+                    $"Source-comment progress names its step and moves with its own estimate ({progressVm.ProgressLine}; {progressVm.TimeHeadline})");
+                progressDialog.UpdateLayout();
+                Capture(progressDialog, Path.Combine(directory, "source-comment-progress.png"));
+                progressDialog.ReportSourceCommentProgress(new(true, SourceCommentService.RestoringStep, 0.1));
+                Require(progressVm.CurrentPartHeading == "Restoring the original source file" && progressVm.ProgressLine == "Restoring the original file · 10%"
+                    && progressVm.TimeHeadline == "Finishing up…",
+                    $"A rollback says so and starts its own estimate ({progressVm.CurrentPartHeading}; {progressVm.TimeHeadline})");
                 progressVm.BeginExport(plan);
                 Require(progressVm.ExportMethodLabel == "Choosing automatically...", "Automatic export does not claim a device before selection");
                 foreach (var encoder in new[] { "AMD Radeon RX 9060 XT (hardware H.264)", "Software (H.264)" })
@@ -1079,7 +1108,10 @@ internal static partial class Program
             {
                 Invoke(window, "SeekTo", vm, target, true);
                 await Task.Delay(500);
-                for (int i = 0; i < 200 && (before.IsSeeking || after.IsSeeking || before.IsLoading || after.IsLoading); i++) await Task.Delay(20);
+                // Wait for the background predecessor lookup too; it runs FFmpeg and is slower under load.
+                for (int i = 0; i < 500 && (before.IsSeeking || after.IsSeeking || before.IsLoading || after.IsLoading
+                    || typeof(MainWindow).GetField("_frameRecovery", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window) is not null); i++)
+                    await Task.Delay(20);
                 var index = Array.FindIndex(frames, f => Math.Abs(f - after.PositionUs) <= 2);
                 Require(index > 0 && !before.IsSeeking && !after.IsSeeking && Math.Abs(frames[index - 1] - before.PositionUs) <= 2,
                     $"Actual predecessor at {target}: {before.PositionUs} -> {after.PositionUs} ({Path.GetFileName(path)})");
@@ -1170,10 +1202,59 @@ internal static partial class Program
         finally { vm.FrameRate = rate; }
     }
 
+    // Fixture folders this process created; it removes them when it finishes.
+    private static readonly List<string> OwnedFixtures = new();
+    // Ordinary checks add up to about 110 characters below the root (TS names, staging files);
+    // a longer root would quietly turn them into long-path tests. The long-path mode builds its own depth.
+    private const int MaxSmokeRootLength = 100;
+
+    private static string SmokeRoot()
+    {
+        // Normalized so a root given with forward slashes compares equal to the paths the app produces.
+        var root = Path.GetFullPath(Environment.GetEnvironmentVariable("ADTRIM_SMOKE_ROOT") ?? Path.GetTempPath());
+        if (root.Length > MaxSmokeRootLength)
+            throw new InvalidOperationException($"ADTRIM_SMOKE_ROOT is {root.Length} characters; use one of at most {MaxSmokeRootLength}.");
+        return root;
+    }
+
+    private static int CleanUpOwnedFixtures(int result)
+    {
+        bool keep = result != 0 && Environment.GetEnvironmentVariable("ADTRIM_SMOKE_KEEP_FAILED") == "1";
+        foreach (var directory in OwnedFixtures)
+        {
+            if (keep) { Console.WriteLine($"Retained failed fixture: {directory}"); continue; }
+            var info = new DirectoryInfo(directory);
+            if (!info.Exists) continue;
+            if (info.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                Console.WriteLine($"CLEANUP FAILED (link): {directory}");
+                if (result == 0) result = 1;
+                continue;
+            }
+            // Native players can release their files a moment after the windows close.
+            for (int attempt = 1; ; attempt++)
+            {
+                try { info.Delete(recursive: true); Console.WriteLine($"Removed fixture: {directory}"); break; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    if (attempt == 10)
+                    {
+                        Console.WriteLine($"CLEANUP FAILED: {directory}: {ex.Message}");
+                        if (result == 0) result = 1;
+                        break;
+                    }
+                    Thread.Sleep(300);
+                }
+            }
+        }
+        return result;
+    }
+
     private static async Task<string> PrepareFixture()
     {
-        var directory = Path.Combine(AppContext.BaseDirectory, "smoke-" + Guid.NewGuid().ToString("N"));
+        var directory = Path.Combine(SmokeRoot(), "s-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(directory);
+        OwnedFixtures.Add(directory);
         var path = Path.Combine(directory, "preview.mp4");
         var subtitles = Path.Combine(directory, "preview.srt");
         await File.WriteAllTextAsync(subtitles, "1\n00:00:00,000 --> 00:00:12,000\nThis subtitle must stay hidden.\n");

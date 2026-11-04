@@ -20,33 +20,73 @@ public sealed record UserPreferences
     public string ExportAcceleration { get; init; } = "automatic";
     public bool AddSourceExportComment { get; init; } = true;
     public NewFileMarkerSource NewFileMarkerSource { get; init; } = NewFileMarkerSource.Imported;
+    public bool? IsMaximized { get; init; }
     public double Left { get; init; }
     public double Top { get; init; }
     public double Width { get; init; } = 1280;
     public double Height { get; init; } = 720;
     public Dictionary<string, long> Positions { get; init; } = new(StringComparer.OrdinalIgnoreCase);
-    public static string DataDirectory => Environment.GetEnvironmentVariable("ADTRIM_DATA_DIR")
-        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AdTrim");
+    public static string DataDirectory => AppDataDirectory.Path;
 
-    public static async Task<UserPreferences> LoadAsync()
+    public static async Task<UserPreferences> LoadAsync(UserPreferences? fallback = null, string? dataDirectory = null)
     {
-        var path = Path.Combine(DataDirectory, "preferences.json");
-        if (!File.Exists(path)) return new();
+        try { return await ReadOrDefaultAsync(fallback, dataDirectory); }
+        catch (IOException) { return fallback ?? new() { AddSourceExportComment = false }; }
+        catch (UnauthorizedAccessException) { return fallback ?? new() { AddSourceExportComment = false }; }
+    }
+
+    public static async Task<UserPreferences> ReadAsync(string? dataDirectory = null)
+    {
         try
         {
-            var loaded = JsonSerializer.Deserialize<UserPreferences>(await File.ReadAllTextAsync(path)) ?? new();
+            var path = Path.Combine(dataDirectory ?? DataDirectory, "preferences.json");
+            var loaded = JsonSerializer.Deserialize<UserPreferences>(await File.ReadAllTextAsync(path))
+                ?? throw new DamagedPreferencesException();
             return loaded with { ExportFormat = ExportFormats.Normalize(loaded.ExportFormat) };
         }
-        catch (JsonException) { return new(); }
-        catch (IOException) { return new(); }
-        catch (UnauthorizedAccessException) { return new(); }
+        catch (JsonException ex) { throw new DamagedPreferencesException(ex); }
+    }
+
+    /// <summary>True when the settings file exists but its contents cannot be parsed.</summary>
+    public static async Task<bool> IsDamagedAsync(string? dataDirectory = null)
+    {
+        try { await ReadAsync(dataDirectory); return false; }
+        catch (DamagedPreferencesException) { return true; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+    }
+
+    /// <summary>
+    /// Stages <paramref name="known"/> and replaces the damaged settings file atomically, keeping its bytes as a backup.
+    /// Returns the kept copy's path, or null when the file is no longer damaged (nothing is changed then).
+    /// </summary>
+    public static async Task<string?> ResetDamagedAsync(UserPreferences known, string? dataDirectory = null)
+    {
+        await SaveGate.WaitAsync();
+        try
+        {
+            if (!await IsDamagedAsync(dataDirectory)) return null;
+            string directory = dataDirectory ?? DataDirectory, path = Path.Combine(directory, "preferences.json");
+            string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+            string kept = Path.Combine(directory, $"preferences.damaged-{stamp}.json");
+            if (File.Exists(kept)) kept = Path.Combine(directory, $"preferences.damaged-{stamp}-{Guid.NewGuid():N}.json");
+            await (known with { ExportFormat = ExportFormats.Normalize(known.ExportFormat) }).WriteAsync(directory, kept);
+            return kept;
+        }
+        finally { SaveGate.Release(); }
+    }
+
+    private static async Task<UserPreferences> ReadOrDefaultAsync(UserPreferences? fallback = null, string? dataDirectory = null)
+    {
+        try { return await ReadAsync(dataDirectory); }
+        catch (FileNotFoundException) { return fallback ?? new(); }
+        catch (DirectoryNotFoundException) { return fallback ?? new(); }
     }
     public async Task SaveChangesAsync(UserPreferences previous, string? source, bool saveMarkerSource = false)
     {
         await SaveGate.WaitAsync();
         try
         {
-            var latest = await LoadAsync();
+            var latest = await ReadOrDefaultAsync(previous);
             var positions = new Dictionary<string, long>(latest.Positions ?? new(), StringComparer.OrdinalIgnoreCase);
             if (source is not null && Positions.TryGetValue(source, out var position))
             {
@@ -74,7 +114,7 @@ public sealed record UserPreferences
         await SaveGate.WaitAsync();
         try
         {
-            var latest = await LoadAsync();
+            var latest = await ReadOrDefaultAsync();
             await (latest with { ExportFormat = ExportFormats.Normalize(format) }).WriteAsync();
         }
         finally { SaveGate.Release(); }
@@ -85,7 +125,7 @@ public sealed record UserPreferences
         await SaveGate.WaitAsync();
         try
         {
-            var latest = await LoadAsync();
+            var latest = await ReadOrDefaultAsync();
             await (latest with { DeleteSidecarAfterExport = delete }).WriteAsync();
         }
         finally { SaveGate.Release(); }
@@ -98,17 +138,23 @@ public sealed record UserPreferences
         finally { SaveGate.Release(); }
     }
 
-    private async Task WriteAsync()
+    private async Task WriteAsync(string? dataDirectory = null, string? backupPath = null)
     {
-        Directory.CreateDirectory(DataDirectory);
-        var path = Path.Combine(DataDirectory, "preferences.json");
+        var directory = dataDirectory ?? DataDirectory;
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "preferences.json");
         var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             await File.WriteAllTextAsync(temp, JsonSerializer.Serialize(this));
-            if (File.Exists(path)) File.Replace(temp, path, null);
+            if (backupPath is not null) File.Replace(temp, path, backupPath);
+            else if (File.Exists(path)) File.Replace(temp, path, null);
             else File.Move(temp, path);
         }
         finally { if (File.Exists(temp)) File.Delete(temp); }
     }
 }
+
+/// <summary>The settings file exists but its contents cannot be parsed. Saves refuse to overwrite it.</summary>
+public sealed class DamagedPreferencesException(Exception? inner = null)
+    : IOException("Saved preferences are unreadable.", inner);

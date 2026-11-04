@@ -152,6 +152,226 @@ public sealed class UpdateTests : IDisposable
         Assert.False(second.AnnouncementDue);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DamagedCacheCannotDisableSignedNetworkChecks(bool loadAtStartup)
+    {
+        Directory.CreateDirectory(_directory);
+        var path = Path.Combine(_directory, "updates-state.json");
+        foreach (var contents in new[] { "{", new string('x', 160_001), "{\"History\":null}" })
+        {
+            await File.WriteAllTextAsync(path, contents);
+            var bytes = Bytes(Feed);
+            var handler = new ResponseHandler(bytes, Sign(bytes));
+            var service = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler), Installed);
+            if (loadAtStartup) await service.LoadCachedAsync();
+            Assert.Null(service.Notice);
+            Assert.Equal(0, handler.Requests);
+            await service.CheckAsync();
+            Assert.Equal(2, handler.Requests);
+            Assert.Null(service.Error);
+            Assert.Equal(Feed.LatestVersion, service.Notice!.Version);
+            var restarted = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler), Installed);
+            await restarted.LoadCachedAsync();
+            Assert.Equal(Feed.LatestVersion, restarted.Notice!.Version);
+        }
+    }
+
+    [Fact]
+    public async Task DamagedCacheDoesNotMakeUnsignedNetworkDataTrustworthy()
+    {
+        Directory.CreateDirectory(_directory);
+        var path = Path.Combine(_directory, "updates-state.json");
+        await File.WriteAllTextAsync(path, "{");
+        var handler = new ResponseHandler(Bytes(Feed with { Summary = "Changed without signing" }), Sign(Bytes(Feed)));
+        var service = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler), Installed);
+        await service.CheckAsync();
+        Assert.Equal(2, handler.Requests);
+        Assert.NotNull(service.Error);
+        Assert.Null(service.Notice);
+        Assert.Equal("{", await File.ReadAllTextAsync(path));
+    }
+
+    [Fact]
+    public async Task DamagedReminderHistoryDoesNotDiscardTheKnownRevision()
+    {
+        var (accepted, _) = ServiceFor(Feed with { Revision = 3 });
+        await accepted.CheckAsync();
+        await RewriteCacheAsync(state => state.History = null!);
+        var bytes = Bytes(Feed);
+        var handler = new ResponseHandler(bytes, Sign(bytes));
+        var service = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler), Installed);
+        await service.CheckAsync();
+        Assert.Equal(2, handler.Requests);
+        Assert.NotNull(service.Error);
+        Assert.Equal(Feed.LatestVersion, service.Notice!.Version);
+    }
+
+    private (UpdateService Service, ResponseHandler Handler) ServiceFor(UpdateFeed feed)
+    {
+        var bytes = Bytes(feed);
+        var handler = new ResponseHandler(bytes, Sign(bytes));
+        return (new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(handler), Installed), handler);
+    }
+
+    private async Task RewriteCacheAsync(Action<UpdateService.UpdateState> change)
+    {
+        var path = Path.Combine(_directory, "updates-state.json");
+        var state = JsonSerializer.Deserialize<UpdateService.UpdateState>(await File.ReadAllTextAsync(path))!;
+        change(state);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(state));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AConflictingCacheDigestCannotOverrideTheIndependentRevisionRecord(bool reuseRevision)
+    {
+        var original = Feed with { Revision = 5 };
+        var (accepted, _) = ServiceFor(original);
+        await accepted.CheckAsync();
+        string revisionPath = Path.Combine(_directory, "updates-revision.json");
+        string revision = await File.ReadAllTextAsync(revisionPath);
+        var requested = reuseRevision ? original with { LatestVersion = "1.3.0" } : original;
+        await RewriteCacheAsync(state => state.Digest = reuseRevision
+            ? Convert.ToHexString(SHA256.HashData(Bytes(requested))) : new string('0', 64));
+
+        var (restarted, handler) = ServiceFor(requested);
+        await restarted.LoadCachedAsync();
+        Assert.Equal(0, handler.Requests);
+        Assert.Equal(original.LatestVersion, restarted.Notice!.Version);
+        await restarted.CheckAsync();
+
+        Assert.Equal(reuseRevision, restarted.Error is not null);
+        Assert.Equal(original.LatestVersion, restarted.Notice!.Version);
+        Assert.Equal(revision, await File.ReadAllTextAsync(revisionPath));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RevisionMigrationUsesTheSignedFeedInsteadOfCorruptedCacheFields(bool removeRevisionRecord)
+    {
+        var original = Feed with { Revision = 5 };
+        var (accepted, _) = ServiceFor(original);
+        await accepted.CheckAsync();
+        string revisionPath = Path.Combine(_directory, "updates-revision.json");
+        if (removeRevisionRecord) File.Delete(revisionPath);
+        await RewriteCacheAsync(state => { state.Revision = 999; state.Digest = new string('0', 64); });
+
+        var (restarted, _) = ServiceFor(original with { Revision = 6 });
+        await restarted.LoadCachedAsync();
+        using (var floor = JsonDocument.Parse(await File.ReadAllTextAsync(revisionPath)))
+        {
+            Assert.Equal(5, floor.RootElement.GetProperty("Revision").GetInt64());
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(Bytes(original))), floor.RootElement.GetProperty("Digest").GetString());
+        }
+        await restarted.CheckAsync();
+        Assert.Null(restarted.Error);
+        Assert.Equal(original.LatestVersion, restarted.Notice!.Version);
+    }
+
+    [Fact]
+    public async Task AnInvalidCachedSignatureCannotEstablishARevisionRecord()
+    {
+        var original = Feed with { Revision = 5 };
+        var (accepted, _) = ServiceFor(original);
+        await accepted.CheckAsync();
+        string revisionPath = Path.Combine(_directory, "updates-revision.json");
+        File.Delete(revisionPath);
+        await RewriteCacheAsync(state => { state.Revision = 999; state.Signature![0] ^= 0xFF; });
+
+        var (restarted, _) = ServiceFor(original with { Revision = 6 });
+        await restarted.LoadCachedAsync();
+        Assert.Null(restarted.Notice);
+        Assert.False(File.Exists(revisionPath));
+        await restarted.CheckAsync();
+        Assert.Null(restarted.Error);
+        Assert.NotNull(restarted.Notice);
+    }
+
+    [Fact]
+    public async Task AConflictingSignedCacheCannotReplaceAnAcceptedAnnouncement()
+    {
+        var original = Feed with { Revision = 5 };
+        var (accepted, _) = ServiceFor(original);
+        await accepted.CheckAsync();
+        var reused = Bytes(original with { LatestVersion = "1.3.0" });
+        await RewriteCacheAsync(state =>
+        {
+            state.Feed = reused;
+            state.Signature = Sign(reused);
+            state.Digest = Convert.ToHexString(SHA256.HashData(reused));
+        });
+
+        var (restarted, _) = ServiceFor(original);
+        await restarted.LoadCachedAsync();
+        Assert.Null(restarted.Notice);
+        await restarted.CheckAsync();
+        Assert.Null(restarted.Error);
+        Assert.Equal(original.LatestVersion, restarted.Notice!.Version);
+    }
+
+    [Theory]
+    [InlineData("{")]
+    [InlineData("")]
+    [InlineData(null)]
+    public async Task ACorruptOrMissingCacheCannotReadmitAnOlderSignedAnnouncement(string? cache)
+    {
+        // Rollback protection must not depend on the disposable cache surviving.
+        var (accepted, _) = ServiceFor(Feed with { Revision = 5 });
+        await accepted.CheckAsync();
+        Assert.Null(accepted.Error);
+        var state = Path.Combine(_directory, "updates-state.json");
+        if (cache is null) File.Delete(state); else await File.WriteAllTextAsync(state, cache);
+
+        var (older, _) = ServiceFor(Feed with { Revision = 4, LatestVersion = "1.1.5" });
+        await older.CheckAsync();
+        Assert.NotNull(older.Error);
+        Assert.Null(older.Notice);
+
+        var (reused, _) = ServiceFor(Feed with { Revision = 5, LatestVersion = "1.3.0" });
+        await reused.CheckAsync();
+        Assert.NotNull(reused.Error);
+
+        var (newer, _) = ServiceFor(Feed with { Revision = 6, LatestVersion = "1.3.0" });
+        await newer.CheckAsync();
+        Assert.Null(newer.Error);
+        Assert.Equal("1.3.0", newer.Notice!.Version);
+    }
+
+    [Fact]
+    public async Task AnExistingInstallationKeepsItsCachedRevisionWhenTheRevisionFileIsAdded()
+    {
+        var (accepted, _) = ServiceFor(Feed with { Revision = 5 });
+        await accepted.CheckAsync();
+        // An installation from before the revision file existed has only the cache.
+        File.Delete(Path.Combine(_directory, "updates-revision.json"));
+        var (restarted, _) = ServiceFor(Feed with { Revision = 5 });
+        await restarted.LoadCachedAsync();
+        Assert.True(File.Exists(Path.Combine(_directory, "updates-revision.json")));
+        await File.WriteAllTextAsync(Path.Combine(_directory, "updates-state.json"), "{");
+
+        var (older, _) = ServiceFor(Feed with { Revision = 4 });
+        await older.CheckAsync();
+        Assert.NotNull(older.Error);
+    }
+
+    [Fact]
+    public async Task ACorruptRevisionFileFallsBackToTheCachedRevisionAndIsRewritten()
+    {
+        var (accepted, _) = ServiceFor(Feed with { Revision = 5 });
+        await accepted.CheckAsync();
+        var revision = Path.Combine(_directory, "updates-revision.json");
+        await File.WriteAllTextAsync(revision, "{");
+
+        var (older, _) = ServiceFor(Feed with { Revision = 4 });
+        await older.CheckAsync();
+        Assert.NotNull(older.Error);
+        Assert.Contains("\"Revision\":5", await File.ReadAllTextAsync(revision));
+    }
+
     [Fact]
     public async Task LastVerifiedAnnouncementShowsAtStartupWithoutWaitingForTheNetwork()
     {

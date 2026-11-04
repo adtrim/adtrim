@@ -363,7 +363,7 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
             // mpv's "loadfile" command - args are <path> [<flags>]. "replace"
             // (the default) loads + plays-or-pauses according to the `pause`
             // property, which we set to yes during Initialize.
-            var rc = Command(_ctx, "loadfile", path, "replace");
+            var rc = Command(_ctx, "loadfile", path.StartsWith("edl://", StringComparison.Ordinal) ? path : NativePath.ForNative(path), "replace");
             if (rc < 0) throw new InvalidOperationException($"mpv loadfile failed: {rc}");
         }
     }

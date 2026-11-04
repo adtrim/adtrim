@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -235,24 +236,57 @@ public static class Mp4Comments
         return output;
     }
 
-    public static async Task StageAsync(string source, string staged, string version, DateOnly date, CancellationToken ct)
+    /// <summary>Hashes of a staged update: the whole source and the whole staged file, as hex SHA-256.</summary>
+    public sealed record StageResult(string SourceHash, string StagedHash);
+
+    /// <summary>
+    /// False when the source already carries exactly the comment this version and date would write,
+    /// so staging would reproduce the source byte for byte. Reads only the MP4 index.
+    /// </summary>
+    public static bool NeedsUpdate(string source, string version, DateOnly date)
+    {
+        using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var index = Load(input);
+        return !UpdatedMovie(index, Merge(Comments(index.Bytes), version, date)).AsSpan().SequenceEqual(index.Bytes);
+    }
+
+    /// <summary>
+    /// Writes <paramref name="staged"/> as the source with only its comment changed, then reads the staged
+    /// file back once to verify its index, its comment and every untouched byte.
+    /// </summary>
+    /// <param name="advance">Optional: receives the bytes read or written as the copy and check proceed.</param>
+    /// <param name="checking">Optional: called when the copy is written and the read-back check starts.</param>
+    public static async Task<StageResult> StageAsync(string source, string staged, string version, DateOnly date, CancellationToken ct,
+        Action<long>? advance = null, Action? checking = null)
     {
         await using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, true);
         var index = Load(input);
         var comment = Merge(Comments(index.Bytes), version, date);
         var movie = UpdatedMovie(index, comment);
+        // The source stays open read-only (writers are refused) while it is copied, so hashing the
+        // copied bytes in file order gives the source's hash without a separate pass.
+        using var sourceHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using var sourceMedia = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         await using (var output = new FileStream(staged, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 1024, true))
         {
             foreach (var box in index.Boxes)
             {
                 ct.ThrowIfCancellationRequested();
-                if (box == index.Movie) { await output.WriteAsync(movie, ct); continue; }
+                if (box == index.Movie)
+                {
+                    sourceHash.AppendData(index.Bytes);
+                    await output.WriteAsync(movie, ct);
+                    advance?.Invoke(2L * movie.Length);
+                    continue;
+                }
                 input.Position = box.Offset;
-                await CopyExactlyAsync(input, output, box.Size, ct);
+                await CopyExactlyAsync(input, output, box.Size, ct, advance, sourceHash, sourceMedia);
             }
             output.Flush(true);
         }
-        // Validate the staged index and compare every untouched byte against the locked source.
+        checking?.Invoke();
+        // Read the staged file back from disk once: its index and comment must be exactly what was written,
+        // and every byte outside the index must hash the same as the source's untouched bytes.
         await using var check = new FileStream(staged, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, true);
         var stagedIndex = Load(check);
         if (!stagedIndex.Bytes.SequenceEqual(movie) || Comments(stagedIndex.Bytes) is not { Count: 1 } comments || comments[0] != comment)
@@ -260,31 +294,46 @@ public static class Mp4Comments
         var before = index.Boxes.Where(b => b != index.Movie).ToArray();
         var after = stagedIndex.Boxes.Where(b => b != stagedIndex.Movie).ToArray();
         if (before.Length != after.Length) throw Invalid();
-        byte[] a = new byte[1024 * 1024], bbuf = new byte[a.Length];
         for (int i = 0; i < before.Length; i++)
-        {
             if (before[i].Type != after[i].Type || before[i].Size != after[i].Size) throw Invalid();
-            input.Position = before[i].Offset;
-            check.Position = after[i].Offset;
-            for (long left = before[i].Size; left > 0;)
+        using var stagedHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using var stagedMedia = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        long movieStart = stagedIndex.Movie.Offset, movieEnd = movieStart + stagedIndex.Movie.Size;
+        var buffer = new byte[1024 * 1024];
+        check.Position = 0;
+        for (long at = 0; at < check.Length;)
+        {
+            int n = (int)Math.Min(check.Length - at, buffer.Length);
+            await check.ReadExactlyAsync(buffer.AsMemory(0, n), ct);
+            stagedHash.AppendData(buffer, 0, n);
+            // The parts of this chunk before and after the index box are untouched media.
+            long end = at + n;
+            if (at < movieStart) stagedMedia.AppendData(buffer, 0, (int)(Math.Min(end, movieStart) - at));
+            if (end > movieEnd)
             {
-                int n = (int)Math.Min(left, a.Length);
-                await input.ReadExactlyAsync(a.AsMemory(0, n), ct);
-                await check.ReadExactlyAsync(bbuf.AsMemory(0, n), ct);
-                if (!a.AsSpan(0, n).SequenceEqual(bbuf.AsSpan(0, n))) throw new IOException("Source media preservation check failed.");
-                left -= n;
+                int from = (int)(Math.Max(at, movieEnd) - at);
+                stagedMedia.AppendData(buffer, from, n - from);
             }
+            advance?.Invoke(n);
+            at = end;
         }
+        if (!stagedMedia.GetHashAndReset().AsSpan().SequenceEqual(sourceMedia.GetHashAndReset()))
+            throw new IOException("Source media preservation check failed.");
+        return new(Convert.ToHexString(sourceHash.GetHashAndReset()), Convert.ToHexString(stagedHash.GetHashAndReset()));
     }
 
-    private static async Task CopyExactlyAsync(Stream input, Stream output, long count, CancellationToken ct)
+    private static async Task CopyExactlyAsync(Stream input, Stream output, long count, CancellationToken ct, Action<long>? advance,
+        IncrementalHash sourceHash, IncrementalHash sourceMedia)
     {
         byte[] buffer = new byte[1024 * 1024];
         while (count > 0)
         {
             int n = (int)Math.Min(count, buffer.Length);
             await input.ReadExactlyAsync(buffer.AsMemory(0, n), ct);
+            sourceHash.AppendData(buffer, 0, n);
+            sourceMedia.AppendData(buffer, 0, n);
             await output.WriteAsync(buffer.AsMemory(0, n), ct);
+            advance?.Invoke(2L * n);
             count -= n;
         }
     }

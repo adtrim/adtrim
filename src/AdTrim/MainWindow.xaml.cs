@@ -65,7 +65,7 @@ public partial class MainWindow : Window
         .Any(p => p is not null && ExportSafety.SameFile(p, path));
     public void BringForward()
     {
-        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        if (WindowState == WindowState.Minimized) WindowState = _lastNonMinimizedState;
         Activate();
     }
     public MainWindow() : this(null) { }
@@ -209,6 +209,7 @@ public partial class MainWindow : Window
 
     private void OnWindowSizeChanged(object sender, SizeChangedEventArgs e)
     {
+        UpdateWindowFrame();
         // Backstop in case the ScrollViewer's own SizeChanged misses a
         // window-driven resize. Same deferred-Render trick so ViewportWidth
         // has updated before UpdateTimelineLayout reads it.
@@ -413,7 +414,8 @@ public partial class MainWindow : Window
         if (vm.SourcePath is not { } path || _ffmpeg is null) return;
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         _frameRecovery = cancellation;
-        bool StillCurrent() => !_allowClose && vm.SourcePath == path && !vm.IsCollapsed
+        bool StillCurrent() => !_allowClose && !cancellation.IsCancellationRequested && ReferenceEquals(DataContext, vm)
+            && vm.SourcePath == path && !vm.IsCollapsed
             && !_previewAfter.IsPlaying && !_previewAfter.IsSeeking && _previewAfter.PositionUs == target;
         try
         {
@@ -658,6 +660,7 @@ public partial class MainWindow : Window
         if (!File.Exists(path)) return;
         if (DataContext is not MainViewModel vm) return;
         if (BlockProjectSwitchForExport(vm) || _switching || vm.IsBusy) return;
+        ResetShuttle();
         _switching = true;
         bool flushed;
         try { flushed = await FlushBeforeLeavingAsync(vm); }
@@ -682,48 +685,69 @@ public partial class MainWindow : Window
             }
         }
 
-        if (vm.IsCollapsed) SetCollapsed(vm, false);
-        var latestPreferences = await UserPreferences.LoadAsync();
+        var latestPreferences = await UserPreferences.LoadAsync(_preferences);
         _preferences = _preferences with { NewFileMarkerSource = latestPreferences.NewFileMarkerSource };
         _savedPreferences = _savedPreferences with { NewFileMarkerSource = latestPreferences.NewFileMarkerSource };
         RefreshDefaultMarkerSourceMenu();
+        var previousVm = vm;
+        var previousAudioLoudness = vm.AudioLoudness;
+        var previousThumbnailTiles = vm.ThumbnailTiles;
+        var previousMedia = _media;
+        var previousFingerprint = _sourceFingerprint;
+        var previousImportedMarkers = _importedMarkerSet;
+        var previousImportedAvailable = _importedMarkersAvailable;
+        var previousImportedTooltip = UseOriginalImportedMarkersMenuItem.ToolTip;
+        var previousStatus = (vm.StatusKind, vm.StatusOverride, vm.ProgressPercent);
+        var previousPath = vm.SourcePath;
+        var previousPosition = vm.PlayheadUs;
+        var previousScrollOffset = TimelineScroll.HorizontalOffset;
+        var previousPlaying = _previewAfter.IsPlaying;
+        var previousMuted = vm.IsCollapsed ? _previewAfter.IsMuted : _previewBefore.IsMuted;
+        var previousPlayUntil = _playUntilUs;
         _switching = true;
         _hydrating = true;
         vm.IsBusy = true;
         vm.BusyOperation = "Opening";
-        ReleaseAudioPass(vm);
-        CancelThumbnailLoad(vm, clearThumbnails: true);
+        _previewAfter.Pause();
+        _previewBefore.Pause();
+        _audioPass?.Cancel();
+        _audioPass = null;
+        CancelThumbnailLoad(vm, clearThumbnails: false);
+        _frameRecovery?.Cancel();
         _refineCts?.Cancel();
         _autosaveTimer.Stop();
-
-        var previousPath = vm.SourcePath;
-        var previousPosition = vm.PlayheadUs;
+        bool resumeAfterFailure = false, closeRequested = false;
         try
         {
             await Task.Run(() => SourceCommentService.Recover(path, _store!));
-            _previewAfter.Open(path);
-            _previewBefore.Open(path);
-            VideoPlaceholder.Visibility = Visibility.Collapsed;
-            MpvViewAfter.Visibility = Visibility.Visible;
-            MpvViewBefore.Visibility = Visibility.Visible;
             vm.StatusKind = StatusKind.Info;
             vm.StatusOverride = "Probing media…";
             var probed = await _probe!.ProbeAsync(path);
             var fingerprint = ProjectStore.FingerprintOf(path, probed.DurationUs);
             var loadResult = await Task.Run(() => _store!.Load(path, probed));
             IReadOnlyList<ChapterBoundary> imported = Array.Empty<ChapterBoundary>();
-            _importedMarkerSet = null;
+            MarkerSetState? importedMarkerSet = null;
+            BannerInfo? importWarning = null;
             try
             {
                 imported = await _chapters!.ImportAsync(path, probed.DurationUs, includeStart: true);
-                _importedMarkerSet = StateFromChapters(imported, MarkerSetSource.Imported);
+                importedMarkerSet = StateFromChapters(imported, MarkerSetSource.Imported);
             }
             catch (Exception ex)
             {
-                vm.Banner = new BannerInfo(StatusKind.Warning, "Imported markers are unavailable.",
+                importWarning = new BannerInfo(StatusKind.Warning, "Imported markers are unavailable.",
                     ex.Message, Array.Empty<BannerAction>());
             }
-            // The recording being opened (vm.SourcePath still names the previous one here).
+            // Keep the previous model, including its undo history, untouched until opening succeeds.
+            vm = new MainViewModel
+            {
+                ShowWaveform = previousVm.ShowWaveform, ShowThumbnails = previousVm.ShowThumbnails,
+                ShowRulerTicks = previousVm.ShowRulerTicks, IsBusy = true, BusyOperation = "Opening", Banner = importWarning,
+            };
+            WireViewModelEvents(vm);
+            _importedMarkerSet = importedMarkerSet;
+            AnalyzeAdBreaksButton.Style = (Style)FindResource("Button.Primary");
+            _playUntilUs = null;
             vm.HasAdTrimAnalysis = _suggestionStore.Load(_suggestionStore.Key(path, fingerprint), probed.DurationUs) is not null;
             _importedMarkersAvailable = _importedMarkerSet is not null
                 && (_importedMarkerSet.Splits.Count > 0 || _importedMarkerSet.StartChapterTitle is not null);
@@ -745,6 +769,16 @@ public partial class MainWindow : Window
             vm.ZoomFactor = 1.0;   // start fully zoomed out - whole video visible
             vm.MediaInfoLine =
                 $"{_media.FrameRate.AsDouble:0.##} fps · {_media.Width}×{_media.Height} · {_media.VideoCodec}";
+            DataContext = vm;
+            SetRecordingPaneLayout(false);
+            UpdateTimelineLayout(forceRecenter: true);
+            _previewAfter.SetMuted(true);
+            _previewBefore.SetMuted(previousMuted);
+            _previewAfter.Open(path);
+            _previewBefore.Open(path);
+            VideoPlaceholder.Visibility = Visibility.Collapsed;
+            MpvViewAfter.Visibility = Visibility.Visible;
+            MpvViewBefore.Visibility = Visibility.Visible;
             // The filmstrip goes first: it is the most visible and costs a few seeks, and the
             // waveform's full read yields to it. Starting here keeps it ahead of any analysis.
             if (vm.ShowThumbnails) StartThumbnailLoad(vm, path, _media);
@@ -816,6 +850,9 @@ public partial class MainWindow : Window
             if (!vm.ShowThumbnails)
                 CancelThumbnailLoad(vm, clearThumbnails: true);
 
+            // Opening replaces the editor's banner; keep offering the settings reset while it is needed.
+            if (vm.Banner is null && await UserPreferences.IsDamagedAsync()) ShowDamagedPreferencesBanner();
+
             // Clear our transient open-time status only if it's still showing -
             // a sidecar warning or other update set between the probe and now
             // takes precedence and must not be wiped.
@@ -824,15 +861,75 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            if (previousPath is not null && _media is not null)
+            ReleaseAudioPass(vm);
+            CancelThumbnailLoad(vm, clearThumbnails: false);
+            _media = previousMedia;
+            _sourceFingerprint = previousFingerprint;
+            _importedMarkerSet = previousImportedMarkers;
+            _importedMarkersAvailable = previousImportedAvailable;
+            UseOriginalImportedMarkersMenuItem.ToolTip = previousImportedTooltip;
+            vm = previousVm;
+            DataContext = vm;
+            vm.AudioLoudness = previousAudioLoudness;
+            vm.ThumbnailTiles = previousThumbnailTiles;
+            SetRecordingPaneLayout(vm.IsCollapsed);
+            if (vm.HasAdTrimAnalysis) AnalyzeAdBreaksButton.ClearValue(StyleProperty);
+            else AnalyzeAdBreaksButton.Style = (Style)FindResource("Button.Primary");
+            _playUntilUs = previousPlayUntil;
+            vm.PlayheadUs = previousPosition;
+            vm.StatusKind = previousStatus.StatusKind;
+            vm.StatusOverride = previousStatus.StatusOverride;
+            vm.ProgressPercent = previousStatus.ProgressPercent;
+            UpdateTimelineLayout(forceRecenter: false);
+            TimelineScroll.ScrollToHorizontalOffset(previousScrollOffset);
+            string message = ex.Message;
+            try
             {
-                _previewAfter.Open(previousPath, previousPosition);
-                _previewBefore.Open(previousPath, Math.Max(0, previousPosition - FrameDurationUs(vm)));
-                _previewAfter.SelectAudioStream(_media.PrimaryAudioIndex);
-                _previewBefore.SelectAudioStream(_media.PrimaryAudioIndex);
+                if (previousPath is not null && previousMedia is not null)
+                {
+                    _previewAfter.SetMuted(vm.IsCollapsed ? previousMuted : true);
+                    _previewBefore.SetMuted(previousMuted);
+                    if (vm.IsCollapsed)
+                    {
+                        _previewBefore.Stop();
+                        if (vm.KeptTimeline.DurationUs > 0)
+                            _previewAfter.Open(vm.KeptTimeline.ToMpvEdl(previousPath, previousMedia.TimelineStartTimeUs),
+                                vm.KeptTimeline.ToOutput(previousPosition), buffered: true);
+                        else _previewAfter.Stop();
+                    }
+                    else
+                    {
+                        _previewAfter.Open(previousPath, previousPosition);
+                        _previewBefore.Open(previousPath, Math.Max(0, previousPosition - FrameDurationUs(vm)));
+                    }
+                    _previewAfter.SelectAudioStream(previousMedia.PrimaryAudioIndex);
+                    _previewBefore.SelectAudioStream(previousMedia.PrimaryAudioIndex);
+                    VideoPlaceholder.Visibility = Visibility.Collapsed;
+                    MpvViewAfter.Visibility = Visibility.Visible;
+                    MpvViewBefore.Visibility = Visibility.Visible;
+                    UpdateNoFrameOverlay(vm);
+                    if (vm.ShowWaveform) EnsureAudioPass(vm, previousPath, previousMedia);
+                    if (vm.ShowThumbnails) StartThumbnailLoad(vm, previousPath, previousMedia);
+                    // The restored preview stays paused behind the error; playback resumes once it is dismissed.
+                    resumeAfterFailure = previousPlaying;
+                }
+                else
+                {
+                    _previewAfter.Stop();
+                    _previewBefore.Stop();
+                    VideoPlaceholder.Visibility = Visibility.Visible;
+                    MpvViewAfter.Visibility = Visibility.Collapsed;
+                    MpvViewBefore.Visibility = Visibility.Collapsed;
+                    NoFrameOverlay.Visibility = Visibility.Collapsed;
+                }
             }
-            else { _previewAfter.Stop(); _previewBefore.Stop(); }
-            MessageBox.Show(this, ex.Message, "Failed to open", MessageBoxButton.OK, MessageBoxImage.Error);
+            catch (Exception restoreError)
+            {
+                _previewAfter.Stop();
+                _previewBefore.Stop();
+                message += "\n\nThe previous recording's preview could not be restored: " + restoreError.Message;
+            }
+            MessageBox.Show(this, message, "Failed to open", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
@@ -842,9 +939,16 @@ public partial class MainWindow : Window
             vm.BusyOperation = null;
             if (_closeWhenSwitchCompletes)
             {
+                closeRequested = true;
                 _closeWhenSwitchCompletes = false;
                 _ = Dispatcher.BeginInvoke(new Action(Close));
             }
+        }
+        if (resumeAfterFailure && !closeRequested && !_allowClose && !_switching && ReferenceEquals(DataContext, previousVm)
+            && previousVm.SourcePath == previousPath && !_previewAfter.IsPlaying)
+        {
+            if (previousVm.IsCollapsed) { if (previousVm.KeptTimeline.DurationUs > 0) _previewAfter.Play(); }
+            else { _previewAfter.Play(); _previewBefore.Play(); }
         }
     }
 
@@ -1360,6 +1464,7 @@ public partial class MainWindow : Window
 
     private async void OnWindowClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        ResetShuttle();
         if (_allowClose)
         {
             _autosaveTimer.Stop();
@@ -1803,39 +1908,6 @@ public partial class MainWindow : Window
         return IntPtr.Zero;
     }
 
-    // -------------------------------------------------------------------
-    // Maximize constraint - clamp to the current monitor's work area.
-    // Without this, a window using custom WindowChrome maximizes to a
-    // rect that overhangs the screen edges and slides under the taskbar.
-    // -------------------------------------------------------------------
-
-    private void OnSourceInitialized(object? sender, EventArgs e)
-    {
-        var src = System.Windows.Interop.HwndSource.FromHwnd(
-            new System.Windows.Interop.WindowInteropHelper(this).Handle);
-        src?.AddHook(OnMaximizeBoundsHook);
-    }
-
-    private const int WM_SYSCOMMAND = 0x0112;
-    private const int SC_MAXIMIZE = 0xF030;
-
-    private IntPtr OnMaximizeBoundsHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
-    {
-        // Title-bar double-click / Win+Up / window menu "Maximize" all send
-        // WM_SYSCOMMAND with SC_MAXIMIZE - intercept and route to our
-        // fake-maximize so they don't trigger the broken native path
-        // (custom WindowChrome makes native maximize spill past the work area
-        // by ~8 px). We let every other message - including WM_GETMINMAXINFO,
-        // which is what WPF uses to enforce MinWidth/MinHeight on user resize
-        // - fall through to default handling.
-        if (msg == WM_SYSCOMMAND && (wParam.ToInt32() & 0xFFF0) == SC_MAXIMIZE)
-        {
-            OnMaximize(this, new RoutedEventArgs());
-            handled = true;
-        }
-        return IntPtr.Zero;
-    }
-
     private static long FrameDurationUs(MainViewModel vm)
     {
         var fps = vm.FrameRate.AsDouble;
@@ -1884,33 +1956,35 @@ public partial class MainWindow : Window
 
     private void OnMinimize(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
 
-    // "Fake maximize": with custom WindowChrome, WindowState=Maximized renders
-    // a few pixels past the work area (the OS adds its own padded border that
-    // WPF can't fully suppress via WM_GETMINMAXINFO). We fake it by sizing the
-    // window to SystemParameters.WorkArea while leaving WindowState=Normal,
-    // which fits exactly inside the taskbar and screen edges.
-    private Rect? _preMaximizeBounds;
+    private WindowState _lastNonMinimizedState = WindowState.Normal;
     private const string MaxIconGeometry = "M0.5,0.5 L9.5,0.5 L9.5,9.5 L0.5,9.5 Z";
     private const string RestoreIconGeometry = "M2.5,0.5 L9.5,0.5 L9.5,7.5 L7.5,7.5 M0.5,2.5 L7.5,2.5 L7.5,9.5 L0.5,9.5 Z";
 
     private void OnMaximize(object sender, RoutedEventArgs e)
     {
-        if (_preMaximizeBounds.HasValue)
-        {
-            var b = _preMaximizeBounds.Value;
-            Left = b.Left; Top = b.Top; Width = b.Width; Height = b.Height;
-            _preMaximizeBounds = null;
-            MaxButtonIcon.Data = System.Windows.Media.Geometry.Parse(MaxIconGeometry);
-        }
-        else
-        {
-            _preMaximizeBounds = new Rect(Left, Top, ActualWidth, ActualHeight);
-            var work = MonitorBounds.WorkArea(this);
-            Left = work.Left; Top = work.Top;
-            Width = work.Width; Height = work.Height;
-            MaxButtonIcon.Data = System.Windows.Media.Geometry.Parse(RestoreIconGeometry);
-        }
+        if (WindowState == WindowState.Maximized) SystemCommands.RestoreWindow(this);
+        else SystemCommands.MaximizeWindow(this);
     }
+
+    private void OnWindowStateChanged(object? sender, EventArgs e)
+    {
+        if (WindowState != WindowState.Minimized) _lastNonMinimizedState = WindowState;
+        UpdateWindowFrame();
+        if (MaxButtonIcon is null) return;
+        bool maximized = _lastNonMinimizedState == WindowState.Maximized;
+        MaxButtonIcon.Data = System.Windows.Media.Geometry.Parse(maximized ? RestoreIconGeometry : MaxIconGeometry);
+        MaxButton.ToolTip = maximized ? "Restore down" : "Maximize";
+        System.Windows.Automation.AutomationProperties.SetName(MaxButton, maximized ? "Restore down" : "Maximize");
+    }
+
+    private void UpdateWindowFrame()
+    {
+        if (WindowLayoutGrid is null) return;
+        WindowLayoutGrid.Margin = WindowState == WindowState.Maximized
+            ? MonitorBounds.MaximizedInsets(this) : new Thickness(0);
+    }
+
+    private void OnWindowLocationChanged(object? sender, EventArgs e) => UpdateWindowFrame();
 
     private void OnClose(object sender, RoutedEventArgs e) => Close();
 
@@ -1927,6 +2001,7 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainViewModel vm) return;
         if (BlockProjectSwitchForExport(vm) || _switching || vm.IsBusy) return;
+        ResetShuttle();
         _switching = true;
         bool flushed;
         try { flushed = await FlushBeforeLeavingAsync(vm); }
@@ -2148,6 +2223,7 @@ public partial class MainWindow : Window
 
         vm.Banner = null;
 
+        ResetShuttle();
         _previewAfter.Pause();
         _previewBefore.Pause();
         // Export needs the disk. A finished audio pass costs nothing and stays; the graph keeps
@@ -2387,7 +2463,9 @@ public partial class MainWindow : Window
 
     private void RewindTick()
     {
-        if (DataContext is not MainViewModel vm || _shuttle >= 0) { StopRewind(); return; }
+        if (_allowClose || _switching || DataContext is not MainViewModel { IsFileLoaded: true, IsExportScreen: false } vm
+            || (vm.IsBusy && _commercialAnalysisCts is null) || _shuttle >= 0)
+        { StopRewind(); return; }
         long step = RewindTickMs * 1_000L * -_shuttle;
         long position = vm.IsCollapsed ? vm.TimelinePositionUs : vm.PlayheadUs;
         if (position <= 0) { ResetShuttle(); Notice(vm, StatusKind.Info, "Reached the start."); return; }

@@ -17,8 +17,7 @@ public static class MediaCacheCleanup
     private static readonly Regex LevelsFile = new(@"^[0-9a-f]{16}_a\d+_d\d+_v(?<v>\d+)\.adtlevels$", RegexOptions.CultureInvariant);
     private static readonly Regex WaveformFile = new(@"^[0-9a-f]{16}_a\d+_d\d+_.*\.adtwave$", RegexOptions.CultureInvariant);
 
-    public static string LegacyWaveformRoot => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AdTrim", "waveforms");
+    public static string LegacyWaveformRoot => Path.Combine(AppDataDirectory.Path, "waveforms");
 
     /// <summary>Marks a cache entry as used now. Failures only mean it may be cleaned up sooner.</summary>
     public static void Touch(string path)

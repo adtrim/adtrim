@@ -294,6 +294,9 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
     private readonly Stopwatch _runTimer = new();
     private ExportPhase _progressPhase = ExportPhase.Planning;
     private TimeSpan? _stitchEstimateEnd;
+    private TimeSpan? _recordingStart;
+    private double _recordingFraction;
+    private string _recordingHeading = "";
 
     // Ticks the Elapsed / Remaining display while a long ffmpeg encode is in
     // flight. ExportService only reports progress on phase boundaries (≈ once
@@ -356,6 +359,7 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
         _runTimer.Restart();
         _progressPhase = ExportPhase.Planning;
         _stitchEstimateEnd = null;
+        _recordingStart = null;
         StartTickTimer();
         Mode = ExportDialogMode.Exporting;
         RefreshPresentation();
@@ -468,6 +472,16 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
                 foreach (var part in Parts) part.Status = ExportPartStatus.Done;
                 ProgressLine = "Export complete";
                 break;
+            case ExportPhase.RecordingExport:
+                foreach (var part in Parts) part.Status = ExportPartStatus.Done;
+                _recordingFraction = Math.Clamp(p.SegmentPercent, 0, 1);
+                // Each operation restarts at zero (a rollback has a new heading), so its estimate excludes earlier work.
+                if (_recordingStart is null || _recordingFraction == 0 || p.Message != _recordingHeading) _recordingStart = _runTimer.Elapsed;
+                _recordingHeading = p.Message;
+                string percent = $"{_recordingFraction * 100:0}%";
+                ProgressLine = p.Detail is { } detail ? $"{detail} · {percent}"
+                    : _recordingFraction > 0 ? $"{percent} of this step" : "";
+                break;
             case ExportPhase.Failed:
                 ProgressLine = p.Message;
                 break;
@@ -501,6 +515,13 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
             var remaining = _stitchEstimateEnd - _runTimer.Elapsed;
             RemainingFormatted = remaining is { TotalSeconds: > 0 } estimate
                 ? $"Stitching: ~{FormatStopwatch(estimate)} remaining" : "";
+            return;
+        }
+        if (_progressPhase == ExportPhase.RecordingExport)
+        {
+            var spent = _runTimer.Elapsed - (_recordingStart ?? _runTimer.Elapsed);
+            RemainingFormatted = _recordingFraction is >= 0.02 and < 1 && spent >= TimeSpan.FromSeconds(1)
+                ? $"~{FormatStopwatch(spent * ((1 - _recordingFraction) / _recordingFraction))} remaining" : "";
             return;
         }
         if (_progressPhase != ExportPhase.EncodingSegment)

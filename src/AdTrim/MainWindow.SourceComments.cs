@@ -18,7 +18,7 @@ public partial class MainWindow
     private async void OnFileMenuOpened(object sender, RoutedEventArgs e)
     {
         if (!ReferenceEquals(sender, e.OriginalSource)) return;
-        var latest = await UserPreferences.LoadAsync();
+        var latest = await UserPreferences.LoadAsync(_preferences);
         _preferences = _preferences with { AddSourceExportComment = latest.AddSourceExportComment };
         _savedPreferences = _savedPreferences with { AddSourceExportComment = latest.AddSourceExportComment };
         RefreshSourceCommentMenu();
@@ -30,16 +30,19 @@ public partial class MainWindow
         SourceCommentMenu.IsEnabled = false;
         try
         {
-            var latest = await UserPreferences.LoadAsync();
+            var latest = await UserPreferences.LoadAsync(_preferences);
             await (latest with { AddSourceExportComment = enabled }).SaveChangesAsync(latest, null);
             _preferences = _preferences with { AddSourceExportComment = enabled };
             _savedPreferences = _savedPreferences with { AddSourceExportComment = enabled };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        { MessageBox.Show(this, "The source comment setting could not be saved. " + ex.Message, "Export comments", MessageBoxButton.OK, MessageBoxImage.Error); }
+        {
+            MessageBox.Show(this, "The source comment setting could not be saved. " + ex.Message, "Export comments", MessageBoxButton.OK, MessageBoxImage.Error);
+            if (ex is DamagedPreferencesException) ShowDamagedPreferencesBanner();
+        }
         finally
         {
-            var latest = await UserPreferences.LoadAsync();
+            var latest = await UserPreferences.LoadAsync(_preferences);
             _preferences = _preferences with { AddSourceExportComment = latest.AddSourceExportComment };
             RefreshSourceCommentMenu();
             SourceCommentMenu.IsEnabled = true;
@@ -87,11 +90,21 @@ public partial class MainWindow
 
     private async Task<string?> AddSourceCommentAsync(MainViewModel vm, ExportView view, CancellationToken ct)
     {
-        var preferences = await UserPreferences.LoadAsync();
-        if (!preferences.AddSourceExportComment || view.AcceptedPlan is not { } sourcePlan
-            || !Path.GetExtension(sourcePlan.SourcePath).Equals(".mp4", StringComparison.OrdinalIgnoreCase)) return null;
+        if (view.AcceptedPlan is not { } plan
+            || !Path.GetExtension(plan.SourcePath).Equals(".mp4", StringComparison.OrdinalIgnoreCase)) return null;
+        UserPreferences preferences;
+        try { preferences = await UserPreferences.ReadAsync(); }
+        // No settings file yet (first launch): the File menu's current choice applies.
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { preferences = _preferences; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            if (ex is DamagedPreferencesException) ShowDamagedPreferencesBanner();
+            view.SourceCommentFailed = true;
+            return "Source comment was not added because saved preferences could not be read. " + ex.Message;
+        }
+        if (!preferences.AddSourceExportComment) return null;
         view.SourceCommentFailed = true;
-        if (view.AcceptedPlan is not { } plan || _sourceFingerprint is null || _store is null) return "Source comment was not added: the project is unavailable.";
+        if (_sourceFingerprint is null || _store is null) return "Source comment was not added: the project is unavailable.";
         bool busy = vm.IsBusy;
         long position = vm.PlayheadUs;
         _autosaveTimer.Stop();
@@ -112,12 +125,32 @@ public partial class MainWindow
             _previewBefore.Stop();
             stopped = true;
             vm.StatusOverride = "Adding the source export comment...";
+            view.ReportSourceCommentProgress(new(false, "", 0));
+            var commentProgress = new Progress<SourceCommentProgress>(view.ReportSourceCommentProgress);
             var expected = _sourceFingerprint;
-            var updated = await Task.Run(() => SourceCommentService.MarkAsync(plan.SourcePath, expected, _store, ct));
+            var updated = await Task.Run(() => SourceCommentService.MarkAsync(plan.SourcePath, expected, _store, ct, commentProgress));
             _sourceFingerprint = updated;
             vm.SourceFingerprint = updated;
+            var cacheFailures = await Task.Run(() =>
+            {
+                var failures = new List<string>();
+                void Preserve(string name, Action copy)
+                {
+                    try { copy(); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    { failures.Add(name); }
+                }
+                Preserve("ad-break suggestions", () => _suggestionStore.PreserveAfterMetadataUpdate(plan.SourcePath, expected, updated));
+                Preserve("thumbnails", () => _thumbnails?.PreserveAfterMetadataUpdate(plan.SourcePath, expected));
+                if (_media is not null)
+                    Preserve("audio levels", () => (_audioLevels ?? new AudioLevelService(_ffmpeg, AudioLevelService.DefaultCacheRoot))
+                        .PreserveAfterMetadataUpdate(plan.SourcePath, _media.PrimaryAudioIndex, expected));
+                return failures;
+            });
+            vm.HasAdTrimAnalysis = _suggestionStore.Load(_suggestionStore.Key(plan.SourcePath, updated), updated.DurationUs) is not null;
             view.SourceCommentFailed = false;
-            return "Source export comment added.";
+            return (updated == expected ? "Source export comment was already current." : "Source export comment added.") + (cacheFailures.Count == 0 ? ""
+                : " Cached " + string.Join(", ", cacheFailures) + " could not be retained and may need to be regenerated.");
         }
         catch (Exception ex)
         {
