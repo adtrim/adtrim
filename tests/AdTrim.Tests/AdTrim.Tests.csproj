@@ -16,6 +16,9 @@
     <Compile Include="..\..\src\AdTrim\Services\UnexportedFiles.cs" Link="Services\UnexportedFiles.cs"/>
     <Compile Include="..\..\src\AdTrim\Services\UpdatePreferences.cs" Link="Services\UpdatePreferences.cs"/>
     <Compile Include="..\..\src\AdTrim\Services\UpdateFeed.cs" Link="Services\UpdateFeed.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\UpdatePackage.cs" Link="Services\UpdatePackage.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\UpdateStaging.cs" Link="Services\UpdateStaging.cs"/>
+    <Compile Include="..\..\src\AdTrim\Services\UpdateBackup.cs" Link="Services\UpdateBackup.cs"/>
     <Compile Include="..\..\src\AdTrim\Services\UpdateService.cs" Link="Services\UpdateService.cs"/>
     <!-- Pinned (May 2026): xUnit 2.9.3 + AwesomeAssertions.
          xUnit v2 deliberately (not v3) for training-data depth.

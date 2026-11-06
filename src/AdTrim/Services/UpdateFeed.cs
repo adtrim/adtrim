@@ -44,7 +44,7 @@ public static class UpdateFeedReader
         return Version.Parse(value);
     }
 
-    public static UpdateFeed Verify(byte[] bytes, byte[] signature, string publicKey, DateTimeOffset now, long minimumRevision)
+    public static void VerifySignature(byte[] bytes, byte[] signature, string publicKey, DateTimeOffset now)
     {
         if (bytes.Length > MaximumBytes || signature.Length > MaximumSignatureBytes)
             throw new InvalidDataException("Invalid update information size.");
@@ -73,6 +73,11 @@ public static class UpdateFeedReader
         }
         if (key.KeySize != 3072 || !key.VerifyData(bytes, signature, HashAlgorithmName.SHA256, RSASignaturePadding.Pss))
             throw new CryptographicException("Update information signature is invalid.");
+    }
+
+    public static UpdateFeed Verify(byte[] bytes, byte[] signature, string publicKey, DateTimeOffset now, long minimumRevision)
+    {
+        VerifySignature(bytes, signature, publicKey, now);
         using var document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 8 });
         RejectDuplicateProperties(document.RootElement);
         var feed = JsonSerializer.Deserialize<UpdateFeed>(bytes, Options) ?? throw new InvalidDataException("Empty update information.");
@@ -114,7 +119,7 @@ public static class UpdateFeedReader
             throw new InvalidDataException("Invalid announcement text.");
     }
 
-    private static void RejectDuplicateProperties(JsonElement element)
+    internal static void RejectDuplicateProperties(JsonElement element)
     {
         if (element.ValueKind == JsonValueKind.Object)
         {

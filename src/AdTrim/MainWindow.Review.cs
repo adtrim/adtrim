@@ -37,9 +37,9 @@ public partial class MainWindow
         Top = Math.Clamp(double.IsFinite(_preferences.Top) ? _preferences.Top : area.Top, area.Top, Math.Max(area.Top, area.Bottom - Height));
         if (_preferences.IsMaximized == true || legacyMaximized) SystemCommands.MaximizeWindow(this);
     }
-    private Task SavePreferencesAsync(MainViewModel vm) => SavePreferencesSnapshotAsync(vm, false);
+    private Task<bool> SavePreferencesAsync(MainViewModel vm) => SavePreferencesSnapshotAsync(vm, false);
 
-    private async Task SavePreferencesSnapshotAsync(MainViewModel vm, bool saveMarkerSource)
+    private async Task<bool> SavePreferencesSnapshotAsync(MainViewModel vm, bool saveMarkerSource)
     {
         var positions = new Dictionary<string, long>(_preferences.Positions ?? new(), StringComparer.OrdinalIgnoreCase);
         if (vm.SourcePath is { } source)
@@ -57,11 +57,13 @@ public partial class MainWindow
             var snapshot = _preferences;
             await snapshot.SaveChangesAsync(_savedPreferences, vm.SourcePath, saveMarkerSource);
             _savedPreferences = snapshot;
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             vm.StatusOverride = "Preferences could not be saved. Project edits are saved separately.";
             if (ex is DamagedPreferencesException) ShowDamagedPreferencesBanner();
+            return false;
         }
     }
 

@@ -27,8 +27,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string? SourcePath
     {
         get => _sourcePath;
-        set { if (Set(ref _sourcePath, value)) Notify(nameof(IsFileLoaded), nameof(CanToggleCollapsed), nameof(CanReplaceMarkers)); }
+        set { if (Set(ref _sourcePath, value)) Notify(nameof(WindowTitle), nameof(IsFileLoaded), nameof(CanToggleCollapsed), nameof(CanReplaceMarkers)); }
     }
+
+    public string WindowTitle => string.IsNullOrEmpty(SourcePath) ? "AdTrim" : $"AdTrim - {SourcePath}";
 
     public string MediaInfoLine { get; set; } = "";
 

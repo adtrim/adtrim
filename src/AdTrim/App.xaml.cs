@@ -20,7 +20,11 @@ public partial class App : Application
     private readonly Dictionary<Views.ExportView, Models.ExportPlan> _exports = new();
     private Services.UpdateService? _updates;
     public bool UpdateStartupInterrupted { get; set; }
-    public bool UpdateDialogOpen { get; set; }
+    /// <summary>The single update window, shared by all recording windows.</summary>
+    public Views.UpdateDialog? OpenUpdateDialog { get; set; }
+    public bool UpdateDialogOpen => OpenUpdateDialog is not null;
+    private static readonly DateTime StartedUtc = DateTime.UtcNow;
+    private string? _resumeDirectory;
     private CancellationTokenSource? _automaticUpdateCts;
     public bool AutomaticUpdatesEnabled => Services.UpdatePreferences.Load(Services.UserPreferences.DataDirectory);
     public event EventHandler? UpdatePreferenceChanged;
@@ -44,6 +48,7 @@ public partial class App : Application
 
     public string? ReserveExport(Views.ExportView view, Models.ExportPlan plan)
     {
+        if (_updatePreparing) return "AdTrim is preparing to restart for an update.";
         if (FindRecordingWindow(plan.OutputPath) is not null)
             return "The output cannot replace a recording open in another AdTrim window.";
         if (_exports.Any(e => e.Key != view && Services.ExportSafety.SameFile(e.Value.OutputPath, plan.OutputPath)))
@@ -58,7 +63,13 @@ public partial class App : Application
 
     public MainWindow NewWindow(string? path = null)
     {
+        if (_updatePreparing && _updateOwner is not null)
+        {
+            if (path is not null) _updateDeferredPaths.Add(Path.GetFullPath(path));
+            return _updateOwner;
+        }
         var window = new MainWindow(path);
+        if (_updateStartupProtected) window.IsEnabled = false;
         window.Closed += (_, _) =>
         {
             if (MainWindow == window) MainWindow = Windows.OfType<MainWindow>().FirstOrDefault(w => w != window);
@@ -70,6 +81,7 @@ public partial class App : Application
     public async Task<MainWindow> OpenRecordingAsync(string path)
     {
         path = Path.GetFullPath(path);
+        if (_updatePreparing && _updateOwner is not null) { _updateDeferredPaths.Add(path); return _updateOwner; }
         var existing = FindRecordingWindow(path);
         if (existing is not null) { existing.BringForward(); return existing; }
         var empty = Windows.OfType<MainWindow>().FirstOrDefault(w => w.CanReceiveRecording);
@@ -117,11 +129,12 @@ public partial class App : Application
         catch { /* nothing else to do */ }
     }
 
-    private void OnStartup(object sender, StartupEventArgs e)
+    private async void OnStartup(object sender, StartupEventArgs e)
     {
         try
         {
-            OnStartupInner(e);
+            if (await RunUpdateModeAsync(e.Args)) return;
+            await OnStartupInnerAsync(e);
         }
         catch (Exception ex)
         {
@@ -134,34 +147,104 @@ public partial class App : Application
         }
     }
 
-    private void OnStartupInner(StartupEventArgs e)
+    private async Task OnStartupInnerAsync(StartupEventArgs e)
     {
-        var path = e.Args.Length > 0 ? e.Args[0] : null;
+        Services.UpdateResume? resume = null;
+        string? resumeDirectory = null;
+        if (e.Args.Length == 2 && e.Args[0] == "--resume-update")
+        {
+            resumeDirectory = Services.UpdateStaging.ValidateDirectory(Services.UserPreferences.DataDirectory, e.Args[1]);
+            resume = Services.UpdateInstallation.ReadResume(Services.UserPreferences.DataDirectory, resumeDirectory, AppVersion.Numeric);
+        }
+        var path = resume is not null ? resume.Recordings.FirstOrDefault() : e.Args.Length > 0 ? e.Args[0] : null;
         // Keep window routing and shared preferences in one process.
         _singleInstanceMutex = new Mutex(initiallyOwned: true, name: MutexName, out var createdNew);
         if (!createdNew)
         {
             TrySendPathToExistingInstance(path ?? "");
+            if (resume is not null)
+            {
+                foreach (var extra in resume.Recordings.Skip(1)) TrySendPathToExistingInstance(extra);
+                // This copy is not the app that opens them: the running copy confirms once its windows are ready.
+                if (Services.UpdateInstallation.TakeStartedMarkerRequest() is { } marker)
+                    TrySendPathToExistingInstance(Services.UpdateInstallation.StartedRequestPrefix + marker);
+            }
             Shutdown();
             return;
         }
 
+        // While files are being replaced, hand the request to the update window and exit at once:
+        // this process must not keep AdTrim.exe open while Setup replaces it.
+        if (resume is null && Services.UpdateInstallation.IsUpdating(Services.UserPreferences.DataDirectory))
+        {
+            _singleInstanceMutex.ReleaseMutex();
+            _singleInstanceMutex.Dispose();
+            _singleInstanceMutex = null;
+            if (!Services.UpdateInstallation.TrySendToHelper(Services.UserPreferences.DataDirectory, path))
+                WriteCrashLog("Update", new IOException("AdTrim was opened during an update, and the update window did not answer."));
+            Shutdown();
+            return;
+        }
+        _resumeDirectory = resumeDirectory;
+
 
         // Start the pipe server so future launches can hand off to us.
         _pipeServerCts = new CancellationTokenSource();
+        var startedMarker = resume is null ? null : Services.UpdateInstallation.TakeStartedMarkerRequest();
+        _ = ProtectUpdateStartupAsync(startedMarker, _pipeServerCts.Token);
         _ = Task.Run(() => RunPipeServerAsync(_pipeServerCts.Token));
 
         // Open MainWindow - StartupUri is replaced because we want to control bootstrap order.
         var win = NewWindow(path);
+        if (resume is not null)
+        {
+            await win.Ready;
+            foreach (var extra in resume.Recordings.Skip(1)) await OpenRecordingAsync(extra);
+            // Ready windows prove this version starts; the update window can now finish.
+            await ConfirmStartedWhenReadyAsync(startedMarker);
+        }
+        if (resumeDirectory is not null) _ = CleanUpCompletedUpdateAsync(resumeDirectory);
         _ = Task.Run(() => RecoverExportsAsync(win, _pipeServerCts.Token));
         _ = CheckUpdatesAtStartupAsync(win, _pipeServerCts.Token);
         _ = Task.Run(CleanUpMediaCaches);
     }
 
+    /// <summary>Writes the update's started marker once every recording window of this process has finished starting.</summary>
+    internal async Task ConfirmStartedWhenReadyAsync(string? marker)
+    {
+        if (marker is null) return;
+        try
+        {
+            await Task.WhenAll(Windows.OfType<MainWindow>().Select(w => w.Ready)).WaitAsync(TimeSpan.FromMinutes(10));
+            if (Windows.OfType<MainWindow>().Any()) Services.UpdateInstallation.WriteStartedMarker(marker);
+        }
+        catch (Exception ex) { WriteCrashLog("Update start confirmation", ex); }
+    }
+
+    private static async Task CleanUpCompletedUpdateAsync(string directory)
+    {
+        try
+        {
+            // The update window still runs from this folder until it has removed its backup and closed.
+            var waited = System.Diagnostics.Stopwatch.StartNew();
+            while (Services.UpdateInstallation.IsUpdating(Services.UserPreferences.DataDirectory) && waited.Elapsed < TimeSpan.FromMinutes(10))
+                await Task.Delay(500);
+            await Services.UpdateStaging.RemoveDirectoryAsync(Services.UserPreferences.DataDirectory, directory);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { WriteCrashLog("Update cleanup", ex); }
+    }
+
     // Thumbnail and audio-level caches for recordings not opened in months, and formats this
     // version no longer reads. Small, local, and never touches recordings or projects.
-    private static void CleanUpMediaCaches()
+    private void CleanUpMediaCaches()
     {
+        try
+        {
+            // Downloads and jobs no update window is using; a running update keeps its folder.
+            if (!Services.UpdateInstallation.IsUpdating(Services.UserPreferences.DataDirectory))
+                Services.UpdateStaging.CleanUpAbandoned(Services.UserPreferences.DataDirectory, StartedUtc, _resumeDirectory);
+        }
+        catch (Exception ex) { WriteCrashLog("Update cleanup", ex); }
         try
         {
             Services.MediaCacheCleanup.Run(Services.ThumbnailService.DefaultCacheRoot, Services.ThumbnailService.CurrentFolderSuffix,
@@ -273,6 +356,12 @@ public partial class App : Application
                 _ = Current.Dispatcher.BeginInvoke(new Action(() =>
                 {
                     var app = (App)Current;
+                    if (path.StartsWith(Services.UpdateInstallation.StartedRequestPrefix, StringComparison.Ordinal))
+                    {
+                        _ = app.ConfirmStartedWhenReadyAsync(path[Services.UpdateInstallation.StartedRequestPrefix.Length..]);
+                        return;
+                    }
+                    if (app.DeferForUpdate(path)) return;
                     if (string.IsNullOrEmpty(path)) app.NewWindow();
                     else _ = app.OpenRecordingAsync(path);
 

@@ -38,6 +38,7 @@ internal static partial class Program
 
     private static int RunMode(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--updates") return RunUpdateInstallSmoke();
         if (args.Length == 2 && args[0] == "--window-state") return RunWindowStateSmoke(args[1]);
         if (args.Length == 1 && args[0] == "--lifecycle") return RunLifecycleSmoke();
         if (args.Length == 1 && args[0] == "--open-recovery") return RunOpenRecoverySmoke();

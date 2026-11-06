@@ -1,12 +1,24 @@
 # Update notifications
 
 AdTrim checks for updates once per application session after startup settles.
-Recording windows share the check. Help provides a manual check. The app never
-downloads or installs an update; the release button opens the What's new page on
-adtrim.github.io, which lists the changes between the installed version and the
-new one and links to the installer. The two versions are passed in the URL
-fragment, which the browser does not send to the server. Notifications do not
-interrupt editing or exporting.
+Recording windows share the check. Help provides a manual check. Starting with
+v2.1.11, an available update offers Download update, followed by Restart and update.
+Nothing is downloaded or installed without those actions. Downloads leave all
+recording windows usable; restarting updates them together. The app verifies the
+installer, saves every open project's edits and window preferences, exits, runs
+the per-user installer silently, then reopens the recordings. Finish exports,
+close export setup and wait for analysis before restarting. Reopened recording
+windows stay disabled until the update helper finishes or exits, so cancelling
+startup cannot discard edits made while another recording is still opening.
+A save failure keeps
+the windows open. Automatic installation requires the installed copy; test-folder
+builds do not overwrite an installation. Settings, projects and recordings remain.
+
+See what's new opens the release history on adtrim.github.io, with a manual
+installer download. The installed and available versions travel in the URL
+fragment, which the browser does not send to the server. Releases without signed
+package information use that manual fallback. Notifications do not interrupt
+editing or exporting. Older clients need one manual upgrade to gain this feature.
 
 Regular announcements appear once per release. Security reminders recur at a
 subsequent launch after seven days; urgent reminders recur after one day.
@@ -52,7 +64,96 @@ an attacker controlling delivery could replay an older signed announcement to it
 There is no time limit on this replay risk. Previously observed revisions prevent
 rollback on returning installations. Signatures do not prove freshness. Blocking
 the network can prevent checks. This protocol
-does not authenticate installers or protect a compromised GitHub release account.
+authenticates announcements only. The separately signed package information below
+authenticates installer bytes, including when a GitHub release account is
+compromised without access to the signing key. A compromised signing key or local
+account is outside this protection.
+
+## Signed installer packages
+
+Each new release also provides `update-package.json` and its detached
+`update-package.json.sig`. The package uses the same embedded trust root and
+RSA-3072 PSS/SHA-256 verification, including delegated-key expiry. Schema 1 has
+exactly `schema`, `version`, `installerName`, `sizeBytes` and `sha256`. The version
+must match the available release, and the name must be
+`AdTrim-Setup-v<version>.exe`. The installer URL is constructed under the fixed
+`adtrim/adtrim` GitHub repository. HTTPS redirects are limited to GitHub's release
+asset hosts. Metadata requests time out after 20 seconds, the installer after
+30 minutes. The installer is limited to 1 GiB and streamed to disk.
+
+The download's exact length, SHA-256 and embedded file version must match the
+signed package. An installer is written under a temporary `.partial` name and gets
+its real name only after those checks. The update window names each step as it
+runs: getting the update information, verifying the signature, downloading,
+checking the download and checking its version.
+
+Restart and update saves every open recording, closes AdTrim and hands over to an
+update helper: a copy of the running app in the update's own folder, so Setup never
+has to replace a file the helper is using. Its "Updating AdTrim" window shows each
+step: waiting for AdTrim to close, backing up the current version, checking the
+downloaded installer, installing, checking the new version, and starting AdTrim
+with the same recordings. The helper verifies the package again, waits for the
+original process by PID and start time, and can only target the registered
+installation folder. It cannot install a same-version or older package.
+
+Before installing, the helper backs up the files the installation owns, as listed
+in its `install-files.txt` (written by Setup). Nothing outside that list is copied,
+changed or removed, including user data in installations that share a folder with
+settings. If installation fails, the installer is retried once; after that the
+window explains what failed and offers Retry or Cancel update. Cancel update
+restores the backed-up files, removes files the failed update added, and starts the
+previous version with the same recordings. The backup is kept until the installed
+copy itself reports that all its windows are ready; the helper checks that the
+reporting process is running from the installed `AdTrim.exe`, so a launch that only
+handed its recordings to another copy cannot confirm the update. An update that
+installs but does not start can also be restored: Retry waits for the same starting
+copy instead of starting another, and Cancel update closes that copy before
+restoring its files. If the installer runs for more than five minutes, the window
+offers to stop it and restore. Closing the window after a failure means Cancel
+update; the window stays until recovery has finished. An installation without
+`install-files.txt` is not updated automatically; use the manual download.
+
+A per-user named gate marks the update. AdTrim launched during it (for example
+from a recording's Edit with AdTrim command) hands its recording to the update
+window and exits at once, so it never holds files open that Setup is replacing;
+the recording opens when the update finishes. If the helper itself stops, Windows
+releases the gate and AdTrim starts normally.
+
+When a step fails, Copy details places the versions, step, error and Windows
+version on the clipboard, with personal folders replaced by `%LOCALAPPDATA%`,
+`%APPDATA%` or `%USERPROFILE%`. Report a problem opens a new issue at
+https://github.com/adtrim/adtrim/issues/new. The error is also written to
+`%LOCALAPPDATA%\AdTrim\crash-log.txt`.
+
+Downloads and restart state use dedicated GUID folders under the user's AdTrim
+`updates` directory. Closing the update window removes a finished download that was
+not installed. Each startup removes every update folder no running update uses,
+including partial downloads; a folder holding a backup that could not be restored
+is kept for 30 days for manual recovery. Successful restarts remove their job,
+including its temporary recording paths. Cleanup refuses links and paths outside
+that directory. Windows may still block an unsigned application; these signatures
+do not replace Windows code signing.
+
+The update window does not belong to any recording window: closing a recording
+does not cancel or discard a download, and asking for updates again brings the
+open update window forward. See what's new opens the release notes without closing
+it. The manual route stays available: download the installer from the release
+page, close AdTrim and run it.
+
+After building a release installer, prepare its immutable package information:
+
+```powershell
+powershell -File tools/prepare-update-package.ps1 -InstallerPath <installer.exe> -OutputDirectory <release-folder>
+pwsh -File tools/sign-update-feed.ps1 -KeyPath <private-key> -FeedPath <release-folder>/update-package.json
+dotnet run --project tools/AdTrim.UpdateFeed -- --package <release-folder>/update-package.json src/AdTrim/Services/update-public-key.pem <version>
+```
+
+Keep the matching installer in the release folder during verification. Sign the
+final bytes only; never sign synthetic test installers with a production key.
+Attach both package files to the release together with the matching installer,
+media sources and signed announcement. Keep the existing schema-1 announcement
+unchanged in shape so older clients continue to understand it. GitHub Releases
+hosts the downloads; no paid updater service is required.
 
 ## Preparing a feed
 

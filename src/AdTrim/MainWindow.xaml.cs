@@ -1954,6 +1954,13 @@ public partial class MainWindow : Window
         if (first is not null) _ = OpenFileAsync(first);
     }
 
+    private void OnTitlePathScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        var viewport = (ScrollViewer)sender;
+        TitlePathEllipsis.Visibility = viewport.ScrollableWidth > 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (viewport.HorizontalOffset < viewport.ScrollableWidth) viewport.ScrollToRightEnd();
+    }
+
     private void OnMinimize(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
 
     private WindowState _lastNonMinimizedState = WindowState.Normal;

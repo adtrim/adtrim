@@ -42,7 +42,8 @@ public partial class MainWindow
     private async void OnCheckUpdates(object sender, RoutedEventArgs e)
     {
         var app = (App)Application.Current;
-        if (app.UpdateDialogOpen || app.Updates.IsChecking) return;
+        if (app.OpenUpdateDialog is { } open) { BringToFront(open); return; }
+        if (app.Updates.IsChecking) return;
         if (app.Updates.Notice is null) await app.Updates.CheckAsync();
         if (!IsLoaded) return;
         await ShowUpdateAsync();
@@ -63,19 +64,31 @@ public partial class MainWindow
     public async Task ShowUpdateAsync()
     {
         var app = (App)Application.Current;
-        if (app.UpdateDialogOpen) return;
-        app.UpdateDialogOpen = true;
+        if (app.OpenUpdateDialog is { } open) { BringToFront(open); return; }
+        var updates = app.Updates;
+        var notice = updates.Notice;
+        var dialog = new UpdateDialog(notice, updates.Error, updates.IsReminder) { Owner = this };
+        app.OpenUpdateDialog = dialog;
         try
         {
-            var updates = app.Updates;
-            var notice = updates.Notice;
-            var dialog = new UpdateDialog(notice, updates.Error, updates.IsReminder) { Owner = this };
             // Persist only announcements actually presented, not deferred startup checks.
             var presented = false;
             dialog.ContentRendered += (_, _) => presented = true;
-            dialog.ShowDialog();
+            var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            dialog.Closed += (_, _) => closed.TrySetResult();
+            dialog.Show();
+            // Opened over this window, but owned by none: closing a recording window must not
+            // close the update window or discard its download.
+            dialog.Owner = null;
+            await closed.Task;
             if (presented && notice is not null) await updates.AcknowledgeAsync();
         }
-        finally { app.UpdateDialogOpen = false; }
+        finally { if (app.OpenUpdateDialog == dialog) app.OpenUpdateDialog = null; }
+    }
+
+    private static void BringToFront(Window window)
+    {
+        if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
+        window.Activate();
     }
 }

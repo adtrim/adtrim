@@ -35,7 +35,13 @@ python tools/benchmark-editing.py
 application run (editing, saves, reopening, collapsed playback, export, source
 comments and their progress), open recovery, window lifecycle, window state
 across monitors, the TS workflow, and recordings at paths longer than 260
-characters. It prints a summary with passes, failures, and checks that were
+characters, and signed update downloads/install/restart. The update checks require
+NSIS and build tiny disposable installers with synthetic signing keys. They do
+not change the registered installation or use production signing keys. They verify
+save failures, test-folder isolation, tampering before and after shutdown, PID
+identity, cancellation, failed installation and restart paths. This does not replace
+rehearsing a real release installer in a disposable Windows profile.
+It prints a summary with passes, failures, and checks that were
 skipped or unavailable, such as hardware adapters that are not present or
 multi-monitor checks on a single display. Each check uses its own short folder in
 the temp directory, or below `-Root`; synthetic media and caches are removed when
@@ -45,7 +51,7 @@ and `-Hardware` to include the hardware export checks described below.
 A single check can also be run directly, for example
 `dotnet run --project tools/AdTrim.Smoke -c Release -- --open-recovery`. Modes are
 `--open-recovery`, `--lifecycle`, `--window-state <folder>`, `--ts`,
-`--source-comments` and `--long-path`; no argument runs the full application
+`--source-comments`, `--long-path` and `--updates`; no argument runs the full application
 check. `ADTRIM_SMOKE_ROOT` chooses the folder for synthetic media (at most 100
 characters, so ordinary checks never become long-path tests), and
 `ADTRIM_SMOKE_KEEP_FAILED=1` keeps a failed check's media. The tool removes the

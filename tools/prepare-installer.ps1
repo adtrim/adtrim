@@ -25,3 +25,7 @@ Get-ChildItem -LiteralPath $publish -Directory -Recurse | Sort-Object { $_.FullN
 }
 $output = Join-Path $PSScriptRoot '..\src\AdTrim\obj\uninstall-files.nsh'
 [IO.File]::WriteAllLines([IO.Path]::GetFullPath($output), $lines, [Text.UTF8Encoding]::new($false))
+# The same payload as plain relative paths, installed as install-files.txt for update backups.
+$files = Get-ChildItem -LiteralPath $publish -File -Recurse | Sort-Object FullName | ForEach-Object { $_.FullName.Substring($publish.Length).TrimStart('\') }
+$list = Join-Path $PSScriptRoot '..\src\AdTrim\obj\install-files.txt'
+[IO.File]::WriteAllLines([IO.Path]::GetFullPath($list), [string[]]$files, [Text.UTF8Encoding]::new($false))

@@ -1,5 +1,5 @@
 {
-  "version": "2.1.6",
-  "summary": "Fix window maximize and restore, open recordings at long paths, and keep your edits intact when another file cannot open. Adding source export comments does less file copying and shows progress. Damaged settings can be reset, and update checks recover from damaged cached data.",
+  "version": "2.1.11",
+  "summary": "Download and install updates inside AdTrim. If an update fails, AdTrim can restore the previous version and reopen your recordings. Window titles now show each recording's full path.",
   "advisories": []
 }

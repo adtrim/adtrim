@@ -6,4 +6,5 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup><Compile Include="../../src/AdTrim/Services/UpdateFeed.cs" Link="UpdateFeed.cs"/></ItemGroup>
+  <ItemGroup><Compile Include="../../src/AdTrim/Services/UpdatePackage.cs" Link="UpdatePackage.cs"/><Compile Include="../../src/AdTrim/Services/UpdateStaging.cs" Link="UpdateStaging.cs"/></ItemGroup>
 </Project>

@@ -12,7 +12,7 @@
         SizeChanged="OnWindowSizeChanged"
         StateChanged="OnWindowStateChanged"
         LocationChanged="OnWindowLocationChanged"
-        Title="AdTrim"
+        Title="{Binding WindowTitle, FallbackValue=AdTrim}"
         Icon="pack://application:,,,/icon-512.png"
         Width="1280" Height="720"
         MinWidth="1280" MinHeight="640"
@@ -79,24 +79,38 @@
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
 
-        <!-- Title + filename -->
-        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+        <!-- Title + recording path -->
+        <Grid Grid.Column="0" VerticalAlignment="Center" Margin="14,0,8,0">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
           <!-- App icon -->
           <Image Source="pack://application:,,,/icon-512.png"
                  Width="14" Height="14" Margin="0,0,8,0"
                  RenderOptions.BitmapScalingMode="HighQuality"/>
-          <TextBlock Text="{Binding Title, RelativeSource={RelativeSource AncestorType=Window}}"
+          <TextBlock Grid.Column="1" Text="AdTrim"
                      Foreground="{StaticResource Text.Primary}" FontWeight="Medium" FontSize="13"
                      VerticalAlignment="Center"/>
-          <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+          <Grid Grid.Column="2" VerticalAlignment="Center"
                       Visibility="{Binding IsFileLoaded, Converter={StaticResource Bool2Vis}}">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <TextBlock Text="-" Foreground="{StaticResource Text.Tertiary}" Margin="6,0" VerticalAlignment="Center"/>
-            <TextBlock Text="{Binding FileName}"
+            <ScrollViewer x:Name="TitlePathViewport" Grid.Column="1" HorizontalScrollBarVisibility="Hidden"
+                          VerticalScrollBarVisibility="Disabled" Focusable="False" ClipToBounds="True"
+                          ScrollChanged="OnTitlePathScrollChanged">
+              <TextBlock x:Name="TitleRecordingPath" Text="{Binding SourcePath}"
                        FontFamily="{StaticResource Font.Mono}"
                        Foreground="{StaticResource Text.Secondary}" FontSize="12"
                        VerticalAlignment="Center"/>
-          </StackPanel>
-        </StackPanel>
+            </ScrollViewer>
+            <Border x:Name="TitlePathEllipsis" Grid.Column="1" HorizontalAlignment="Left" VerticalAlignment="Center"
+                    Background="{StaticResource Bg.Surface}" Padding="0,0,2,0" Visibility="Collapsed" IsHitTestVisible="False">
+              <TextBlock Text="…" FontFamily="{StaticResource Font.Mono}" FontSize="12" Foreground="{StaticResource Text.Secondary}"/>
+            </Border>
+          </Grid>
+        </Grid>
 
         <!-- Min / Max / Close -->
         <StackPanel Grid.Column="1" Orientation="Horizontal" shell:WindowChrome.IsHitTestVisibleInChrome="True">

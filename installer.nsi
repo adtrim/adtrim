@@ -35,6 +35,14 @@ RequestExecutionLevel user
 Unicode true
 
 Name "${APPNAME}"
+!if "${APPVERSION}" != "0.0.0-dev"
+VIProductVersion "${APPVERSION}.0"
+VIAddVersionKey /LANG=1033 "ProductName" "AdTrim"
+VIAddVersionKey /LANG=1033 "FileDescription" "AdTrim Setup"
+VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright (C) 2026 Mark Hewitt"
+VIAddVersionKey /LANG=1033 "FileVersion" "${APPVERSION}.0"
+VIAddVersionKey /LANG=1033 "ProductVersion" "${APPVERSION}"
+!endif
 OutFile ".installers\AdTrim-Setup-v${APPVERSION}.exe"
 InstallDir "$LOCALAPPDATA\Programs\${APPNAME}"
 InstallDirRegKey HKCU "Software\${APPNAME}" "InstallDir"
@@ -109,7 +117,15 @@ Section "Install"
   ; Pull the entire publish folder verbatim. NSIS recurses with /r and
   ; preserves subfolder structure (binaries\ffmpeg\, binaries\mpv\,
   ; localization satellite dirs, etc.).
+  ClearErrors
   File /r "${PUBLISH_DIR}\*.*"
+  ; The installation's own file list. In-app updates back up exactly these files
+  ; before installing, and restore them if the update fails or is cancelled.
+  File "/oname=install-files.txt" "src\AdTrim\obj\install-files.txt"
+  IfErrors 0 payloadCopied
+  SetErrorLevel 1
+  Abort "AdTrim files could not be updated. Close AdTrim and run Setup again."
+  payloadCopied:
 
   CreateDirectory "$LOCALAPPDATA\AdTrim"
   ClearErrors
@@ -119,7 +135,9 @@ Section "Install"
   FileClose $0
   IfErrors updateSaveFailed updateSaveDone
   updateSaveFailed:
-  MessageBox MB_OK|MB_ICONSTOP "The update preference could not be saved. Setup cannot finish safely."
+  ; /SD keeps a silent in-app update from waiting on a message box nobody can see.
+  MessageBox MB_OK|MB_ICONSTOP "The update preference could not be saved. Setup cannot finish safely." /SD IDOK
+  SetErrorLevel 1
   Abort
   updateSaveDone:
 
@@ -180,6 +198,7 @@ Section "Uninstall"
 
   skipRegistration:
   !include "src\AdTrim\obj\uninstall-files.nsh"
+  Delete "$INSTDIR\install-files.txt"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
 SectionEnd

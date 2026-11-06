@@ -62,6 +62,28 @@ internal static partial class Program
             try
             {
                 await window.Ready.WaitAsync(TimeSpan.FromSeconds(30));
+                window.UpdateLayout();
+                var titlePath = (TextBlock)window.FindName("TitleRecordingPath");
+                var titleViewport = (ScrollViewer)window.FindName("TitlePathViewport");
+                var minButton = (Button)window.FindName("MinButton");
+                window.WindowState = WindowState.Normal;
+                foreach (var width in new[] { 1280.0, 1600.0, 1280.0 })
+                {
+                    window.Width = width;
+                    window.UpdateLayout();
+                    await window.Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+                    window.UpdateLayout();
+                    var pathBounds = titlePath.TransformToAncestor(window).TransformBounds(new Rect(titlePath.RenderSize));
+                    var controlsBounds = minButton.TransformToAncestor(window).TransformBounds(new Rect(minButton.RenderSize));
+                    var viewportBounds = titleViewport.TransformToAncestor(window).TransformBounds(new Rect(titleViewport.RenderSize));
+                    Require(window.Title == "AdTrim - " + source && titlePath.Text == source
+                        && viewportBounds.Right <= controlsBounds.Left && titleViewport.ScrollableWidth > 0
+                        && ((Border)window.FindName("TitlePathEllipsis")).Visibility == Visibility.Visible
+                        && Math.Abs(titleViewport.HorizontalOffset - titleViewport.ScrollableWidth) < 1
+                        && pathBounds.Right <= viewportBounds.Right + 1 && pathBounds.Right >= viewportBounds.Right - 1,
+                        $"{kind}: resizing to {width} shows a leading ellipsis and keeps the path's final character visible without overlapping controls");
+                }
+                Capture(window, Path.Combine(SmokeRoot(), $"title-{kind}.png"));
                 var vm = (MainViewModel)window.DataContext;
                 Require(vm.IsFileLoaded && vm.SourcePath == source && vm.Segments.Any(s => s.IsExcluded),
                     $"{kind}: opening loads the recording and its long-path sidecar");

@@ -4,7 +4,8 @@ Runs every AdTrim UI smoke check, each in its own process, and removes the synth
 
 .DESCRIPTION
 Checks: the full application run (editing, saves, collapsed playback, export, source comments and
-progress), open recovery, window lifecycle, window state across monitors, TS workflow and long paths.
+progress), open recovery, window lifecycle, window state across monitors, TS workflow, long paths,
+and signed update download/install/restart (requires NSIS).
 Each check gets its own short folder below -Root. Folders are removed after each check unless it
 failed and -KeepFailedFixtures was given. Unit tests, the playback probe and verify-ts.ps1 are separate.
 
@@ -60,6 +61,7 @@ $checks = [ordered]@{
     'window-state' = @('--window-state', '{dir}\window')
     'ts' = @('--ts')
     'long-path' = @('--long-path')
+    'updates' = @('--updates')
 }
 $saved = @{}
 foreach ($name in 'ADTRIM_SMOKE_ROOT', 'ADTRIM_SMOKE_KEEP_FAILED', 'ADTRIM_TEST_HARDWARE') { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }

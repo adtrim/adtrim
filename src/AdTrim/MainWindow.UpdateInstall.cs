@@ -1,0 +1,63 @@
+using System.Runtime.InteropServices;
+using System.Windows.Interop;
+using AdTrim.ViewModels;
+
+namespace AdTrim;
+
+public partial class MainWindow
+{
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindowEnabled(IntPtr window);
+
+    /// <summary>
+    /// A Windows message box or file dialog disables its owner window natively; WPF does not list it
+    /// among OwnedWindows. Restarting underneath it would close the window inside the dialog's loop.
+    /// </summary>
+    public bool IsBlockedByDialog => new WindowInteropHelper(this).Handle is var handle && handle != IntPtr.Zero && !IsWindowEnabled(handle);
+
+    public bool CanRestartForUpdate => _ready.Task.IsCompletedSuccessfully && !_switching && !_hydrating && !_allowClose
+        && _openingPath is null && _activeExportDialog is null
+        && OwnedWindows.Cast<System.Windows.Window>().All(w => w is Views.UpdateDialog)
+        && DataContext is MainViewModel { IsBusy: false };
+
+    public async Task<bool> SaveForUpdateAsync()
+    {
+        if (!CanRestartForUpdate || DataContext is not MainViewModel vm) return false;
+        ResetShuttle();
+        _previewAfter.Pause();
+        _previewBefore.Pause();
+        _autosaveTimer.Stop();
+        _switching = true;
+        vm.IsBusy = true;
+        vm.BusyOperation = "Preparing update";
+        while (_saveInProgress) await Task.Delay(25);
+        if (!await SavePreferencesAsync(vm)) return false;
+        return await SaveProjectAsync(vm) && !vm.IsDirty;
+    }
+
+    public void CancelUpdatePreparation()
+    {
+        _switching = false;
+        if (DataContext is MainViewModel vm)
+        {
+            vm.IsBusy = false;
+            vm.BusyOperation = null;
+            if (vm.IsDirty) _autosaveTimer.Start();
+        }
+        IsEnabled = true;
+    }
+
+    public void CloseForUpdate()
+    {
+        _refineCts?.Cancel();
+        _frameRecovery?.Cancel();
+        if (DataContext is MainViewModel vm)
+        {
+            ReleaseAudioPass(vm);
+            CancelThumbnailLoad(vm, false);
+        }
+        _allowClose = true;
+        Close();
+    }
+}
