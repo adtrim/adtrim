@@ -12,7 +12,9 @@ using AdTrim.ViewModels;
 
 internal static partial class Program
 {
-    private static int CaptureWebsite(string original, string output)
+    /// <param name="recordingFolder">Optional existing folder for the disposable copy. The title bar shows the
+    /// recording's full path, so screenshots should use a plain folder rather than this tool's output directory.</param>
+    private static int CaptureWebsite(string original, string output, string? recordingFolder = null)
     {
         original = Path.GetFullPath(original);
         output = Path.GetFullPath(output);
@@ -21,7 +23,10 @@ internal static partial class Program
         Directory.CreateDirectory(scratch);
         byte[] HashSource() { using var stream = File.OpenRead(original); return SHA256.HashData(stream); }
         var originalHash = HashSource();
-        var source = Path.Combine(scratch, "Big Buck Bunny (2008).mp4");
+        var copyFolder = recordingFolder is null ? scratch : Path.GetFullPath(recordingFolder);
+        if (!Directory.Exists(copyFolder)) throw new DirectoryNotFoundException("The recording folder must already exist: " + copyFolder);
+        var source = Path.Combine(copyFolder, "Big Buck Bunny (2008).mp4");
+        if (File.Exists(source)) throw new IOException("The recording folder already contains the sample copy: " + source);
         File.Copy(original, source);
         Environment.SetEnvironmentVariable("ADTRIM_DATA_DIR", Path.Combine(scratch, "settings"));
         UpdatePreferences.Save(UserPreferences.DataDirectory, false);
@@ -100,6 +105,10 @@ internal static partial class Program
         // This directory is created by this invocation and contains only its disposable copy.
         if (Path.GetDirectoryName(scratch) == Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory))
             Directory.Delete(scratch, true);
+        // In a caller's folder, remove only the copy and the sidecar this run created beside it.
+        if (recordingFolder is not null)
+            foreach (var created in new[] { source, source + ".adt.json" })
+                if (File.Exists(created)) File.Delete(created);
         return result;
     }
 

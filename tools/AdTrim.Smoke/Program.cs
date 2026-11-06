@@ -45,6 +45,7 @@ internal static partial class Program
         if (args.Length == 2 && args[0] == "--check-sidecar-preference")
             return UserPreferences.LoadAsync().GetAwaiter().GetResult().DeleteSidecarAfterExport == bool.Parse(args[1]) ? 0 : 1;
         if (args.Length == 3 && args[0] == "--website") return CaptureWebsite(args[1], args[2]);
+        if (args.Length == 4 && args[0] == "--website") return CaptureWebsite(args[1], args[2], args[3]);
         if (args.Length == 1 && args[0] == "--ts") return RunTransportStreamSmoke();
         if (args.Length == 1 && args[0] == "--source-comments") return RunSourceCommentSmoke();
         if (args.Length == 1 && args[0] == "--long-path") return RunLongPathSmoke();
