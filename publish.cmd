@@ -49,6 +49,11 @@ echo Checking FFmpeg version...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0check-ffmpeg-version.ps1" -FfmpegDir "%FFMPEG_DIR%"
 if errorlevel 1 goto :bad_ffmpeg_version
 
+REM The self-contained publish bundles the .NET runtime pinned in the project.
+echo Checking .NET runtime pin...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\check-runtime-version.ps1" -Project "%PROJECT%"
+if errorlevel 1 exit /b 1
+
 REM Wipe any leftovers from previous publish runs. `dotnet publish` writes
 REM the new build's files but does NOT remove files that aren't part of
 REM the current build -- so after a project rename (e.g. ComSkipEditor to
@@ -106,12 +111,12 @@ exit /b 0
 
 :missing_ffmpeg
 echo ERROR: ffmpeg.exe not found at "%FFMPEG_DIR%\ffmpeg.exe"
-echo Set ADTRIM_FFMPEG_DIR to a folder containing ffmpeg.exe + ffprobe.exe.
+echo See binaries\README.md for where to get it.
 exit /b 1
 
 :missing_ffprobe
 echo ERROR: ffprobe.exe not found at "%FFMPEG_DIR%\ffprobe.exe"
-echo Set ADTRIM_FFMPEG_DIR to a folder containing ffmpeg.exe + ffprobe.exe.
+echo See binaries\README.md for where to get it.
 exit /b 1
 
 :bad_native_payload

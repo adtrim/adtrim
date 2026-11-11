@@ -5,7 +5,7 @@
     <AdTrimAssemblyVersion>2.1.11.0</AdTrimAssemblyVersion>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
-    <RuntimeFrameworkVersion>10.0.12</RuntimeFrameworkVersion>
+    <RuntimeFrameworkVersion>10.0.15</RuntimeFrameworkVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
@@ -49,9 +49,8 @@
   </ItemGroup>
 
   <!-- Copy the entire bundled-binaries tree (FFmpeg/ffprobe) into the output directory.
-       The tree is intentionally created empty in the repo; a one-time install step
-       drops the actual gyan.dev "full" Windows build into binaries/ffmpeg/win-x64/.
-       See binaries/README.md. -->
+       The binaries are not in Git; binaries/README.md says where the recorded
+       source builds come from and where to place them. -->
   <ItemGroup Condition="Exists('$(BinariesDir)')">
     <Content Include="$(BinariesDir)\**\*.*">
       <Link>binaries\%(RecursiveDir)%(Filename)%(Extension)</Link>
