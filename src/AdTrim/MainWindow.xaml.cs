@@ -806,10 +806,15 @@ public partial class MainWindow : Window
             {
                 if (loadResult.Status is SidecarLoadStatus.Corrupt or SidecarLoadStatus.FingerprintMismatch or SidecarLoadStatus.UnsupportedVersion)
                 {
+                    // A retagged or restored recording fails the identity check although its markers may still fit.
+                    var earlier = loadResult.Status == SidecarLoadStatus.FingerprintMismatch
+                        ? _store.LoadForChangedRecording(path, probed.DurationUs) : null;
                     vm.Banner = new BannerInfo(StatusKind.Warning,
                         "Project sidecar was not loaded.",
-                        loadResult.Message ?? "Falling back to embedded chapters.",
-                        Array.Empty<BannerAction>());
+                        earlier is null ? loadResult.Message ?? "Falling back to embedded chapters."
+                            : "The recording's size or duration changed since this project was saved, so its markers were not loaded.",
+                        earlier is null ? Array.Empty<BannerAction>()
+                            : new[] { new BannerAction("Use these markers anyway", () => UseEarlierProject(vm, path, earlier)) });
                 }
                 vm.StatusOverride = "Importing chapters…";
                 if (_preferences.NewFileMarkerSource == NewFileMarkerSource.AdTrim)
@@ -1260,6 +1265,15 @@ public partial class MainWindow : Window
             vm.BusyOperation = previousOperation;
             vm.ProgressPercent = previousProgress;
         }
+    }
+
+    private void UseEarlierProject(MainViewModel vm, string path, AdTrimProject earlier)
+    {
+        if (vm.IsBusy || !string.Equals(vm.SourcePath, path, StringComparison.OrdinalIgnoreCase)) return;
+        var state = new MarkerSetState(earlier.Splits, earlier.ExcludedSegmentIds, earlier.StartChapterTitle, earlier.MarkerSetSource,
+            earlier.MarkerBaselineId?.StartsWith("v2:", StringComparison.Ordinal) == true ? earlier.MarkerBaselineId : null);
+        vm.Banner = null;
+        ApplyMarkerSet(vm, state, "Use markers from the earlier project", confirm: false);
     }
 
     private void ApplyMarkerSet(MainViewModel vm, MarkerSetState state, string action, bool confirm)

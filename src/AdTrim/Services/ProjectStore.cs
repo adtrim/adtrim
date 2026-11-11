@@ -88,6 +88,40 @@ public sealed class ProjectStore
     }
 
     /// <summary>
+    /// The newest project saved for an earlier size or duration of this recording, with its markers
+    /// fitted to the current duration. Null when there is none this version can read.
+    /// </summary>
+    public AdTrimProject? LoadForChangedRecording(string sourcePath, long durationUs)
+    {
+        foreach (var path in CandidateSidecarPathsFor(sourcePath).Where(File.Exists).OrderByDescending(File.GetLastWriteTimeUtc))
+        {
+            try
+            {
+                var project = JsonSerializer.Deserialize<AdTrimProject>(File.ReadAllBytes(path), JsonOpts);
+                if (project is not null && project.SchemaVersion <= AdTrimProject.CurrentSchemaVersion && Validate(project) is null)
+                    return FitToDuration(project, durationUs);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
+        }
+        return null;
+    }
+
+    // Markers past the new end are dropped. Exclusions are named by their times, and the last
+    // section ends at the duration, so they are renamed for the new end.
+    internal static AdTrimProject FitToDuration(AdTrimProject project, long durationUs)
+    {
+        var times = project.Splits.Select(s => s.TimeUs).Prepend(0).Append(project.Fingerprint.DurationUs).ToArray();
+        var excluded = new List<string>();
+        for (int i = 0; i + 1 < times.Length; i++)
+        {
+            long start = times[i], end = times[i + 1];
+            if (start >= durationUs || !project.ExcludedSegmentIds.Contains($"segment-{start}-{end}")) continue;
+            excluded.Add($"segment-{start}-{(i + 2 == times.Length || end >= durationUs ? durationUs : end)}");
+        }
+        return project with { Splits = project.Splits.Where(s => s.TimeUs < durationUs).ToList(), ExcludedSegmentIds = excluded };
+    }
+
+    /// <summary>
     /// Project files for this recording that this version can read and that describe the recording as
     /// it is now. Unreadable, newer and mismatched projects may be someone's only copy and are not listed.
     /// </summary>

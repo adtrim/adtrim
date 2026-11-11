@@ -273,4 +273,36 @@ public class ProjectStoreTests : IDisposable
         Assert.Single(Directory.EnumerateFiles(rollback, "manifest.damaged-*.json"));
         Assert.Contains("schema2", File.ReadAllText(Path.Combine(rollback, "manifest.json")));
     }
+
+    // "Use these markers anyway": the earlier project is offered for the recording as it is now.
+    [Theory]
+    [InlineData(1_830_000_000L)]
+    [InlineData(1_000_000_000L)]
+    [InlineData(2_000_000_000L)]
+    public void EarlierProject_IsFittedToTheRecordingsCurrentDuration(long durationNow)
+    {
+        var store = new ProjectStore(Path.Combine(_testDir, "data-fit", "projects"));
+        var saved = new AdTrimProject(AdTrimProject.CurrentSchemaVersion, _sourcePath, ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs), _media,
+            new()
+            {
+                new PersistedSplit("a", 600_000_000, SplitSource.Manual, null, null, true, "Break"),
+                new PersistedSplit("b", 900_000_000, SplitSource.Manual, null, null, true),
+                new PersistedSplit("c", 1_500_000_000, SplitSource.Manual, null, null, false),
+            },
+            new() { "segment-600000000-900000000", "segment-1500000000-1830000000" }, SidecarLocation.NextToSource);
+        store.Save(saved);
+        File.AppendAllText(_sourcePath, "retagged");
+
+        var fitted = store.LoadForChangedRecording(_sourcePath, durationNow)!;
+
+        Assert.All(fitted.Splits, s => Assert.InRange(s.TimeUs, 1, durationNow - 1));
+        Assert.Contains("segment-600000000-900000000", fitted.ExcludedSegmentIds);
+        Assert.Equal(durationNow > 1_500_000_000 ? 3 : 2, fitted.Splits.Count);
+        // The closing section keeps its exclusion under its new end, or goes with its marker.
+        if (durationNow > 1_500_000_000) Assert.Contains($"segment-1500000000-{durationNow}", fitted.ExcludedSegmentIds);
+        else Assert.Single(fitted.ExcludedSegmentIds);
+        // What comes back must be a project the editor accepts for the new duration.
+        var asNow = fitted with { Fingerprint = fitted.Fingerprint with { DurationUs = durationNow }, Media = _media with { DurationUs = durationNow } };
+        Assert.Null(ProjectStore.Validate(asNow));
+    }
 }
