@@ -30,27 +30,29 @@ public sealed class ReplaceMarkerSetCommand : IEditCommand
     private readonly MarkerSetState _before;
     private readonly MarkerSetState _after;
     private readonly string _description;
+    // Commands on either side of this one hold these marker objects and their ids, so undo and
+    // redo put the same objects back instead of building look-alikes.
+    private readonly Split[] _beforeMarkers;
+    private Split[]? _afterMarkers;
 
     public ReplaceMarkerSetCommand(MainViewModel vm, MarkerSetState after, string description)
     {
         _vm = vm;
         _before = Capture(vm);
+        _beforeMarkers = vm.Markers.ToArray();
         _after = after;
         _description = description;
     }
 
     public string Description => _description;
-    public void Do() => Apply(_after);
-    public void Undo() => Apply(_before);
-    private void Apply(MarkerSetState state)
+    public void Do() => Apply(_after, _afterMarkers ??= Build(_after));
+    public void Undo() => Apply(_before, _beforeMarkers);
+
+    private Split[] Build(MarkerSetState state)
     {
-        _vm.ClearSelection();
-        _vm.Markers.Clear();
-        _vm.Segments.Clear();
-        _vm.ExcludedSegmentIds.Clear();
-        _vm.Markers.Add(new Split { TimeUs = 0, Confirmed = true, Label = "Start", ChapterTitle = state.StartChapterTitle });
+        var markers = new List<Split> { new() { TimeUs = 0, Confirmed = true, Label = "Start", ChapterTitle = state.StartChapterTitle } };
         foreach (var split in state.Splits.OrderBy(s => s.TimeUs))
-            _vm.Markers.Add(new Split
+            markers.Add(new Split
             {
                 Id = split.Id,
                 TimeUs = split.TimeUs,
@@ -60,7 +62,17 @@ public sealed class ReplaceMarkerSetCommand : IEditCommand
                 Confirmed = split.Confirmed,
                 ChapterTitle = split.ChapterTitle,
             });
-        _vm.Markers.Add(new Split { TimeUs = _vm.DurationUs, Confirmed = true, Label = "End" });
+        markers.Add(new Split { TimeUs = _vm.DurationUs, Confirmed = true, Label = "End" });
+        return markers.ToArray();
+    }
+
+    private void Apply(MarkerSetState state, Split[] markers)
+    {
+        _vm.ClearSelection();
+        _vm.Markers.Clear();
+        _vm.Segments.Clear();
+        _vm.ExcludedSegmentIds.Clear();
+        foreach (var marker in markers) _vm.Markers.Add(marker);
         foreach (var id in state.ExcludedSegmentIds) _vm.ExcludedSegmentIds.Add(id);
         _vm.MarkerSetSource = state.Source;
         _vm.MarkerBaselineId = state.BaselineId;

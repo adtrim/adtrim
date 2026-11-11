@@ -41,6 +41,62 @@ public sealed class MarkerSetCommandTests
         Assert.Single(vm.Segments, s => s.IsExcluded);
     }
 
+    private static MainViewModel Recording()
+    {
+        var vm = new MainViewModel { DurationUs = 100_000_000 };
+        vm.Markers.Add(new Split { TimeUs = 0, Label = "Start" });
+        vm.Markers.Add(new Split { TimeUs = 20_000_000 });
+        vm.Markers.Add(new Split { TimeUs = 100_000_000, Label = "End" });
+        vm.RebuildSegmentsFromSplits();
+        return vm;
+    }
+
+    // Edits made before the markers were replaced must still undo afterwards: the opening and
+    // closing sections are the ones people exclude, and they sit next to the start and end markers.
+    [Fact]
+    public void EditsMadeBeforeAReplacementStillUndoAndRedoAfterIt()
+    {
+        var vm = Recording();
+        vm.CommandStack.Execute(new ToggleExcludedCommand(vm, vm.Segments[0]));
+        vm.CommandStack.Execute(new AddSplitCommand(vm, 50_000_000, SplitSource.Manual));
+        vm.CommandStack.Execute(new ClearAllMarkingsCommand(vm));
+
+        vm.CommandStack.Undo();
+        Assert.Equal(new long[] { 0, 20_000_000, 50_000_000, 100_000_000 }, vm.Markers.Select(m => m.TimeUs));
+        Assert.True(vm.Segments[0].IsExcluded);
+        vm.CommandStack.Undo();
+        Assert.Equal(new long[] { 0, 20_000_000, 100_000_000 }, vm.Markers.Select(m => m.TimeUs));
+        Assert.True(vm.Segments[0].IsExcluded);
+        vm.CommandStack.Undo();
+        Assert.DoesNotContain(vm.Segments, s => s.IsExcluded);
+
+        while (vm.CommandStack.Redo()) { }
+        Assert.DoesNotContain(vm.Markers, m => !m.IsBookend);
+        vm.CommandStack.Undo();
+        Assert.Equal(new long[] { 0, 20_000_000, 50_000_000, 100_000_000 }, vm.Markers.Select(m => m.TimeUs));
+        Assert.True(vm.Segments[0].IsExcluded);
+    }
+
+    [Fact]
+    public void EditsMadeAfterAReplacementSurviveUndoingAndRedoingIt()
+    {
+        var vm = Recording();
+        var suggested = new MarkerSetState(
+            new[] { new PersistedSplit("ad-start", 40_000_000, SplitSource.Manual, null, Confidence.High, false) },
+            Array.Empty<string>(), null, MarkerSetSource.AdTrim, "baseline");
+        vm.CommandStack.Execute(new ReplaceMarkerSetCommand(vm, suggested, "Analyze ad breaks"));
+        var marker = vm.Markers.Single(m => m.TimeUs == 40_000_000);
+        vm.CommandStack.Execute(new DeleteSplitCommand(vm, marker));
+
+        vm.CommandStack.Undo();
+        vm.CommandStack.Undo();
+        vm.CommandStack.Redo();
+        vm.CommandStack.Redo();
+        Assert.DoesNotContain(vm.Markers, m => !m.IsBookend);
+        vm.CommandStack.Undo();
+        Assert.Equal(new long[] { 0, 40_000_000, 100_000_000 }, vm.Markers.Select(m => m.TimeUs));
+    }
+
     [Fact]
     public void ResetLeavesOneIncludedSectionAndCanBeUndone()
     {
