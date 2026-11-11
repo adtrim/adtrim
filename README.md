@@ -4,7 +4,7 @@ A Windows desktop editor for trimming commercials out of recorded TV - designed 
 
 AdTrim is a *manual* editor: you mark the cut points, review transitions, and export. **Analyze ad breaks** can suggest where the breaks are, but its suggestions are experimental markers for you to review; it never excludes anything on its own. It's the tool you reach for when you want frame-accurate control over the output, or when an automatic tool got it 95% right and you want to clean up the last 5%.
 
-> **Status:** v1.1 - usable but rough. Built primarily for one person's workflow (mine). Released publicly because others may find it useful.
+> **Status:** usable but rough. Built primarily for one person's workflow (mine). Released publicly because others may find it useful.
 
 > **Repository:** [github.com/adtrim/adtrim](https://github.com/adtrim/adtrim). File issues and pull requests there.
 
@@ -12,7 +12,7 @@ AdTrim is a *manual* editor: you mark the cut points, review transitions, and ex
 
 ## What it does
 
-- **Loads** `.mp4` and single-program MPEG transport stream (`.ts`) recordings without re-muxing the source. TS files containing multiple programs are rejected rather than selecting an unrelated audio track. Detected packet corruption and timestamp resets are rejected to avoid incomplete or shifted edits.
+- **Loads** `.mp4` and single-program MPEG transport stream (`.ts`) recordings without re-muxing the source. TS files containing multiple programs are rejected rather than selecting an unrelated audio track. Recordings with damaged packets still open and export; the damage is carried into the output.
 - **Imports chapters** from MP4 files that already have `Commercial X` / `Part X` chapter atoms (e.g. Plex DVR post-processed output) and uses them as starting cut points.
 - **Separate recording windows** - use File > New window (Ctrl+N), or launch AdTrim again. Each window edits one recording. Opening a file from Explorer reuses an empty window or opens another; opening the same recording again activates its existing window.
 - **Timeline editing** - drop split markers, drag them to refine, toggle segments as kept/excluded, undo/redo freely.
@@ -52,7 +52,7 @@ Export temporary files are tracked and removed after success, failure, or cancel
 - No automatic cutting. Ad break suggestions only add markers, can miss or misplace breaks, and remain included until you exclude them. Chapters from a separate tool like [Comskip](https://www.kaashoek.com/comskip/) can also be imported as starting points.
 - No batch mode. One file at a time.
 - No frame-accurate audio cuts. Audio is stream-copied (AC3), which is packet-accurate, so cut boundaries can slip by up to ~32 ms. This is fine for commercial-trimming; not appropriate for music-video editing.
-- No direct `.ts`/`.mkv` editing yet.
+- No `.mkv` or other containers. MP4 and single-program TS only.
 - No support for non-Windows platforms. WPF + Windows-only video stack.
 
 ---
@@ -61,7 +61,7 @@ Export temporary files are tracked and removed after success, failure, or cancel
 
 Download the latest installer from the [Releases](https://github.com/adtrim/adtrim/releases) page and run it.
 
-The installer is unsigned (no code-signing certificate yet), so Windows SmartScreen will warn you the first time you run it. Click "More info" → "Run anyway" to proceed. The bundled binaries (ffmpeg, ffprobe, libmpv) are pulled from upstream public builds - see [Bundled components](#bundled-components) below.
+The installer is unsigned (no code-signing certificate yet), so Windows SmartScreen will warn you the first time you run it. Click "More info" → "Run anyway" to proceed. The bundled binaries (ffmpeg, ffprobe, libmpv) are built from source - see [Bundled components](#bundled-components) below.
 
 New installations default to `%LOCALAPPDATA%\Programs\AdTrim`. Updates retain the existing installation folder, including the old `%LOCALAPPDATA%\AdTrim` location, so existing shortcuts keep working. Available updates offer Download update, then Restart and update: AdTrim verifies the installer, saves open projects, backs up the current version, updates and reopens the recordings. If the update fails, the update window offers Retry or Cancel update, which restores the previous version. Finish exports first. You can also close AdTrim and run the newer installer; no separate uninstall is needed. Older clients need one manual upgrade to gain in-app installation. Settings, saved projects, and caches remain under `%LOCALAPPDATA%\AdTrim`. The uninstaller removes only installation-owned files and leaves user data in place. Upgrades do not run the legacy recursive uninstaller. See [update verification](docs/update-notifications.md).
 
@@ -132,8 +132,8 @@ The installer redistributes the following third-party binaries:
 
 | Component | License | Source |
 |---|---|---|
-| FFmpeg (with libx264) | GPL v2 or later | [gyan.dev "full" Windows build](https://www.gyan.dev/ffmpeg/builds/) |
-| libmpv | GPL v2 or later | [shinchiro Windows builds](https://sourceforge.net/projects/mpv-player-windows/files/libmpv/) |
+| FFmpeg and ffprobe (with libx264) | GPL v3 | Built from source; see [binaries/README.md](binaries/README.md) |
+| libmpv | GPL v3 | Built from source with one patch; see [binaries/README.md](binaries/README.md) |
 
 License notices for redistributed binaries are installed under the app's `licenses` folder.
 

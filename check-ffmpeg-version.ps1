@@ -61,7 +61,7 @@ foreach ($exe in @('ffmpeg.exe', 'ffprobe.exe')) {
 
     $found = [version]::new([int]$Matches[1], [int]$Matches[2], $(if ($Matches[3]) { [int]$Matches[3] } else { 0 }))
     if ($found -lt $floor) {
-        Write-Host "ERROR: $exe is $found, below the required $MinVersion (CVE-2026-8461). See binaries/README.md."
+        Write-Host "ERROR: $exe is $found, below the required $MinVersion. See binaries/README.md."
         exit 1
     }
 

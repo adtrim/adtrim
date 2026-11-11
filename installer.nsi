@@ -47,12 +47,9 @@ OutFile ".installers\AdTrim-Setup-v${APPVERSION}.exe"
 InstallDir "$LOCALAPPDATA\Programs\${APPNAME}"
 InstallDirRegKey HKCU "Software\${APPNAME}" "InstallDir"
 
-; Per-file LZMA: ~30-60 sec compression, installer ~300 MB.
-;
-; Solid LZMA (SetCompressor /SOLID lzma) gets the installer down to ~200 MB
-; but takes 5-10 min of single-threaded CPU on the 770 MB publish payload.
-; Per-file is the iteration-friendly default; switch to /SOLID lzma when
-; you actually want to share the installer and the build time is worth it.
+; Per-file LZMA: about 83 MB for the 273 MB publish payload (measured at v2.1.11).
+; Solid LZMA (SetCompressor /SOLID lzma) compresses further but is much slower;
+; it has not been measured on the current payload.
 SetCompressor lzma
 
 !include "MUI2.nsh"

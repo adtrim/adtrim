@@ -221,7 +221,8 @@ try {
 
     Write-Host ""
     if ($gate -eq 0) {
-        Write-Host "All set. binaries/ is ready - run publish.cmd && installer.cmd to release."
+        Write-Host "Downloaded. These are third-party development builds: publish.cmd rejects them unless"
+        Write-Host "binaries/native-build.json records their hashes. See binaries/README.md."
     } else {
         Write-Host "NOTE: the ffmpeg just installed does NOT clear the build gate (see above)."
         Write-Host "publish.cmd will refuse to build until a passing release is available."
