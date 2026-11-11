@@ -108,8 +108,20 @@ public partial class App : Application
         DispatcherUnhandledException += (_, args) =>
         {
             WriteCrashLog("Dispatcher.UnhandledException", args.Exception);
-            // Let WPF still terminate; we've captured what we need.
+            // One failed action must not close every recording window and end their exports.
+            // Startup failures and a run of failures still end the app.
+            var now = DateTime.UtcNow;
+            _recentFailures.RemoveAll(t => now - t > TimeSpan.FromSeconds(30));
+            _recentFailures.Add(now);
+            var window = Windows.OfType<MainWindow>().FirstOrDefault(w => w.IsActive) ?? Windows.OfType<MainWindow>().FirstOrDefault();
+            if (_recentFailures.Count > 3 || window?.DataContext is not ViewModels.MainViewModel vm) return;
+            vm.Banner = new Models.BannerInfo(Models.StatusKind.Danger, "That action did not finish.",
+                $"AdTrim ran into an unexpected problem: {args.Exception.Message} Your saved edits are not affected. "
+                + "If something looks wrong, close and reopen this recording.",
+                new[] { new Models.BannerAction("Show log", () => RevealCrashLog()) });
+            args.Handled = true;
         };
+        SessionEnding += (_, _) => { foreach (var window in Windows.OfType<MainWindow>()) window.SaveForSessionEnd(); };
         TaskScheduler.UnobservedTaskException += (_, args) =>
             WriteCrashLog("TaskScheduler.UnobservedTaskException", args.Exception);
     }
@@ -118,11 +130,22 @@ public partial class App : Application
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "AdTrim", "crash-log.txt");
 
+    private readonly List<DateTime> _recentFailures = new();
+
+    private static void RevealCrashLog()
+    {
+        try { System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{CrashLogPath}\""); }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException) { }
+    }
+
     internal static void WriteCrashLog(string source, Exception? ex)
     {
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(CrashLogPath)!);
+            // Keep the newest entries only; the previous log stays beside it once.
+            if (File.Exists(CrashLogPath) && new FileInfo(CrashLogPath).Length > 1_048_576)
+                File.Move(CrashLogPath, CrashLogPath + ".old", overwrite: true);
             var msg = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {source}\n{ex}\n\n";
             File.AppendAllText(CrashLogPath, msg);
         }
@@ -157,6 +180,9 @@ public partial class App : Application
             resume = Services.UpdateInstallation.ReadResume(Services.UserPreferences.DataDirectory, resumeDirectory, AppVersion.Numeric);
         }
         var path = resume is not null ? resume.Recordings.FirstOrDefault() : e.Args.Length > 0 ? e.Args[0] : null;
+        // A relative path means this folder, not the folder of an AdTrim that is already running.
+        if (resume is null && !string.IsNullOrWhiteSpace(path))
+            try { path = Path.GetFullPath(path); } catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { }
         // Keep window routing and shared preferences in one process.
         _singleInstanceMutex = new Mutex(initiallyOwned: true, name: MutexName, out var createdNew);
         if (!createdNew)

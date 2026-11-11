@@ -59,8 +59,9 @@ public static class ShowProfile
         var x = Columns(columns, n);
 
         var seed = Add(Rank(rate), Rank(typicality));
-        var program = Runs(seed.Select(v => v <= Quantile(seed, .5)).ToArray(), 60);
-        var ad = Runs(seed.Select(v => v >= Quantile(seed, .85)).ToArray(), 20);
+        double median = Quantile(seed, .5), high = Quantile(seed, .85);
+        var program = Runs(seed.Select(v => v <= median).ToArray(), 60);
+        var ad = Runs(seed.Select(v => v >= high).ToArray(), 20);
         double[] raw = [];
         for (int round = 0; round < Rounds; round++)
         {

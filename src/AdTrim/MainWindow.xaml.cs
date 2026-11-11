@@ -638,7 +638,16 @@ public partial class MainWindow : Window
 
     public async Task OpenFileAsync(string path)
     {
-        if (!File.Exists(path)) { _openingPath = null; return; }
+        if (!File.Exists(path) || !ExportFormats.IsSupportedSource(path))
+        {
+            _openingPath = null;
+            // Explorer's Open with, the command line and the unexported list can all name such a file.
+            if (DataContext is MainViewModel told)
+                Notice(told, StatusKind.Warning, File.Exists(path)
+                    ? $"{Path.GetFileName(path)} was not opened. AdTrim opens MP4 and TS recordings."
+                    : $"{Path.GetFileName(path)} was not found. It may have been moved or deleted.");
+            return;
+        }
         path = Path.GetFullPath(path);
         if (Application.Current is App exportingApp && exportingApp.IsExportDestination(path))
         {
@@ -1415,11 +1424,7 @@ public partial class MainWindow : Window
         if (_store is null || _media is null || vm.SourcePath is null || _sourceFingerprint is null) return false;
         var revision = vm.Revision;
         var source = vm.SourcePath;
-        var snapshot = new AdTrimProject(AdTrimProject.CurrentSchemaVersion, source, _sourceFingerprint, _media,
-            vm.Markers.Where(m => !m.IsBookend).Select(m => new PersistedSplit(m.Id, m.TimeUs,
-                m.Source, m.OriginalTimeUs, m.Confidence, m.Confirmed, m.ChapterTitle)).ToList(),
-            vm.ExcludedSegmentIds.ToList(), SidecarLocation.NextToSource, vm.Markers.FirstOrDefault()?.ChapterTitle,
-            vm.MarkerSetSource, vm.MarkerBaselineId, vm.LastExport);
+        var snapshot = Snapshot(vm, source, _sourceFingerprint, _media);
         _saveInProgress = true;
         vm.SaveStatus = "Saving";
         try
@@ -1439,6 +1444,31 @@ public partial class MainWindow : Window
             return false;
         }
         finally { _saveInProgress = false; }
+    }
+
+    private static AdTrimProject Snapshot(MainViewModel vm, string source, SourceFingerprint fingerprint, MediaInfo media)
+        => new(AdTrimProject.CurrentSchemaVersion, source, fingerprint, media,
+            vm.Markers.Where(m => !m.IsBookend).Select(m => new PersistedSplit(m.Id, m.TimeUs,
+                m.Source, m.OriginalTimeUs, m.Confidence, m.Confirmed, m.ChapterTitle)).ToList(),
+            vm.ExcludedSegmentIds.ToList(), SidecarLocation.NextToSource, vm.Markers.FirstOrDefault()?.ChapterTitle,
+            vm.MarkerSetSource, vm.MarkerBaselineId, vm.LastExport);
+
+    /// <summary>
+    /// Windows is logging off or shutting down and does not wait for the usual close, which saves in
+    /// the background. Saves this window's pending edits now.
+    /// </summary>
+    internal void SaveForSessionEnd()
+    {
+        _autosaveTimer.Stop();
+        if (_hydrating || _saveInProgress || DataContext is not MainViewModel { IsDirty: true } vm) return;
+        if (_store is null || _media is null || vm.SourcePath is null || _sourceFingerprint is null) return;
+        try
+        {
+            _store.Save(Snapshot(vm, vm.SourcePath, _sourceFingerprint, _media));
+            vm.IsDirty = false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        { App.WriteCrashLog("Save at Windows shutdown", ex); }
     }
 
     private async Task<bool> FlushBeforeLeavingAsync(MainViewModel vm)
@@ -2148,16 +2178,18 @@ public partial class MainWindow : Window
     private void OnPreviousSplit(object sender, RoutedEventArgs e)
     {
         if (DataContext is not MainViewModel vm) return;
+        long near = NearPlayheadUs(vm);
         var previous = vm.Markers.Select(m => vm.ToDisplayTime(m.TimeUs))
-            .Where(t => t < vm.TimelinePositionUs).DefaultIfEmpty(0).Max();
+            .Where(t => t < vm.TimelinePositionUs - near).DefaultIfEmpty(0).Max();
         SeekTo(vm, vm.ToSourceTime(previous));
     }
 
     private void OnNextSplit(object sender, RoutedEventArgs e)
     {
         if (DataContext is not MainViewModel vm) return;
+        long near = NearPlayheadUs(vm);
         var next = vm.Markers.Select(m => vm.ToDisplayTime(m.TimeUs))
-            .Where(t => t > vm.TimelinePositionUs).DefaultIfEmpty(vm.TimelineDurationUs).Min();
+            .Where(t => t > vm.TimelinePositionUs + near).DefaultIfEmpty(vm.TimelineDurationUs).Min();
         SeekTo(vm, vm.ToSourceTime(next));
     }
 
@@ -2319,14 +2351,16 @@ public partial class MainWindow : Window
     {
         if (!shouldDelete) return string.Empty;
         _store ??= new ProjectStore();
-        var existing = _store.CandidateSidecarPathsFor(sourcePath)
-            .Where(File.Exists)
-            .ToList();
-        if (existing.Count == 0) return " Sidecar already absent.";
+        int present = _store.CandidateSidecarPathsFor(sourcePath).Count(File.Exists);
+        if (present == 0) return " Sidecar already absent.";
+        // Only projects this window could have loaded; anything else was never part of this export.
+        var existing = _sourceFingerprint is null ? Array.Empty<string>() : _store.DeletableSidecarsFor(sourcePath, _sourceFingerprint);
+        string keptNote = present > existing.Count ? " A project that could not be read was kept." : "";
+        if (existing.Count == 0) return keptNote;
         try
         {
             foreach (var sidecar in existing) File.Delete(sidecar);
-            return existing.Count == 1 ? " Sidecar deleted." : $" {existing.Count} sidecars deleted.";
+            return (existing.Count == 1 ? " Sidecar deleted." : $" {existing.Count} sidecars deleted.") + keptNote;
         }
         catch (Exception ex)
         {
@@ -2414,13 +2448,18 @@ public partial class MainWindow : Window
     private void OnPreviousMarker(object sender, RoutedEventArgs e) { if (DataContext is MainViewModel vm) JumpToMarker(vm, -1); }
     private void OnNextMarker(object sender, RoutedEventArgs e) { if (DataContext is MainViewModel vm) JumpToMarker(vm, 1); }
 
+    // After a seek the playhead shows the frame the player landed on, up to a frame away from a
+    // marker that is not on a frame time (imported chapters). That marker is the one we are at.
+    private long NearPlayheadUs(MainViewModel vm) => Math.Max(0, FrameDurationUs(vm) - 1);
+
     /// <summary>Alt+Left / Alt+Right: select and go to the previous or next marker.</summary>
     private void JumpToMarker(MainViewModel vm, int direction)
     {
         if (!vm.CanEdit || vm.IsCollapsed) return;
+        long near = NearPlayheadUs(vm);
         var target = direction > 0
-            ? vm.Markers.Where(m => !m.IsBookend && m.TimeUs > vm.PlayheadUs).OrderBy(m => m.TimeUs).FirstOrDefault()
-            : vm.Markers.Where(m => !m.IsBookend && m.TimeUs < vm.PlayheadUs).OrderByDescending(m => m.TimeUs).FirstOrDefault();
+            ? vm.Markers.Where(m => !m.IsBookend && m.TimeUs > vm.PlayheadUs + near).OrderBy(m => m.TimeUs).FirstOrDefault()
+            : vm.Markers.Where(m => !m.IsBookend && m.TimeUs < vm.PlayheadUs - near).OrderByDescending(m => m.TimeUs).FirstOrDefault();
         if (target is null) { Notice(vm, StatusKind.Info, direction > 0 ? "No marker after the playhead." : "No marker before the playhead."); return; }
         vm.SelectMarker(target);
         SeekTo(vm, target.TimeUs);
@@ -2720,7 +2759,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            if (ct.IsCancellationRequested || vm.SourcePath != refineSource) return;
+            if (ct.IsCancellationRequested || vm.SourcePath != refineSource) { EndCancelledRefine(vm); return; }
             if (result is null || result.Confidence == Confidence.Unchanged)
             {
                 unchanged++;
@@ -2744,7 +2783,7 @@ public partial class MainWindow : Window
                 ToOriginalTimeUs: marker.OriginalTimeUs ?? marker.TimeUs));
         }
 
-        if (ct.IsCancellationRequested || vm.SourcePath != refineSource) return;
+        if (ct.IsCancellationRequested || vm.SourcePath != refineSource) { EndCancelledRefine(vm); return; }
         vm.ClearStatus();
         vm.IsBusy = false;
         vm.BusyOperation = null;
@@ -2794,6 +2833,15 @@ public partial class MainWindow : Window
     }
 
     private void CancelRefine() => _refineCts?.Cancel();
+
+    // A cancel that lands between two markers skips the exception path; the editor must still be released.
+    private static void EndCancelledRefine(MainViewModel vm)
+    {
+        vm.ClearStatus();
+        vm.Banner = new BannerInfo(StatusKind.Warning, "Refine cancelled.", "No marker changes were applied.", Array.Empty<BannerAction>());
+        vm.IsBusy = false;
+        vm.BusyOperation = null;
+    }
 
     private static string FormatTimeMs(long us)
     {

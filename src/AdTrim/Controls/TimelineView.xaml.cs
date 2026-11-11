@@ -246,14 +246,18 @@ public partial class TimelineView : UserControl
 
         var durationSec = _vm.TimelineDurationUs / 1_000_000.0;
         if (durationSec <= 0) return;
-        var step = 30.0 / _vm.ZoomFactor;
+        // Whole-second steps keep labels on round times at every zoom; every fourth tick is labelled.
+        // (Labelling only multiples of two minutes left a zoomed ruler with "00:00" alone.)
+        double wanted = 30.0 / _vm.ZoomFactor;
+        double step = new[] { 30.0, 15, 10, 5, 2, 1 }.FirstOrDefault(s => s <= wanted, 1);
         var tertiary = (Brush)(Application.Current.TryFindResource("Text.Tertiary") ?? Brushes.Gray);
         var subtle = (Brush)(Application.Current.TryFindResource("Border.Strong") ?? Brushes.DimGray);
 
-        for (double t = 0; t <= durationSec + 0.01; t += step)
+        for (int i = 0; i * step <= durationSec + 0.01; i++)
         {
+            double t = i * step;
             var x = (t / durationSec) * width;
-            var major = Math.Abs(t % 120) < 0.001;
+            var major = i % 4 == 0;
             var tick = new Rectangle
             {
                 Width = 1,
