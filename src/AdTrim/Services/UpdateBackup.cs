@@ -48,6 +48,15 @@ public static class UpdateBackup
     {
         var files = InstalledFiles(installDirectory);
         if (Directory.Exists(backupDirectory)) throw new IOException("A previous backup is already present.");
+        // Built under another name and renamed when complete, so a backup folder that exists is whole.
+        string complete = backupDirectory;
+        backupDirectory += ".partial";
+        if (Directory.Exists(backupDirectory))
+        {
+            if (File.GetAttributes(backupDirectory).HasFlag(FileAttributes.ReparsePoint))
+                throw new IOException("An unfinished backup is a link and was not changed: " + backupDirectory);
+            Directory.Delete(backupDirectory, true);
+        }
         Directory.CreateDirectory(backupDirectory);
         var copied = new List<string>();
         foreach (var relative in files)
@@ -62,6 +71,7 @@ public static class UpdateBackup
             copied.Add(relative);
         }
         File.WriteAllLines(Path.Combine(backupDirectory, BackupListName), copied);
+        Directory.Move(backupDirectory, complete);
     }
 
     /// <summary>

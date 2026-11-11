@@ -44,7 +44,8 @@ public partial class MainWindow
         var app = (App)Application.Current;
         if (app.OpenUpdateDialog is { } open) { BringToFront(open); return; }
         if (app.Updates.IsChecking) return;
-        if (app.Updates.Notice is null) await app.Updates.CheckAsync();
+        // A notice shown from the saved copy after a failed check may be out of date.
+        if (app.Updates.Notice is null || app.Updates.Error is not null) await app.Updates.CheckAsync();
         if (!IsLoaded) return;
         await ShowUpdateAsync();
     }

@@ -99,7 +99,10 @@ public partial class UpdateDialog : Window
             DownloadProgress.Value = 1;
             DownloadStatus.Text = "Update downloaded and verified. Ready to restart.";
         }
-        catch (OperationCanceledException) { DownloadStatus.Text = "Download cancelled. AdTrim has not been changed."; }
+        catch (OperationCanceledException) when (_downloadCancellation is { IsCancellationRequested: true })
+        { DownloadStatus.Text = "Download cancelled. AdTrim has not been changed."; }
+        catch (OperationCanceledException)
+        { DownloadStatus.Text = "GitHub did not respond in time. AdTrim has not been changed. Check your connection and try again."; }
         catch (UpdatePackageUnavailableException ex) { DownloadStatus.Text = ex.Message; UpdateButton.Visibility = Visibility.Collapsed; }
         catch (Exception ex) when (ex is IOException or InvalidDataException or HttpRequestException or UnauthorizedAccessException
             or System.Security.Cryptography.CryptographicException or System.Text.Json.JsonException or ArgumentException or FormatException)

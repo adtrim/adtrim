@@ -92,4 +92,20 @@ public sealed class UpdateBackupTests : IDisposable
     }
 
     public void Dispose() { if (Directory.Exists(_root)) Directory.Delete(_root, true); }
+
+    // Retry runs the installer whenever a backup folder exists, so a folder that exists must be whole.
+    [Fact]
+    public void ABackupInterruptedPartwayIsNeverMistakenForACompleteOne()
+    {
+        using (new FileStream(Path.Combine(Install, @"binaries\mpv\libmpv-2.dll"), FileMode.Open, FileAccess.Read, FileShare.None))
+            Assert.ThrowsAny<IOException>(() => UpdateBackup.Create(Install, Backup));
+        Assert.False(Directory.Exists(Backup));
+
+        UpdateBackup.Create(Install, Backup);
+        Write("AdTrim.exe", "new app");
+        UpdateBackup.Restore(Install, Backup);
+        Assert.Equal("old app", ReadInstalled("AdTrim.exe"));
+        Assert.Equal("old player", ReadInstalled(@"binaries\mpv\libmpv-2.dll"));
+        Assert.False(Directory.Exists(Backup + ".partial"));
+    }
 }

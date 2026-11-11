@@ -101,10 +101,13 @@ public static class UpdateInstallation
                 System.Globalization.CultureInfo.InvariantCulture, out var pid)) return false;
             using var process = Process.GetProcessById(pid);
             if (process.HasExited || ImagePath(pid) is not { } image) return false;
-            return string.Equals(Path.GetFullPath(image), Path.GetFullPath(installedExe), StringComparison.OrdinalIgnoreCase);
+            // Windows reports the resolved path. An installation reached through a junction, SUBST or
+            // mapped drive is the same file under another name.
+            return string.Equals(Path.GetFullPath(image), Path.GetFullPath(installedExe), StringComparison.OrdinalIgnoreCase)
+                || ExportSafety.SameFile(image, installedExe);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException
-            or System.ComponentModel.Win32Exception) { return false; }
+            or System.ComponentModel.Win32Exception or ExportException) { return false; }
     }
 
     private static string? ImagePath(int pid)
@@ -245,6 +248,8 @@ public sealed class UpdateWorker : IDisposable
     public bool NeedsRestore => _installAttempted;
     /// <summary>How many times the installer runs before a failure is reported (a file can be briefly in use).</summary>
     public int InstallerAttempts { get; init; } = 2;
+    /// <summary>How long a copy that has shown its window may take to reopen its recordings.</summary>
+    public TimeSpan OpeningLimit { get; init; } = TimeSpan.FromMinutes(10);
 
     private void Enter(UpdateStep step) { Step = step; StepChanged?.Invoke(step); }
 
@@ -264,10 +269,14 @@ public sealed class UpdateWorker : IDisposable
         catch (ArgumentException) { /* already closed */ }
         using (parent)
         {
+            // The gate belongs to the AdTrim that asked for this update. If that copy is gone (closed,
+            // crashed, or its process id now belongs to something else) there is nothing to hand over.
+            const string gone = "AdTrim closed before the update could start. Nothing has been changed. Open AdTrim and start the update again.";
             if (parent is not null && parent.StartTime.ToUniversalTime().Ticks != _job.ParentStartedTicks)
-                throw new IOException("The original AdTrim process changed before updating.");
+                throw new IOException(gone);
             // Keep the gate across the parent's exit, so another AdTrim cannot open files being replaced.
-            _gate ??= Mutex.OpenExisting(UpdateInstallation.GateName(_dataDirectory));
+            try { _gate ??= Mutex.OpenExisting(UpdateInstallation.GateName(_dataDirectory)); }
+            catch (WaitHandleCannotBeOpenedException ex) { throw new IOException(gone, ex); }
             if (EventWaitHandle.TryOpenExisting(UpdateInstallation.ReadyName(Directory), out var ready))
                 using (ready) ready.Set();
             if (parent is null) return;
@@ -369,8 +378,16 @@ public sealed class UpdateWorker : IDisposable
             _startingVersion = version;
         }
         var timer = Stopwatch.StartNew();
+        // The short limit is for a copy that never shows a window. One that has is running: reopening
+        // several recordings, or analysing new ones, takes minutes and is not a failed start.
+        bool windowShown = false;
         while (!UpdateInstallation.ConfirmsStart(marker, exe))
         {
+            if (!windowShown && _starting is { HasExited: false } running)
+            {
+                running.Refresh();
+                windowShown = running.MainWindowHandle != IntPtr.Zero;
+            }
             // A copy that handed its recordings to an AdTrim already running exits normally; that copy confirms instead.
             if (_starting is { HasExited: true } exited && exited.ExitCode != 0)
             {
@@ -379,7 +396,7 @@ public sealed class UpdateWorker : IDisposable
                 _starting = null;
                 throw new IOException($"AdTrim {version} closed while starting (exit code {code}).");
             }
-            if (timer.Elapsed > timeout) throw new TimeoutException($"AdTrim {version} did not finish starting.");
+            if (timer.Elapsed > (windowShown ? OpeningLimit : timeout)) throw new TimeoutException($"AdTrim {version} did not finish starting.");
             await Task.Delay(100, ct);
         }
         _starting?.Dispose();
