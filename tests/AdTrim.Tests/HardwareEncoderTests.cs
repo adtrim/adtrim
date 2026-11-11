@@ -66,4 +66,22 @@ public class HardwareEncoderTests
         Assert.Null((result with { SoftwareMilliseconds = 50 }).Preferred);
         Assert.Null(new EncoderDetection(new[] { new EncoderCapability(c, false, 0, "") }).Preferred);
     }
+
+    // A check that timed out says nothing about the encoder. Remembering it for a week would keep
+    // Automatic on the wrong choice long after the machine was idle again.
+    [Fact]
+    public void TimedOutOrFailedSoftwareChecksAreNotRemembered()
+    {
+        var adapter = new HardwareAdapter(0, "GPU", 0x1002, 1, "1.0", "h264_amf");
+        var software = new HardwareAdapter(-1, "Software", 0, 0, "", "");
+        var passed = new EncoderCapability(adapter, true, 900, "Test encode and decode passed.");
+        var unsupported = new EncoderCapability(adapter, false, 0, "No capable devices found");
+        var timedOut = new EncoderCapability(adapter, false, 0, "Hardware check timed out.");
+        var softwarePassed = new EncoderCapability(software, true, 4000, "Test encode and decode passed.");
+
+        Assert.True(HardwareEncoderDetection.IsConclusive([passed], softwarePassed));
+        Assert.True(HardwareEncoderDetection.IsConclusive([unsupported], softwarePassed));
+        Assert.False(HardwareEncoderDetection.IsConclusive([passed, timedOut], softwarePassed));
+        Assert.False(HardwareEncoderDetection.IsConclusive([passed], softwarePassed with { Available = false, Detail = "Software check timed out." }));
+    }
 }

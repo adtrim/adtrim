@@ -45,7 +45,9 @@ public sealed class HardwareEncoderDetection(FfmpegRunner runner, string dataDir
             }
             var software = await ProbeAsync(null, ct).ConfigureAwait(false);
             double? softwareMs = software.Available ? software.Milliseconds : null;
-            if (cacheable)
+            // A busy machine can time a check out, or fail the software one. Keeping that for a week
+            // would pin Automatic to the wrong encoder, or stop it exporting at all.
+            if (cacheable && IsConclusive(results, software))
             {
                 try
                 {
@@ -128,11 +130,16 @@ public sealed class HardwareEncoderDetection(FfmpegRunner runner, string dataDir
             return new(adapter, valid, timer.Elapsed.TotalMilliseconds, valid ? "Test encode and decode passed." : "Test output did not match the expected format or frame count.");
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        { return new(adapter, false, 0, "Hardware check timed out."); }
+        { return new(adapter, false, 0, candidate is null ? SoftwareTimedOut : HardwareTimedOut); }
         catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException or KeyNotFoundException or IndexOutOfRangeException or System.ComponentModel.Win32Exception or UnauthorizedAccessException)
         { return new(adapter, false, 0, ex.Message); }
         finally { if (File.Exists(path)) File.Delete(path); }
     }
+
+    private const string HardwareTimedOut = "Hardware check timed out.", SoftwareTimedOut = "Software check timed out.";
+
+    internal static bool IsConclusive(IEnumerable<EncoderCapability> hardware, EncoderCapability software)
+        => software.Available && hardware.All(r => r.Detail != HardwareTimedOut);
 
     private static string Tail(string text) => text.Length <= 1200 ? text.Trim() : text[^1200..].Trim();
 }

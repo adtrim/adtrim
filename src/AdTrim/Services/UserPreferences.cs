@@ -81,19 +81,32 @@ public sealed record UserPreferences
         catch (FileNotFoundException) { return fallback ?? new(); }
         catch (DirectoryNotFoundException) { return fallback ?? new(); }
     }
+    /// <summary>
+    /// The saved positions with <paramref name="used"/> as the most recent, keeping the twenty most
+    /// recently used. Removing and re-adding a dictionary entry does not move it to the end, so the
+    /// order is rebuilt.
+    /// </summary>
+    internal static Dictionary<string, long> MergePositions(IEnumerable<KeyValuePair<string, long>>? saved, KeyValuePair<string, long>? used)
+    {
+        var entries = (saved ?? []).ToList();
+        if (used is { } recent)
+        {
+            entries.RemoveAll(e => e.Key.Equals(recent.Key, StringComparison.OrdinalIgnoreCase));
+            entries.Add(recent);
+        }
+        var result = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in entries.Skip(Math.Max(0, entries.Count - 20))) result[entry.Key] = entry.Value;
+        return result;
+    }
+
     public async Task SaveChangesAsync(UserPreferences previous, string? source, bool saveMarkerSource = false)
     {
         await SaveGate.WaitAsync();
         try
         {
             var latest = await ReadOrDefaultAsync(previous);
-            var positions = new Dictionary<string, long>(latest.Positions ?? new(), StringComparer.OrdinalIgnoreCase);
-            if (source is not null && Positions.TryGetValue(source, out var position))
-            {
-                positions.Remove(source);
-                positions[source] = position;
-            }
-            while (positions.Count > 20) positions.Remove(positions.Keys.First());
+            var positions = MergePositions(latest.Positions,
+                source is not null && Positions.TryGetValue(source, out var position) ? new(source, position) : null);
             await (this with
             {
                 ShowWaveform = ShowWaveform != previous.ShowWaveform ? ShowWaveform : latest.ShowWaveform,

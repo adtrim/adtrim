@@ -252,8 +252,12 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
             progress.Report(new(ExportPhase.Planning, 0, 0, 0, 0, "Evaluating export options..."));
             await vm.CheckHardwareAsync(detector, null, false, ct);
             if (vm.Evaluation is { Preferred: null, SoftwareMilliseconds: null })
-                throw new ExportException("No encoder passed evaluation. Use Evaluate options for details.");
+                throw new ExportException("No encoder passed evaluation. Choose Software to export without it, or use Evaluate options for details.");
         }
+        // An encoder picked to get past a failure is for this export. The saved choice stays as it was.
+        var chosen = vm.SelectedAcceleration;
+        try
+        {
         while (true)
         {
             ct.ThrowIfCancellationRequested();
@@ -275,6 +279,8 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
                 vm.BeginExport(AcceptedPlan!);
             }
         }
+        }
+        finally { vm.SelectedAcceleration = vm.AccelerationOptions.FirstOrDefault(o => o.Id == chosen.Id) ?? chosen; }
     }
 
     private async void OnRecheckHardware(object sender, RoutedEventArgs e)

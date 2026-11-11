@@ -169,4 +169,20 @@ public sealed class UserPreferencesTests
         JsonSerializer.Deserialize<UserPreferences>("{}")!.NewFileMarkerSource.Should().Be(NewFileMarkerSource.Imported,
             "imported markers stay the default");
     }
+
+    // Positions are kept for the twenty recordings used most recently, not the twenty opened first.
+    [Fact]
+    public void ReopeningARecordingKeepsItsPositionWhenOlderOnesAreDropped()
+    {
+        var saved = Enumerable.Range(1, 20).Select(i => new KeyValuePair<string, long>($@"D:\tv\show{i}.ts", i)).ToList();
+        var afterReuse = UserPreferences.MergePositions(saved, new(@"d:\TV\show1.ts", 500));
+        Assert.Equal(20, afterReuse.Count);
+        Assert.Equal(500, afterReuse[@"D:\tv\show1.ts"]);
+
+        var afterNew = UserPreferences.MergePositions(afterReuse, new(@"D:\tv\show21.ts", 21));
+        Assert.Equal(20, afterNew.Count);
+        Assert.True(afterNew.ContainsKey(@"D:\tv\show1.ts"));
+        Assert.False(afterNew.ContainsKey(@"D:\tv\show2.ts"));
+        Assert.Equal(afterReuse.Count, UserPreferences.MergePositions(afterReuse, null).Count);
+    }
 }
