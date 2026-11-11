@@ -500,4 +500,86 @@ public sealed class SourceCommentTests : IDisposable
         File.Delete(primary);
         Assert.True(store.HasExportRecord(source));
     }
+
+    // The layout FFmpeg and Windows write. A second metadata box would hide the title from
+    // readers that use the first one.
+    [Fact]
+    public async Task CommentJoinsAnExistingStandardMetadataBoxInsteadOfAddingASecond()
+    {
+        var ftyp = Box("ftyp", Encoding.ASCII.GetBytes("isom"), U32(512), Encoding.ASCII.GetBytes("isom"));
+        var meta = Box("meta", U32(0), Box("hdlr", new byte[8], Encoding.ASCII.GetBytes("mdirappl"), new byte[9]),
+            Box("ilst", Box("©nam", Value("Original title")), Box("©cmt", Value("Original user comment")),
+                Box("©too", Value("Lavf61.7.100"))));
+        var media = Box("mdat", new byte[] { 11, 22, 33, 44 });
+        var movie = Box("moov", Box("trak", Box("mdia", Box("minf", Box("stbl", Box("stco", U32(0), U32(1), U32((uint)(ftyp.Length + 8))))))),
+            Box("udta", meta));
+        string source = FilePath("standard.mp4"), stage = FilePath("standard-staged.mp4");
+        File.WriteAllBytes(source, ftyp.Concat(media).Concat(movie).ToArray());
+
+        await Mp4Comments.StageAsync(source, stage, "2.1.14", new(2026, 11, 11), default);
+
+        Assert.Equal(new[] { "Original user comment; Exported with AdTrim 2.1.14 (2026-11-11)" }, Mp4Comments.Read(stage));
+        string bytes = Encoding.Latin1.GetString(File.ReadAllBytes(stage));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(bytes, "meta"));
+        Assert.Contains("Original title", bytes);
+        Assert.Contains("Lavf61.7.100", bytes);
+        // The same comment again changes nothing, so the recording is not rewritten.
+        Assert.False(Mp4Comments.NeedsUpdate(stage, "2.1.14", new(2026, 11, 11)));
+    }
+
+    // The copy is as large as the recording and sits on the disk a DVR may be recording to.
+    [Theory]
+    [InlineData(10_000_000_000L, 4_000_000_000L, true)]
+    [InlineData(4_400_000_000L, 4_000_000_000L, false)]
+    public void CommentCopyNeedsRoomForTheRecordingPlusAReserve(long free, long size, bool allowed)
+    {
+        void Check() => SourceCommentService.EnsureRoomForCopy(FilePath("source.mp4"), size, _ => free);
+        if (allowed) Check(); else Assert.Throws<IOException>(Check);
+        // A share that reports no free space figure is not refused.
+        SourceCommentService.EnsureRoomForCopy(FilePath("source.mp4"), size, _ => null);
+    }
+
+    [Fact]
+    public void CopyAbandonedByACrashIsRemovedTheNextTimeTheRecordingIsUsed()
+    {
+        string source = Fixture();
+        string abandoned = source + ".adtrim-comment-" + Guid.NewGuid().ToString("N") + ".tmp";
+        string unrelated = source + ".adtrim-comment-notes.tmp";
+        File.WriteAllText(abandoned, "a recording-sized copy");
+        File.WriteAllText(unrelated, "not ours");
+        string hash = Hash(source);
+        SourceCommentService.Recover(source, new ProjectStore(FilePath("fallback")));
+        Assert.False(File.Exists(abandoned));
+        Assert.True(File.Exists(unrelated));
+        Assert.Equal(hash, Hash(source));
+    }
+
+    // A newer app's project in the recording's folder diverts this version's saves to the fallback.
+    [Fact]
+    public void ExportRecordInTheFallbackIsFoundBesideAProjectFromANewerApp()
+    {
+        string source = FilePath("recording.ts");
+        File.WriteAllText(source, "Source sentinel");
+        var store = new ProjectStore(FilePath("fallback"));
+        File.WriteAllText(store.SidecarPathFor(source), "{\"schema_version\":999}");
+        Assert.Equal(store.AppDataFallbackPathFor(source), store.Save(ExportedProject(source)));
+        Assert.True(store.HasExportRecord(source));
+    }
+
+    // "Delete project sidecar" removes this export's projects only. One the app could not read
+    // was never loaded and may be the only copy of someone's work.
+    [Fact]
+    public void OnlyProjectsThisVersionCouldLoadAreOfferedForDeletion()
+    {
+        string source = FilePath("recording.ts");
+        File.WriteAllText(source, "Source sentinel");
+        var store = new ProjectStore(FilePath("fallback"));
+        var project = ExportedProject(source);
+        File.WriteAllText(store.SidecarPathFor(source), "{\"schema_version\":999}");
+        string fallback = store.Save(project);
+        Assert.Equal(new[] { fallback }, store.DeletableSidecarsFor(source, project.Fingerprint));
+        File.WriteAllText(store.SidecarPathFor(source), "not json");
+        Assert.Equal(new[] { fallback }, store.DeletableSidecarsFor(source, project.Fingerprint));
+        Assert.Empty(store.DeletableSidecarsFor(source, project.Fingerprint with { SizeBytes = project.Fingerprint.SizeBytes + 1 }));
+    }
 }

@@ -79,11 +79,33 @@ public sealed class ProjectStore
                     && export.SourceFingerprint.ModifiedUnixMs == new DateTimeOffset(source.LastWriteTimeUtc).ToUnixTimeMilliseconds())
                     return true;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            // InvalidDataException is not an IOException; the fallback save may still hold the record.
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
             { failure ??= ex; }
         }
         if (failure is not null) throw new InvalidDataException("A project sidecar's export status could not be checked. " + failure.Message, failure);
         return false;
+    }
+
+    /// <summary>
+    /// Project files for this recording that this version can read and that describe the recording as
+    /// it is now. Unreadable, newer and mismatched projects may be someone's only copy and are not listed.
+    /// </summary>
+    public IReadOnlyList<string> DeletableSidecarsFor(string sourcePath, SourceFingerprint current)
+    {
+        var result = new List<string>();
+        foreach (var path in CandidateSidecarPathsFor(sourcePath).Where(File.Exists))
+        {
+            try
+            {
+                var project = JsonSerializer.Deserialize<AdTrimProject>(File.ReadAllBytes(path), JsonOpts);
+                if (project is not null && project.SchemaVersion <= AdTrimProject.CurrentSchemaVersion && Validate(project) is null
+                    && project.Fingerprint.SizeBytes == current.SizeBytes && project.Fingerprint.DurationUs == current.DurationUs)
+                    result.Add(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
+        }
+        return result;
     }
 
     internal Dictionary<string, (byte[] Before, byte[] After)> FingerprintUpdates(string sourcePath, SourceFingerprint before, SourceFingerprint after)
@@ -250,7 +272,11 @@ public sealed class ProjectStore
             throw new IOException("Existing project cannot be safely overwritten: " + path);
         if (old.SchemaVersion > AdTrimProject.CurrentSchemaVersion)
             throw new IOException("This project was saved by a newer AdTrim version and cannot be overwritten.");
-        if (old.SchemaVersion >= replacement.SchemaVersion) return;
+        // A project for a different size or duration was not loaded, so its markers are not in the
+        // replacement. Keep a copy: they may still be valid for a retagged or restored recording.
+        bool sameSource = old.Fingerprint.SizeBytes == replacement.Fingerprint.SizeBytes
+            && old.Fingerprint.DurationUs == replacement.Fingerprint.DurationUs;
+        if (old.SchemaVersion >= replacement.SchemaVersion && sameSource) return;
 
         Directory.CreateDirectory(_rollbackDirectory);
         var originalBytes = File.ReadAllBytes(path);
@@ -278,9 +304,17 @@ public sealed class ProjectStore
         lock (RollbackManifestGate)
         {
             var manifestPath = Path.Combine(_rollbackDirectory, "manifest.json");
-            var records = File.Exists(manifestPath)
-                ? JsonSerializer.Deserialize<List<RollbackRecord>>(File.ReadAllText(manifestPath)) ?? new()
-                : new List<RollbackRecord>();
+            var records = new List<RollbackRecord>();
+            if (File.Exists(manifestPath))
+            {
+                try { records = JsonSerializer.Deserialize<List<RollbackRecord>>(File.ReadAllText(manifestPath)) ?? new(); }
+                catch (JsonException)
+                {
+                    // The list is only an index of the backups beside it. A damaged one (power loss
+                    // mid-write) is set aside so it cannot block every later save.
+                    File.Move(manifestPath, Path.Combine(_rollbackDirectory, $"manifest.damaged-{DateTime.UtcNow:yyyyMMddHHmmssfff}.json"));
+                }
+            }
             if (records.Any(r => StringComparer.OrdinalIgnoreCase.Equals(r.BackupPath, backupPath))) return;
             records.Add(new RollbackRecord(Path.GetFullPath(sourcePath), Path.GetFullPath(originalPath),
                 Path.GetFullPath(backupPath), schemaVersion, DateTimeOffset.UtcNow));

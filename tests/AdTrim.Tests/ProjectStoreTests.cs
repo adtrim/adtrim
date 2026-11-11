@@ -58,6 +58,31 @@ public class ProjectStoreTests : IDisposable
         finally { File.Delete(fallback); }
     }
 
+    // A recording retagged or restored by another tool no longer matches its project, so the
+    // project is not loaded. Its markers may still be right, and the first edit must not erase them.
+    [Fact]
+    public void ProjectForAChangedRecording_IsKeptWhenTheNextSaveReplacesIt()
+    {
+        var data = Path.Combine(_testDir, "data");
+        var store = new ProjectStore(Path.Combine(data, "projects"));
+        var work = new AdTrimProject(AdTrimProject.CurrentSchemaVersion, _sourcePath, ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs),
+            _media, new() { new PersistedSplit("abc123", 600_000_000, SplitSource.Manual, null, null, true, "Reviewed break") },
+            new(), SidecarLocation.NextToSource);
+        var primary = store.Save(work);
+        var original = File.ReadAllBytes(primary);
+        File.AppendAllText(_sourcePath, "retagged");
+        Assert.Equal(SidecarLoadStatus.FingerprintMismatch, store.Load(_sourcePath, _media).Status);
+
+        var fresh = work with { Fingerprint = ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs), Splits = new() };
+        Assert.Equal(primary, store.Save(fresh));
+        var kept = Directory.EnumerateFiles(Path.Combine(data, "rollback", "projects"), "*.adt.json");
+        Assert.Equal(original, File.ReadAllBytes(Assert.Single(kept)));
+
+        // Later saves of the same recording have nothing new to keep.
+        store.Save(fresh with { Splits = new() { new PersistedSplit("def456", 700_000_000, SplitSource.Manual, null, null, false) } });
+        Assert.Single(Directory.EnumerateFiles(Path.Combine(data, "rollback", "projects"), "*.adt.json"));
+    }
+
     [Fact]
     public void NewerFallback_IsPreferredOverOlderPrimary()
     {
@@ -228,5 +253,24 @@ public class ProjectStoreTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_testDir, recursive: true); } catch { /* best effort */ }
+    }
+
+    // The backup list is an index. If a power loss leaves it unreadable, older projects must still save.
+    [Fact]
+    public void DamagedBackupList_DoesNotBlockSavingAnOlderProject()
+    {
+        var data = Path.Combine(_testDir, "data-damaged");
+        var store = new ProjectStore(Path.Combine(data, "projects"));
+        var old = new AdTrimProject(2, _sourcePath, ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs),
+            _media, new(), new(), SidecarLocation.NextToSource);
+        var primary = store.Save(old);
+        var rollback = Path.Combine(data, "rollback", "projects");
+        Directory.CreateDirectory(rollback);
+        File.WriteAllText(Path.Combine(rollback, "manifest.json"), "");
+
+        Assert.Equal(primary, store.Save(old with { SchemaVersion = AdTrimProject.CurrentSchemaVersion }));
+        Assert.Single(Directory.EnumerateFiles(rollback, "*.adt.json"));
+        Assert.Single(Directory.EnumerateFiles(rollback, "manifest.damaged-*.json"));
+        Assert.Contains("schema2", File.ReadAllText(Path.Combine(rollback, "manifest.json")));
     }
 }

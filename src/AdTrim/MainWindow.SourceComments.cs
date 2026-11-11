@@ -72,8 +72,8 @@ public partial class MainWindow
                 throw new IOException("The source project is unavailable.");
             if (SourceCommentService.HasPendingUpdate(plan.SourcePath))
                 throw new IOException("Source comment recovery must finish before the project can be updated.");
-            while (_saveInProgress) await Task.Delay(25, ct);
-            ct.ThrowIfCancellationRequested();
+            // The video is already published. Cancelling the comment step must not lose its record.
+            while (_saveInProgress) await Task.Delay(25);
             if (ProjectStore.FingerprintOf(plan.SourcePath, _sourceFingerprint.DurationUs) != _sourceFingerprint)
                 throw new IOException("The source changed before its export could be recorded.");
             vm.LastExport = new("AdTrim", AppVersion.Numeric, DateTimeOffset.UtcNow, _sourceFingerprint);

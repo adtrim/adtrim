@@ -165,6 +165,25 @@ public static class Mp4Comments
         return Make("meta", new[] { meta.AsSpan(Header(meta), 4).ToArray() }.Concat(parts));
     }
 
+    // The iTunes-style layout Windows and FFmpeg write: an 'mdir' handler, one item list, no key table.
+    private static bool IsStandardList(byte[] meta)
+    {
+        int h = Header(meta);
+        if (meta.Length < h + 4 || meta[h] != 0) return false;
+        var parts = Children(meta, h + 4);
+        var handlers = parts.Where(b => Type(b) == "hdlr").ToArray();
+        return handlers.Length == 1 && handlers[0].Length >= Header(handlers[0]) + 12
+            && Encoding.Latin1.GetString(handlers[0], Header(handlers[0]) + 8, 4) == "mdir"
+            && parts.Count(b => Type(b) == "ilst") == 1 && !parts.Any(b => Type(b) == "keys");
+    }
+
+    private static byte[] WithComment(byte[] meta, byte[] comment)
+    {
+        var parts = Children(meta, Header(meta) + 4).Select(b => Type(b) == "ilst"
+            ? Make("ilst", Children(b, Header(b)).Where(e => Type(e) != "©cmt").Append(comment)) : b);
+        return Make("meta", new[] { meta.AsSpan(Header(meta), 4).ToArray() }.Concat(parts));
+    }
+
     private static byte[] UpdatedMovie(Index index, string comment)
     {
         if (index.Boxes.Any(b => b.Type is not ("ftyp" or "moov" or "mdat" or "free" or "skip" or "wide" or "uuid")))
@@ -177,14 +196,25 @@ public static class Mp4Comments
         var standard = Make("meta", new[] { new byte[4], handler, Make("ilst", new[] { Make("©cmt", new[] { data }) }) });
         var userData = children.Where(b => Type(b) == "udta").ToArray();
         if (userData.Length > 1) throw Invalid();
-        var kept = new List<byte[]> { standard };
+        var kept = new List<byte[]>();
+        bool merged = false;
         if (userData.Length == 1)
             foreach (var child in Children(userData[0], Header(userData[0])))
             {
                 if (Type(child) == "©cmt") throw new NotSupportedException("Legacy user-data comments cannot be migrated safely.");
+                // A container holds one metadata box. Readers that take the first would lose the
+                // title and other tags if the comment went into a second one.
+                if (!merged && Type(child) == "meta" && IsStandardList(child))
+                {
+                    kept.Add(WithComment(child, Make("©cmt", new[] { data })));
+                    merged = true;
+                    continue;
+                }
                 var updated = Type(child) == "meta" ? StripComments(child) : child;
                 if (updated is not null) kept.Add(updated);
             }
+        // Key-indexed metadata cannot hold a standard comment; it keeps its own box after ours.
+        if (!merged) kept.Insert(0, standard);
         var udta = Make("udta", kept);
         var movie = Make("moov", children.Where(b => Type(b) != "udta").Append(udta));
         long delta = movie.Length - index.Movie.Size;

@@ -48,6 +48,9 @@ public static class SourceCommentService
             passes.Complete();
             return before;
         }
+        // Both are known before the copy, which takes minutes and fills the recordings disk.
+        store.FingerprintUpdates(source, before, before);
+        EnsureRoomForCopy(source, before.SizeBytes, AvailableBytes);
         string stage = Path.Combine(Path.GetDirectoryName(source)!, Path.GetFileName(source) + ".adtrim-comment-" + Guid.NewGuid().ToString("N") + ".tmp");
         try
         {
@@ -122,7 +125,7 @@ public static class SourceCommentService
     {
         source = Path.GetFullPath(source);
         string journal = Journal(source);
-        if (!File.Exists(journal)) return;
+        if (!File.Exists(journal)) { RemoveAbandonedCopies(source); return; }
         if (new FileInfo(journal).Length > 48 * 1024 * 1024) throw new IOException("Source comment recovery record is too large.");
         var transaction = JsonSerializer.Deserialize<Transaction>(File.ReadAllBytes(journal))
             ?? throw new IOException("Source comment recovery record is unreadable.");
@@ -157,6 +160,42 @@ public static class SourceCommentService
         string stage = Path.Combine(Path.GetDirectoryName(source)!, transaction.StageName);
         if (File.Exists(stage)) File.Delete(stage);
         File.Delete(journal);
+    }
+
+    /// <summary>Free bytes on the volume holding <paramref name="directory"/>, or null when it cannot be read.</summary>
+    private static long? AvailableBytes(string directory)
+    {
+        try { return new DriveInfo(Path.GetPathRoot(Path.GetFullPath(directory))!).AvailableFreeSpace; }
+        // Network shares have no drive information; the copy itself still fails safely when full.
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    // The copy sits beside the recording. A DVR writing to the same disk must keep its reserve.
+    internal static void EnsureRoomForCopy(string source, long sourceBytes, Func<string, long?> available)
+    {
+        if (available(Path.GetDirectoryName(source)!) is { } free && free - sourceBytes < ExportDiskGuard.ReserveBytes)
+            throw new IOException("There is not enough free space beside the recording to add the comment safely. The source was not changed.");
+    }
+
+    // A copy left by a crash or power loss before its recovery record existed. Nothing else names it,
+    // and it is as large as the recording.
+    private static void RemoveAbandonedCopies(string source)
+    {
+        string? folder = Path.GetDirectoryName(source);
+        string prefix = Path.GetFileName(source) + ".adtrim-comment-";
+        if (folder is null || !Directory.Exists(folder)) return;
+        try
+        {
+            foreach (var path in Directory.EnumerateFiles(folder, prefix + "*.tmp"))
+            {
+                string name = Path.GetFileName(path);
+                if (name.Length != prefix.Length + 36 || !name.StartsWith(prefix, StringComparison.Ordinal)
+                    || !Guid.TryParseExact(name[prefix.Length..^4], "N", out _)
+                    || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) continue;
+                File.Delete(path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* next open tries again */ }
     }
 
     private static void CheckProjects(IEnumerable<SavedProject> projects)
