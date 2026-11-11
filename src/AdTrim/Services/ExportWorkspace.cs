@@ -136,13 +136,9 @@ public sealed class ExportWorkspace : IDisposable
         return true;
     }
 
+    // Only the item itself: a link here could point cleanup at another location. Parent folders
+    // are where the user chose to export (OneDrive folders and junctioned drives are reparse points).
     private static bool HasReparsePoint(string path)
-    {
-        for (var current = Path.GetFullPath(path); current is not null; current = Path.GetDirectoryName(current))
-        {
-            if ((File.Exists(current) || Directory.Exists(current))
-                && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) return true;
-        }
-        return false;
-    }
+        => (File.Exists(path) || Directory.Exists(path))
+            && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
 }

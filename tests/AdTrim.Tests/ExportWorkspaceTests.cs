@@ -35,6 +35,51 @@ public sealed class ExportWorkspaceTests : IDisposable
         Assert.Equal("source sentinel", File.ReadAllText(source));
     }
 
+    // OneDrive folders and junctioned drives are reparse points. Exporting into one is ordinary,
+    // and its working files must still be removed.
+    [Fact]
+    public async Task ExportIntoAFolderReachedThroughAJunctionIsCleanedUp()
+    {
+        var real = Path.Combine(_root, "real");
+        var junction = Path.Combine(_root, "junction");
+        Directory.CreateDirectory(real);
+        using (var link = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe",
+            $"/c mklink /J \"{junction}\" \"{real}\"") { CreateNoWindow = true, UseShellExecute = false })!)
+            link.WaitForExit();
+        Assert.True(File.GetAttributes(junction).HasFlag(FileAttributes.ReparsePoint));
+        try
+        {
+            using var workspace = ExportWorkspace.Create(Path.Combine(junction, "finished.mp4"), Registry, Temp);
+            File.WriteAllText(Path.Combine(workspace.TempDirectory, "seg_000.mp4"), "temporary video");
+            File.WriteAllText(workspace.StagingPath, "unfinished output");
+            Assert.True(await workspace.CleanupAsync());
+            Assert.False(Directory.Exists(workspace.TempDirectory));
+            Assert.False(File.Exists(workspace.StagingPath));
+        }
+        finally { Directory.Delete(junction); }
+    }
+
+    // A temporary folder swapped for a link must not send cleanup to wherever the link points.
+    [Fact]
+    public async Task TemporaryFolderReplacedByAJunctionIsLeftAlone()
+    {
+        var workspace = Create();
+        var elsewhere = Path.Combine(_root, "elsewhere");
+        Directory.CreateDirectory(elsewhere);
+        var bystander = Path.Combine(elsewhere, "seg_000.mp4");
+        File.WriteAllText(bystander, "not ours");
+        Directory.Delete(workspace.TempDirectory);
+        using (var link = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe",
+            $"/c mklink /J \"{workspace.TempDirectory}\" \"{elsewhere}\"") { CreateNoWindow = true, UseShellExecute = false })!)
+            link.WaitForExit();
+        try
+        {
+            Assert.False(await workspace.CleanupAsync());
+            Assert.Equal("not ours", File.ReadAllText(bystander));
+        }
+        finally { Directory.Delete(workspace.TempDirectory); workspace.Dispose(); }
+    }
+
     [Fact]
     public async Task LockedFilesKeepRecoveryRecordUntilNextSuccessfulAttempt()
     {

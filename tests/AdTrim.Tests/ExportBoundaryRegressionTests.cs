@@ -196,4 +196,50 @@ public sealed class ExportBoundaryRegressionTests : IDisposable
         Assert.Equal(before, SHA256.HashData(await File.ReadAllBytesAsync(source)));
         Assert.Empty(Directory.GetFiles(_directory, ".adtrim-*"));
     }
+
+    private sealed class Report(Action<ExportProgress> report) : IProgress<ExportProgress>
+    { void IProgress<ExportProgress>.Report(ExportProgress value) => report(value); }
+
+    // A target that cannot be replaced must be reported at once, not after the whole encode.
+    [SkippableFact]
+    public async Task TargetOpenInAnotherProgramIsReportedBeforeEncoding()
+    {
+        string source = await Source(".mp4");
+        var plan = (await Plan(source, ExportFormat.Mp4, new ExportSegment(1, 0, 2_000_000, "Opening"))) with { Overwrite = true };
+        File.WriteAllText(plan.OutputPath, "existing video");
+        int reports = 0;
+        using (new FileStream(plan.OutputPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            var error = await Assert.ThrowsAsync<ExportException>(() => new ExportService(Runner, new LibX264EncoderStrategy())
+                .RunExportAsync(plan, new Report(p => { if (p.Phase != ExportPhase.Failed) reports++; })));
+            Assert.Contains("cannot be replaced", error.Message);
+        }
+        Assert.Equal(0, reports);
+        Assert.Equal("existing video", File.ReadAllText(plan.OutputPath));
+        Assert.Empty(Directory.GetFiles(_directory, ".adtrim-*"));
+    }
+
+    // The encode can take an hour. If its name is taken meanwhile, the finished video is kept
+    // under another name instead of being deleted with the temporary files.
+    [SkippableFact]
+    public async Task FinishedVideoIsKeptWhenItsNameIsTakenDuringTheExport()
+    {
+        string source = await Source(".mp4");
+        var plan = await Plan(source, ExportFormat.Mp4, new ExportSegment(1, 0, 2_000_000, "Opening"));
+        bool taken = false;
+        var error = await Assert.ThrowsAsync<ExportException>(() => new ExportService(Runner, new LibX264EncoderStrategy())
+            .RunExportAsync(plan, new Report(_ =>
+            {
+                if (taken) return;
+                taken = true;
+                File.WriteAllText(plan.OutputPath, "someone else's file");
+            })));
+        string kept = PathFor("output (2).mp4");
+        Assert.Contains("output (2).mp4", error.Message);
+        Assert.Equal("someone else's file", File.ReadAllText(plan.OutputPath));
+        var probe = await Runner.RunFfprobeAsync(new[] { "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", kept });
+        Assert.True(probe.Success, probe.Stderr);
+        Assert.InRange(double.Parse(probe.Stdout.Trim(), CultureInfo.InvariantCulture), 1.8, 2.2);
+        Assert.Empty(Directory.GetFiles(_directory, ".adtrim-*"));
+    }
 }

@@ -54,6 +54,44 @@ public sealed class ExportService
         }
     }
 
+    // Found before encoding instead of at the final step, which can be an hour later.
+    private static void EnsureDestinationWritable(string destination, bool overwrite)
+    {
+        string folder = Path.GetDirectoryName(destination)!;
+        try
+        {
+            string probe = Path.Combine(folder, ".adtrim-" + Guid.NewGuid().ToString("N") + ".tmp");
+            using (new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose)) { }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new ExportException($"AdTrim cannot save to {folder}: {ex.Message} Choose a different folder.", ex);
+        }
+        if (!overwrite || !File.Exists(destination)) return;
+        try
+        {
+            using (new FileStream(destination, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new ExportException($"\"{Path.GetFileName(destination)}\" cannot be replaced. It is open in another program or read-only. "
+                + "Close it or choose a different filename.", ex);
+        }
+    }
+
+    private static string? KeepUnderFreeName(string staging, string destination)
+    {
+        string folder = Path.GetDirectoryName(destination)!, name = Path.GetFileNameWithoutExtension(destination), extension = Path.GetExtension(destination);
+        for (int n = 2; n < 100; n++)
+        {
+            string candidate = Path.Combine(folder, $"{name} ({n}){extension}");
+            if (File.Exists(candidate) || Directory.Exists(candidate)) continue;
+            try { File.Move(staging, candidate); return candidate; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        return null;
+    }
+
     private sealed class ForwardProgress(Action<ExportProgress> report) : IProgress<ExportProgress>
     { public void Report(ExportProgress value) => report(value); }
 
@@ -77,6 +115,7 @@ public sealed class ExportService
         _encoder.ValidateDevice();
         var destination = Path.GetFullPath(plan.OutputPath);
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        EnsureDestinationWritable(destination, plan.Overwrite);
         var userCancellation = ct;
         await using var disk = new ExportDiskGuard(new[] { Path.GetTempPath(), Path.GetDirectoryName(destination)! }, ct);
         ct = disk.Token;
@@ -264,8 +303,18 @@ public sealed class ExportService
             if (sourceInfo.Length != sourceSize || sourceInfo.LastWriteTimeUtc != sourceWrite)
                 throw new ExportException("Source changed during export. Output was not published.");
             ExportSafety.EnsureDifferentFiles(plan.SourcePath, destination);
-            if (plan.Overwrite && File.Exists(destination)) File.Replace(staging, destination, null);
-            else File.Move(staging, destination);
+            try
+            {
+                if (plan.Overwrite && File.Exists(destination)) File.Replace(staging, destination, null);
+                else File.Move(staging, destination);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // The video is encoded and validated; cleanup would delete it. Keep it under a free name.
+                if (KeepUnderFreeName(staging, destination) is not { } kept) throw;
+                throw new ExportException($"The export finished, but \"{Path.GetFileName(destination)}\" could not be written: {ex.Message} "
+                    + $"The finished video was saved as \"{Path.GetFileName(kept)}\".", ex);
+            }
 
             progress?.Report(new ExportProgress(
                 ExportPhase.Done, plan.KeptSegments.Count, plan.KeptSegments.Count,

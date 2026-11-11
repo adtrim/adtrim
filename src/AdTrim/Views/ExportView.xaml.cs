@@ -174,7 +174,12 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
     {
         if (_vm is null || _runner is null || AcceptedPlan is null || IsExportInFlight) return;
 
-        if (Application.Current is App app && app.ReserveExport(this, AcceptedPlan) is { } issue)
+        string? issue;
+        // Comparing with open recordings and other exports opens the files, which can fail.
+        try { issue = Application.Current is App app ? app.ReserveExport(this, AcceptedPlan) : null; }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or ExportException)
+        { issue = "The output file could not be checked: " + ex.Message; }
+        if (issue is not null)
         {
             _vm.ValidationIssues.Add(new(ExportValidationKind.Blocking, issue));
             return;
