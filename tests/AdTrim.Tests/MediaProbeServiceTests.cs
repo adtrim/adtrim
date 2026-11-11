@@ -61,4 +61,16 @@ public class MediaProbeServiceTests
     {
         Rational.Parse("29.97").AsDouble.Should().BeApproximately(29.97, 0.01);
     }
+
+    // Failure text goes into a banner. A per-frame log must not bury the reason or fill the window.
+    [Fact]
+    public void ErrorSummaryKeepsOnlyTheEndOfALongLog()
+    {
+        var log = string.Join("\n", Enumerable.Range(0, 5000).Select(i => $"[Parsed_showinfo_0] n:{i} pts_time:{i / 30.0}"))
+            + "\nD:\\tv\\show.ts: I/O error\n";
+        var result = new FfmpegResult { ExitCode = 1, Stdout = "", Stderr = log };
+        Assert.EndsWith("I/O error", result.ErrorSummary);
+        Assert.True(result.ErrorSummary.Length <= 403);
+        Assert.Equal("No details were reported.", new FfmpegResult { ExitCode = 1, Stdout = "", Stderr = " \n" }.ErrorSummary);
+    }
 }

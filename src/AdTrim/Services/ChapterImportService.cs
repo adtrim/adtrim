@@ -31,7 +31,7 @@ public sealed class ChapterImportService
         };
         var r = await _runner.RunFfprobeAsync(args, ct).ConfigureAwait(false);
         if (!r.Success)
-            throw new InvalidOperationException($"ffprobe failed (exit {r.ExitCode}): {r.Stderr}");
+            throw new InvalidOperationException($"ffprobe failed (exit {r.ExitCode}): {r.ErrorSummary}");
 
         var raw = ParseChapters(r.Stdout);
         var normalized = Normalize(raw, durationUs);

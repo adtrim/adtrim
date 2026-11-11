@@ -11,6 +11,20 @@ public sealed class FfmpegResult
     public required string Stdout { get; init; }
     public required string Stderr { get; init; }
     public bool Success => ExitCode == 0;
+
+    /// <summary>
+    /// The end of the tool's log, short enough for a message on screen. Analysis passes log a line
+    /// per frame, so the whole log can be hundreds of kilobytes with the reason on its last lines.
+    /// </summary>
+    public string ErrorSummary
+    {
+        get
+        {
+            var lines = Stderr.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            string text = string.Join(" ", lines.Skip(Math.Max(0, lines.Length - 3)));
+            return text.Length == 0 ? "No details were reported." : text.Length <= 400 ? text : "..." + text[^400..];
+        }
+    }
 }
 
 /// <summary>

@@ -28,7 +28,7 @@ public sealed class MediaProbeService
         };
         var r = await _runner.RunFfprobeAsync(args, ct).ConfigureAwait(false);
         if (!r.Success)
-            throw new InvalidOperationException($"ffprobe failed (exit {r.ExitCode}): {r.Stderr}");
+            throw new InvalidOperationException($"ffprobe failed (exit {r.ExitCode}): {r.ErrorSummary}");
 
         using var doc = JsonDocument.Parse(r.Stdout);
         var root = doc.RootElement;

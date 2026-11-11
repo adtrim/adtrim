@@ -111,7 +111,7 @@ public sealed class CommercialBreakDetector(FfmpegRunner runner)
         }
         finally { AnalysisGate.Release(); }
         if (!result.Success)
-            throw new InvalidOperationException($"Commercial analysis failed (exit {result.ExitCode}): {result.Stderr}");
+            throw new InvalidOperationException($"Commercial analysis failed (exit {result.ExitCode}): {result.ErrorSummary}");
         lock (signalLock)
         {
             black = black.OrderBy(x => x.Start).ToList();

@@ -58,12 +58,18 @@ public sealed class SuggestionEngine(FfmpegRunner runner)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Mapped();
-            long startUs = await FadeEdgeAsync(proposal.StartUs, entering: true).ConfigureAwait(false);
-            long endUs = await FadeEdgeAsync(proposal.EndUs, entering: false).ConfigureAwait(false);
-            var start = await refiner.FindTransitionFrameAsync(path, startUs, media.DurationUs,
-                entering: true, evidence.FieldTransitions, cancellationToken).ConfigureAwait(false);
-            var end = await refiner.FindTransitionFrameAsync(path, endUs, media.DurationUs,
-                entering: false, evidence.FieldTransitions, cancellationToken).ConfigureAwait(false);
+            long? start, end;
+            try
+            {
+                long startUs = await FadeEdgeAsync(proposal.StartUs, entering: true).ConfigureAwait(false);
+                long endUs = await FadeEdgeAsync(proposal.EndUs, entering: false).ConfigureAwait(false);
+                start = await refiner.FindTransitionFrameAsync(path, startUs, media.DurationUs,
+                    entering: true, evidence.FieldTransitions, cancellationToken).ConfigureAwait(false);
+                end = await refiner.FindTransitionFrameAsync(path, endUs, media.DurationUs,
+                    entering: false, evidence.FieldTransitions, cancellationToken).ConfigureAwait(false);
+            }
+            // One unreadable stretch must not discard the full-recording passes already done.
+            catch (Exception ex) when (IsUnreadableBoundary(ex)) { start = end = null; }
             if (start is null || end is null || start >= end)
             {
                 unmappable.Add(proposal with { Evidence = "Uncertain: no valid source frames at both boundaries.", EndpointConfidence = Confidence.Unchanged });
@@ -77,12 +83,17 @@ public sealed class SuggestionEngine(FfmpegRunner runner)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Mapped();
-            long? start = candidate.StartUs <= 0 ? 0 : await refiner.FindTransitionFrameAsync(path,
-                await FadeEdgeAsync(candidate.StartUs, entering: true).ConfigureAwait(false), media.DurationUs,
-                entering: true, evidence.FieldTransitions, cancellationToken).ConfigureAwait(false);
-            long? end = candidate.EndUs >= media.DurationUs ? media.DurationUs : await refiner.FindTransitionFrameAsync(path,
-                await FadeEdgeAsync(candidate.EndUs, entering: false).ConfigureAwait(false), media.DurationUs,
-                entering: false, evidence.FieldTransitions, cancellationToken).ConfigureAwait(false);
+            long? start = null, end = null;
+            try
+            {
+                start = candidate.StartUs <= 0 ? 0 : await refiner.FindTransitionFrameAsync(path,
+                    await FadeEdgeAsync(candidate.StartUs, entering: true).ConfigureAwait(false), media.DurationUs,
+                    entering: true, evidence.FieldTransitions, cancellationToken).ConfigureAwait(false);
+                end = candidate.EndUs >= media.DurationUs ? media.DurationUs : await refiner.FindTransitionFrameAsync(path,
+                    await FadeEdgeAsync(candidate.EndUs, entering: false).ConfigureAwait(false), media.DurationUs,
+                    entering: false, evidence.FieldTransitions, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsUnreadableBoundary(ex)) { start = end = null; }
             shown.Add(start is { } s && end is { } e && s < e
                 ? candidate with { StartUs = s, EndUs = e, EndpointConfidence = Confidence.Low }
                 : candidate with { EndpointConfidence = Confidence.Unchanged });
@@ -98,6 +109,10 @@ public sealed class SuggestionEngine(FfmpegRunner runner)
                 entering, cancellationToken).ConfigureAwait(false) ?? time;
         }
     }
+
+    // What the local frame probes throw for a damaged or unexpected stretch of the recording.
+    private static bool IsUnreadableBoundary(Exception ex)
+        => ex is InvalidOperationException or System.IO.InvalidDataException or System.Text.Json.JsonException or FormatException;
 
     /// <summary>Graphic-based breaks, plus uncertain candidates that the recording's own
     /// learned program profile clearly marks as non-program, with edges re-chosen from it.</summary>

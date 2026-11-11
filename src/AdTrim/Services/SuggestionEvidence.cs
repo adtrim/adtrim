@@ -51,7 +51,7 @@ public sealed class SuggestionEvidenceCollector(FfmpegRunner runner)
             var levels = await audio(new StageProgress(f => progress?.Report(SuggestionEngine.StageProgress(0, f, media.DurationUs))), ct).ConfigureAwait(false);
             var probe = await runner.RunFfprobeAsync(["-v", "error", "-select_streams", "v:0",
                 "-read_intervals", "%+3", "-show_entries", "frame=interlaced_frame", "-of", "json", path], ct).ConfigureAwait(false);
-            if (!probe.Success) throw new InvalidOperationException("Cannot inspect video field order: " + probe.Stderr);
+            if (!probe.Success) throw new InvalidOperationException("Cannot inspect video field order: " + probe.ErrorSummary);
             using var json = JsonDocument.Parse(probe.Stdout);
             bool fields = json.RootElement.GetProperty("frames").EnumerateArray()
                 .Any(f => f.TryGetProperty("interlaced_frame", out var flag) && flag.GetInt32() != 0);
@@ -162,7 +162,7 @@ public sealed class SuggestionEvidenceCollector(FfmpegRunner runner)
                 index++;
             }
         }, diagnostic, ct).ConfigureAwait(false);
-        if (!result.Success) throw new InvalidOperationException("Suggestion analysis failed: " + result.Stderr);
+        if (!result.Success) throw new InvalidOperationException("Suggestion analysis failed: " + result.ErrorSummary);
     }
 
     private static long Seconds(string value) => (long)Math.Round(double.Parse(value, CultureInfo.InvariantCulture) * 1_000_000);

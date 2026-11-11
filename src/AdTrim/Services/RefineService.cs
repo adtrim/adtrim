@@ -180,7 +180,7 @@ public sealed class RefineService
         };
         var r = await _runner.RunFfprobeAsync(args, ct).ConfigureAwait(false);
         if (!r.Success)
-            throw new InvalidOperationException($"ffprobe show_frames failed (exit {r.ExitCode}): {r.Stderr}");
+            throw new InvalidOperationException($"ffprobe show_frames failed (exit {r.ExitCode}): {r.ErrorSummary}");
 
         return ParseCandidates(r.Stdout).Select(f => (f.timeUs - originUs, f.pictType)).ToArray();
     }
@@ -273,7 +273,7 @@ public sealed class RefineService
             if (match.Success)
                 lock (gate) times.Add((long)Math.Round(double.Parse(match.Groups["t"].Value, CultureInfo.InvariantCulture) * 1_000_000));
         }, ct).ConfigureAwait(false);
-        if (!result.Success) throw new InvalidOperationException("Boundary frame decode failed: " + result.Stderr);
+        if (!result.Success) throw new InvalidOperationException("Boundary frame decode failed: " + result.ErrorSummary);
         lock (gate)
         {
             if (times.Count != lit.Count) return null;
@@ -411,7 +411,7 @@ public sealed class RefineService
         var r = await _runner.RunFfmpegAsync(args, ct).ConfigureAwait(false);
         // FFmpeg exits 0 even when blackdetect/silencedetect find nothing.
         if (!r.Success)
-            throw new InvalidOperationException($"ffmpeg signal pass failed (exit {r.ExitCode}): {r.Stderr}");
+            throw new InvalidOperationException($"ffmpeg signal pass failed (exit {r.ExitCode}): {r.ErrorSummary}");
 
         return ParseSignals(r.Stderr, offsetUs);
     }

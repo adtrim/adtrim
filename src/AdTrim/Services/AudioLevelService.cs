@@ -139,7 +139,7 @@ public sealed class AudioLevelService(FfmpegRunner? runner, string? cacheRoot = 
         AudioLevels? levels = null;
         var result = await ffmpeg.RunFfmpegBinaryAsync(args, async pcm => levels = await ReadLevelsAsync(pcm, dialogue,
             media.DurationUs, waitForIdle, partialLoudness, progress, PartialInterval, ct).ConfigureAwait(false), null, ct).ConfigureAwait(false);
-        if (!result.Success || levels is null) throw new InvalidOperationException("Primary audio analysis failed: " + result.Stderr);
+        if (!result.Success || levels is null) throw new InvalidOperationException("Primary audio analysis failed: " + result.ErrorSummary);
         return levels;
     }
 
@@ -147,7 +147,7 @@ public sealed class AudioLevelService(FfmpegRunner? runner, string? cacheRoot = 
     {
         var probe = await ffmpeg.RunFfprobeAsync(["-v", "error", "-select_streams", stream,
             "-show_entries", "stream=channel_layout", "-of", "json", path], ct).ConfigureAwait(false);
-        if (!probe.Success) throw new InvalidOperationException("Cannot inspect primary audio layout: " + probe.Stderr);
+        if (!probe.Success) throw new InvalidOperationException("Cannot inspect primary audio layout: " + probe.ErrorSummary);
         using var json = JsonDocument.Parse(probe.Stdout);
         var streams = json.RootElement.GetProperty("streams").EnumerateArray().ToArray();
         return streams.Length == 1 && streams[0].TryGetProperty("channel_layout", out var layout)

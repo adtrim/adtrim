@@ -172,4 +172,25 @@ public sealed class SuggestionEngineIntegrationTests
             if (File.Exists(Path.Combine(directory.FullName, "AdTrim.sln"))) return directory.FullName;
         throw new DirectoryNotFoundException("Source checkout with bundled media tools required.");
     }
+
+    // The full-recording passes take minutes. A boundary whose frames cannot be read loses that
+    // one suggestion, not the whole analysis.
+    [SkippableFact]
+    public async Task UnreadableBoundaryFramesDropOneSuggestionInsteadOfTheAnalysis()
+    {
+        var runner = AudioLevelServiceTests.Runner();
+        var scores = Enumerable.Range(0, 600).Select(i => i >= 150 && i < 390 ? 0.0 : 1.0).ToArray();
+        var dialogue = Enumerable.Range(0, 600).Select(i => i < 149 || i >= 310).ToArray();
+        var evidence = new SuggestionEvidence([(149_800_000L, 150_000_000L), (309_800_000L, 310_000_000L)],
+            [(149_000_000L, .99), (150_000_000L, .7), (390_000_000L, .8)], scores, 44, false) { CentreDialogue = dialogue };
+        var media = new Models.MediaInfo(600_000_000, "h264", 320, 180, new(30, 1), [new(1, "ac3", 6, true)], 1);
+        string missing = Path.Combine(Path.GetTempPath(), "adtrim-missing-" + Guid.NewGuid().ToString("N") + ".mp4");
+
+        var result = await new SuggestionEngine(runner).AnalyzeEvidenceAsync(missing, media, evidence);
+
+        Assert.True(result.Candidates > 0);
+        Assert.Empty(result.Breaks);
+        Assert.NotEmpty(result.UncertainBreaks);
+        Assert.All(result.UncertainBreaks, b => Assert.Equal(Models.Confidence.Unchanged, b.EndpointConfidence));
+    }
 }
