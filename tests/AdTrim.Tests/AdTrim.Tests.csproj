@@ -21,7 +21,7 @@
     <Compile Include="..\..\src\AdTrim\Services\UpdateBackup.cs" Link="Services\UpdateBackup.cs"/>
     <Compile Include="..\..\src\AdTrim\Services\UpdateService.cs" Link="Services\UpdateService.cs"/>
     <!-- Pinned (May 2026): xUnit 2.9.3 + AwesomeAssertions.
-         xUnit v2 deliberately (not v3) for training-data depth.
+         xUnit v2 deliberately (not v3).
          AwesomeAssertions is the Apache-2.0 fork of FluentAssertions v7
          (avoids Xceed license risk). -->
     <PackageReference Include="xunit" Version="2.9.3" />
