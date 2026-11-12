@@ -64,6 +64,22 @@ public sealed class MediaCacheCleanupTests : IDisposable
         Directory.Exists(Waveforms).Should().BeFalse("the emptied legacy folder is removed too");
     }
 
+    // A test build and the installed version share one data folder. When their cache formats differ,
+    // the older one must not delete what the newer one just made, on every start of either.
+    [Fact]
+    public void CachesFromANewerBuildAreKeptUntilTheyAgeOut()
+    {
+        var newerThumbs = Folder("0123456789abcdef_d600000000_h112_v3", daysAgo: 1);
+        var newerLevels = FileAt(Levels, "0123456789abcdef_a1_d600000000_v2.adtlevels", 1);
+        var staleNewer = Folder("1123456789abcdef_d600000000_h112_v3", daysAgo: 120);
+
+        Run().Should().Be(1);
+
+        Directory.Exists(newerThumbs).Should().BeTrue();
+        File.Exists(newerLevels).Should().BeTrue();
+        Directory.Exists(staleNewer).Should().BeFalse();
+    }
+
     [Fact]
     public void NeverTouchesAnythingThatIsNotAdTrimCache()
     {

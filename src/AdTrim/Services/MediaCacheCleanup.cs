@@ -6,7 +6,8 @@ namespace AdTrim.Services;
 /// <summary>
 /// Removes timeline media caches nobody has used for a while. Opening a recording touches its
 /// thumbnail folder and audio-levels file, so their last-write time is their last use.
-/// Formats no current version reads are removed at once. Only entries whose names match
+/// Formats older than the one this version writes are removed at once; a newer format belongs to a
+/// newer build sharing the data folder and only ages out. Only entries whose names match
 /// AdTrim's own cache naming, directly inside the given roots, are ever considered.
 /// </summary>
 public static class MediaCacheCleanup
@@ -15,6 +16,7 @@ public static class MediaCacheCleanup
 
     private static readonly Regex ThumbnailFolder = new(@"^[0-9a-f]{16}_d\d+_", RegexOptions.CultureInvariant);
     private static readonly Regex LevelsFile = new(@"^[0-9a-f]{16}_a\d+_d\d+_v(?<v>\d+)\.adtlevels$", RegexOptions.CultureInvariant);
+    private static readonly Regex FormatVersion = new(@"_v(?<v>\d+)$", RegexOptions.CultureInvariant);
     private static readonly Regex WaveformFile = new(@"^[0-9a-f]{16}_a\d+_d\d+_.*\.adtwave$", RegexOptions.CultureInvariant);
 
     public static string LegacyWaveformRoot => Path.Combine(AppDataDirectory.Path, "waveforms");
@@ -41,14 +43,16 @@ public static class MediaCacheCleanup
         {
             var name = Path.GetFileName(dir);
             if (!ThumbnailFolder.IsMatch(name)) continue;
-            if (!name.EndsWith(currentThumbnails, StringComparison.Ordinal) || Directory.GetLastWriteTimeUtc(dir) < cutoff)
+            bool superseded = !name.EndsWith(currentThumbnails, StringComparison.Ordinal)
+                && !IsNewer(FormatVersion.Match(name), FormatVersion.Match(currentThumbnails));
+            if (superseded || Directory.GetLastWriteTimeUtc(dir) < cutoff)
                 removed += Try(() => Directory.Delete(dir, recursive: true));
         }
         foreach (var file in Entries(audioLevelsRoot, directories: false))
         {
             var match = LevelsFile.Match(Path.GetFileName(file));
             if (!match.Success) continue;
-            if (match.Groups["v"].Value != currentLevelsVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            if ((int.TryParse(match.Groups["v"].Value, out int version) ? version : 0) < currentLevelsVersion
                 || File.GetLastWriteTimeUtc(file) < cutoff)
                 removed += Try(() => File.Delete(file));
         }
@@ -59,6 +63,10 @@ public static class MediaCacheCleanup
             Try(() => Directory.Delete(legacyWaveformRoot));
         return removed;
     }
+
+    private static bool IsNewer(Match entry, Match current)
+        => entry.Success && current.Success && int.TryParse(entry.Groups["v"].Value, out int found)
+            && int.TryParse(current.Groups["v"].Value, out int written) && found > written;
 
     private static IEnumerable<string> Entries(string root, bool directories)
     {
