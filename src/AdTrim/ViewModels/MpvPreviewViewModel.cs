@@ -26,6 +26,8 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
     private IntPtr _wid;                      // child HWND mpv renders into
     private string? _currentPath;
     private bool _initialized;
+    // Set when the window closes. A load that finishes afterwards must not start a new player.
+    private bool _disposed;
     private volatile bool _loading;
     private bool _fileLoaded;
     private (long TimeUs, bool Exact)? _pendingSeek;
@@ -167,7 +169,7 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
 
     public void Initialize()
     {
-        if (_initialized) return;
+        if (_initialized || _disposed) return;
         EnsureLoaded();
 
         _ctx = mpv_create();
@@ -348,6 +350,7 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
     {
         lock (_seekLock)
         {
+            if (_disposed) return;
             BeginSeek();
             if (!_initialized) Initialize();
             _currentPath = path;
@@ -479,6 +482,7 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
         _eventLoopCts?.Cancel();
         // The event pump must stop before its native handle is destroyed.
         _eventLoop?.Join();

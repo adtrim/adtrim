@@ -674,7 +674,7 @@ public partial class MainWindow : Window
         bool flushed;
         try { flushed = await FlushBeforeLeavingAsync(vm); }
         finally { _switching = false; }
-        if (!flushed) return;
+        if (TakePendingClose(flushed) || !flushed) return;
 
         if (_ffmpeg is null || _probe is null || _chapters is null || _store is null)
         {
@@ -1555,6 +1555,18 @@ public partial class MainWindow : Window
             Close();
         }
         _switching = false;
+        _closeWhenSwitchCompletes = false;
+    }
+
+    // A close asked for while this window was saving waited for the save. It goes ahead once the
+    // edits are saved and is dropped when the user chose to stay. Left set, it would close the
+    // window after the next recording opened.
+    private bool TakePendingClose(bool proceed)
+    {
+        if (!_closeWhenSwitchCompletes) return false;
+        _closeWhenSwitchCompletes = false;
+        if (proceed) _ = Dispatcher.BeginInvoke(new Action(Close));
+        return true;
     }
 
     // -------------------------------------------------------------------
@@ -2057,7 +2069,7 @@ public partial class MainWindow : Window
         bool flushed;
         try { flushed = await FlushBeforeLeavingAsync(vm); }
         finally { _switching = false; }
-        if (!flushed) return;
+        if (TakePendingClose(flushed) || !flushed) return;
         SetCollapsed(vm, false);
         ReleaseAudioPass(vm);
         CancelThumbnailLoad(vm, clearThumbnails: true);

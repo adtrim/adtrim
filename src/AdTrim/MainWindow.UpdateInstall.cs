@@ -39,6 +39,7 @@ public partial class MainWindow
     public void CancelUpdatePreparation()
     {
         _switching = false;
+        _closeWhenSwitchCompletes = false;
         if (DataContext is MainViewModel vm)
         {
             vm.IsBusy = false;

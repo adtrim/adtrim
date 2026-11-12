@@ -614,6 +614,7 @@ public partial class TimelineView : UserControl
                 marker.MouseLeftButtonDown += OnMarkerMouseDown;
                 marker.MouseLeftButtonUp += OnMarkerMouseUp;
                 marker.MouseMove += OnMarkerMouseMove;
+                marker.LostMouseCapture += OnMarkerLostCapture;
                 // Mark the right-click handled - otherwise it bubbles to the
                 // timeline background's MouseRightButtonDown which manually
                 // opens its own context menu ("Add split here" / "Play from
@@ -816,6 +817,16 @@ public partial class TimelineView : UserControl
             _vm.CommandStack.Execute(new MoveSplitCommand(_vm, split, _dragStartUs, finalUs));
         Redraw();
         e.Handled = true;
+    }
+
+    // Alt+Tab or a dialog takes the mouse without a button-up. Forget the drag, or the next
+    // button-up over a marker would commit it. No redraw here: this can run inside one.
+    private void OnMarkerLostCapture(object sender, MouseEventArgs e)
+    {
+        if (_draggingSplit is not { } split || !ReferenceEquals(sender, _draggingVisual)) return;
+        _draggingSplit = null;
+        _draggingVisual = null;
+        Canvas.SetLeft((UIElement)sender, XOf(split.TimeUs, _dragWidth) - 15);
     }
 
     private void CancelDrag()
