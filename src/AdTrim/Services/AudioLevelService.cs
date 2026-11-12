@@ -134,7 +134,7 @@ public sealed class AudioLevelService(FfmpegRunner? runner, string? cacheRoot = 
         List<string> args = ["-nostdin", "-hide_banner", "-v", "error", .. FfmpegRunner.SourceTimestampArgs(media.TimelineStartTimeUs), "-i", sourcePath,
             "-map", "0:" + stream, "-vn", "-af", mix + "aresample=" + SampleRate.ToString(CultureInfo.InvariantCulture) + ":first_pts=0"];
         if (!dialogue) args.AddRange(["-ac", "1"]);
-        args.AddRange(["-f", "f32le", "pipe:1"]);
+        args.AddRange(["-f", "f32le", "pipe:1", .. FfmpegRunner.TimelineAnchorArgs(media)]);
 
         AudioLevels? levels = null;
         var result = await ffmpeg.RunFfmpegBinaryAsync(args, async pcm => levels = await ReadLevelsAsync(pcm, dialogue,

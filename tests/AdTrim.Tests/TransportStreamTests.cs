@@ -325,4 +325,51 @@ public sealed class TransportStreamTests : IDisposable
     }
     private sealed class CallbackProgress(Action<ExportProgress> report) : IProgress<ExportProgress>
     { public void Report(ExportProgress value) => report(value); }
+
+    // Broadcast GOPs run to several seconds. A probe that begins at the next keyframe loses the
+    // frames around a boundary, and the ad break that depends on them is dropped.
+    [SkippableFact]
+    public async Task BoundaryFramesAreFoundInsideALongGop()
+    {
+        string source = FilePath("long-gop.ts");
+        await Run("-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x96:rate=25:duration=30",
+            "-c:v", "mpeg2video", "-g", "250", "-bf", "2", "-output_ts_offset", "120", source);
+        var media = await new MediaProbeService(_runner).ProbeAsync(source);
+        var refiner = new RefineService(_runner);
+        foreach (long position in new[] { 5_000_000L, 15_000_000L, 27_000_000L })
+        {
+            long target = media.VideoStartTimeUs + position;
+            var boundary = await refiner.FindBoundaryFrameAsync(source, target, media.DurationUs, CancellationToken.None);
+            Assert.NotNull(boundary);
+            Assert.InRange(Math.Abs(boundary.Value - target), 0, 2);
+            var transition = await refiner.FindTransitionFrameAsync(source, target, media.DurationUs, entering: true, fieldTransition: false, CancellationToken.None);
+            Assert.NotNull(transition);
+        }
+    }
+
+    // Broadcast recordings start their sound before their picture. FFmpeg then zeroes a video-only
+    // pass at the first picture, so every detected time was early by that gap and ad breaks landed
+    // a second or two before the real cut, or on no frame at all.
+    [SkippableFact]
+    public async Task PictureAnalysisStaysOnTheRecordingClockWhenThePictureStartsAfterTheSound()
+    {
+        string source = FilePath("late-picture.ts");
+        await Run("-y", "-v", "error", "-itsoffset", "1.5", "-f", "lavfi", "-i",
+            "nullsrc=size=160x96:rate=25:duration=12,geq=lum='if(between(T,5,5.99),16,150)':cb=128:cr=128",
+            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=14",
+            "-map", "0:v", "-map", "1:a", "-c:v", "mpeg2video", "-g", "12", "-c:a", "ac3", "-b:a", "192k",
+            "-output_ts_offset", "120", source);
+        var media = await new MediaProbeService(_runner).ProbeAsync(source);
+        Assert.InRange(media.VideoStartTimeUs, 1_400_000, 1_600_000);
+        Assert.Equal(media.PrimaryAudioIndex, media.TimelineAnchorStreamIndex);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var levels = await new AudioLevelService(_runner).MeasureAsync(source, media, timeout.Token);
+        var evidence = await new SuggestionEvidenceCollector(_runner).CollectAsync(source, media, null, timeout.Token,
+            (_, _) => Task.FromResult(levels));
+        var black = Assert.Single(evidence.Black);
+        // The picture's sixth second is 6 s after the first frame, wherever the sound began.
+        Assert.InRange(black.End - media.VideoStartTimeUs, 5_960_000, 6_040_000);
+        var frame = await new RefineService(_runner).FindBoundaryFrameAsync(source, black.End, media.DurationUs, timeout.Token);
+        Assert.NotNull(frame);
+    }
 }

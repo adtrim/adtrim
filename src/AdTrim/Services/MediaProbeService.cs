@@ -55,6 +55,8 @@ public sealed class MediaProbeService
         Rational fps = new(0, 1);
         long videoStartTimeUs = 0;
         var audio = new List<AudioStream>();
+        int anchorIndex = -1;
+        long anchorStartUs = long.MaxValue;
 
         if (root.TryGetProperty("streams", out var streams))
         {
@@ -63,6 +65,10 @@ public sealed class MediaProbeService
                 var type = s.TryGetProperty("codec_type", out var t) ? t.GetString() : null;
                 var index = s.TryGetProperty("index", out var i) ? i.GetInt32() : 0;
                 var codec = s.TryGetProperty("codec_name", out var c) ? c.GetString() ?? "" : "";
+                if (type is "video" or "audio" && s.TryGetProperty("start_time", out var streamStart)
+                    && double.TryParse(streamStart.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var streamStartSeconds)
+                    && (long)Math.Round(streamStartSeconds * 1_000_000.0) is var streamStartUs && streamStartUs < anchorStartUs)
+                    (anchorIndex, anchorStartUs) = (index, streamStartUs);
 
                 if (type == "video" && string.IsNullOrEmpty(vCodec))
                 {
@@ -115,7 +121,8 @@ public sealed class MediaProbeService
             timelineStartUs = (long)Math.Round(startSeconds * 1_000_000.0);
         if (transportStream) videoStartTimeUs -= timelineStartUs;
         var primary = SelectPrimaryAudio(audio);
-        return new MediaInfo(durationUs, vCodec, width, height, fps, audio, primary, videoStartTimeUs, timelineStartUs);
+        return new MediaInfo(durationUs, vCodec, width, height, fps, audio, primary, videoStartTimeUs, timelineStartUs,
+            timelineStartUs != 0 ? anchorIndex : -1);
     }
 
     /// <summary>

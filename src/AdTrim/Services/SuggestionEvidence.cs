@@ -81,7 +81,7 @@ public sealed class SuggestionEvidenceCollector(FfmpegRunner runner)
                 + "[sample]fps=1:start_time=0,scale=320:180,format=gray[samples]";
             List<string> args = ["-nostdin", "-hide_banner", "-nostats", "-v", "info", .. FfmpegRunner.SourceTimestampArgs(media.TimelineStartTimeUs), "-i", path,
                 "-filter_complex", graph, "-map", "[blackout]", "-map", "[sceneout]", "-an", "-f", "null", "-",
-                "-map", "[samples]", "-an", "-f", "rawvideo", "pipe:1"];
+                "-map", "[samples]", "-an", "-f", "rawvideo", "pipe:1", .. FfmpegRunner.TimelineAnchorArgs(media)];
             await ReadAsync(args, (frame, index) => { if (index % 5 == 0) graphic.Observe(frame); }, Diagnostic,
                 media.DurationUs, progress, ct, stage: 1).ConfigureAwait(false);
             if (limited) throw new InvalidOperationException("Too many transitions to analyze safely.");
@@ -90,7 +90,7 @@ public sealed class SuggestionEvidenceCollector(FfmpegRunner runner)
             // Runs without a station graphic too: the recording's own appearance is still evidence.
             bool learned = graphic.Complete();
             await ReadAsync(["-nostdin", "-hide_banner", "-nostats", "-v", "error", .. FfmpegRunner.SourceTimestampArgs(media.TimelineStartTimeUs), "-i", path,
-                "-map", "0:v:0", "-vf", "fps=1:start_time=0,scale=320:180,format=yuv444p", "-an", "-f", "rawvideo", "pipe:1"],
+                "-map", "0:v:0", "-vf", "fps=1:start_time=0,scale=320:180,format=yuv444p", "-an", "-f", "rawvideo", "pipe:1", .. FfmpegRunner.TimelineAnchorArgs(media)],
                 (frame, _) =>
                 {
                     if (learned) matches.Add(graphic.Match(frame.AsSpan(0, RecurringGraphic.FrameBytes)));

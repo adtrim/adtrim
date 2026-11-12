@@ -21,7 +21,9 @@ public sealed class MarkerSuggestionStore
 
     public string Key(string sourcePath, SourceFingerprint fingerprint)
     {
-        var identity = $"{Path.GetFullPath(sourcePath).ToUpperInvariant()}|{fingerprint.SizeBytes}|{fingerprint.DurationUs}|{fingerprint.ModifiedUnixMs}|{DetectorVersion}";
+        // Suggestions cached for a TS before 2.1.29 could sit a second or two early; they are not reused.
+        string clock = Path.GetExtension(sourcePath).Equals(".ts", StringComparison.OrdinalIgnoreCase) ? "|ts-clock-2" : "";
+        var identity = $"{Path.GetFullPath(sourcePath).ToUpperInvariant()}|{fingerprint.SizeBytes}|{fingerprint.DurationUs}|{fingerprint.ModifiedUnixMs}|{DetectorVersion}{clock}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
     }
 

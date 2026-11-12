@@ -101,6 +101,17 @@ public sealed class FfmpegRunner
         ? ["-copyts"]
         : ["-copyts", "-start_at_zero"];
 
+    /// <summary>
+    /// An extra output, placed after a pass's own outputs, that copies the earliest-starting stream
+    /// to nowhere. With -start_at_zero FFmpeg zeroes a TS at the earliest stream it was asked to
+    /// read, not at the container start: a video-only pass over a recording whose picture begins
+    /// 1.8 s after its sound reports every time 1.8 s early. Reading the earliest stream as well
+    /// keeps zero at the container start, the clock the editor, the player and ffprobe use.
+    /// </summary>
+    internal static string[] TimelineAnchorArgs(AdTrim.Models.MediaInfo media)
+        => media.TimelineStartTimeUs == 0 || media.TimelineAnchorStreamIndex < 0 ? []
+            : ["-map", "0:" + media.TimelineAnchorStreamIndex.ToString(System.Globalization.CultureInfo.InvariantCulture), "-c", "copy", "-f", "null", "-"];
+
     private readonly string _ffmpegDir;
 
     public string FfmpegPath { get; }

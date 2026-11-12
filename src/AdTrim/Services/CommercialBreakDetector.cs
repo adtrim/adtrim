@@ -100,7 +100,7 @@ public sealed class CommercialBreakDetector(FfmpegRunner runner)
         List<string> args = ["-hide_banner", "-nostats", "-v", "info", .. FfmpegRunner.SourceTimestampArgs(media.TimelineStartTimeUs), "-i", sourcePath,
             "-filter_complex", graph, "-map", "[blackout]", "-map", "[sceneout]"];
         if (media.PrimaryAudioIndex >= 0) args.AddRange(["-map", "[audioout]"]);
-        args.AddRange(["-progress", "pipe:1", "-stats_period", "2", "-f", "null", "-"]);
+        args.AddRange(["-progress", "pipe:1", "-stats_period", "2", "-f", "null", "-", .. FfmpegRunner.TimelineAnchorArgs(media)]);
         progress?.Report(new CommercialDetectionProgress(0, media.DurationUs, Queued: true));
         await AnalysisGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         FfmpegResult result;

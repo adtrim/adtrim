@@ -161,13 +161,17 @@ public sealed class RefineService
     // Step 1: enumerate candidate frames
     // -------------------------------------------------------------------
     private async Task<IReadOnlyList<(long timeUs, char pictType)>> EnumerateCandidatesAsync(
-        string sourcePath, long winStartUs, long winEndUs, CancellationToken ct)
+        string sourcePath, long winStartUs, long winEndUs, CancellationToken ct, bool leadIn = true)
     {
         // ffprobe returns transport PTS; the editor and mpv use a timeline relative to the TS start.
-        long originUs = Path.GetExtension(sourcePath).Equals(".ts", StringComparison.OrdinalIgnoreCase)
+        bool transport = Path.GetExtension(sourcePath).Equals(".ts", StringComparison.OrdinalIgnoreCase);
+        long originUs = transport
             ? (await new MediaProbeService(_runner).ProbeAsync(sourcePath, ct).ConfigureAwait(false)).TimelineStartTimeUs : 0;
+        // In a TS, ffprobe begins an interval at the next keyframe, which broadcast GOPs put seconds
+        // after the requested time. Read a bounded lead-in so the window itself is complete.
+        long readStartUs = transport && leadIn ? Math.Max(0, winStartUs - TransportLeadInUs) : winStartUs;
         // Do not seek at the beginning: TS keyframe seeking can skip the opening GOP.
-        var startSec = winStartUs == 0 ? "" : ((winStartUs + originUs) / 1_000_000m).ToString("0.000000", CultureInfo.InvariantCulture);
+        var startSec = readStartUs == 0 ? "" : ((readStartUs + originUs) / 1_000_000m).ToString("0.000000", CultureInfo.InvariantCulture);
 
         var args = new[]
         {
@@ -182,8 +186,11 @@ public sealed class RefineService
         if (!r.Success)
             throw new InvalidOperationException($"ffprobe show_frames failed (exit {r.ExitCode}): {r.ErrorSummary}");
 
-        return ParseCandidates(r.Stdout).Select(f => (f.timeUs - originUs, f.pictType)).ToArray();
+        return ParseCandidates(r.Stdout).Select(f => (timeUs: f.timeUs - originUs, f.pictType))
+            .Where(f => !transport || !leadIn || f.timeUs >= winStartUs - 1_000).ToArray();
     }
+
+    private const long TransportLeadInUs = 10_000_000;
 
     public async Task<long?> FindBoundaryFrameAsync(string sourcePath, long timeUs, long durationUs, CancellationToken ct)
     {
@@ -235,7 +242,7 @@ public sealed class RefineService
             "-ss", (start / 1_000_000.0).ToString("0.000", CultureInfo.InvariantCulture),
             "-t", ((blackEnd - start + 200_000) / 1_000_000.0).ToString("0.000", CultureInfo.InvariantCulture),
             .. FfmpegRunner.SourceTimestampArgs(media.TimelineStartTimeUs), "-i", sourcePath, "-map", "0:v:0", "-an", "-vf", "showinfo,format=gray",
-            "-fps_mode", "passthrough", "-f", "rawvideo", "pipe:1"];
+            "-fps_mode", "passthrough", "-f", "rawvideo", "pipe:1", .. FfmpegRunner.TimelineAnchorArgs(media)];
         var result = await _runner.RunFfmpegBinaryAsync(args, async stream =>
         {
             var buffer = new byte[width * height];
@@ -324,7 +331,8 @@ public sealed class RefineService
         foreach (long lookbackUs in new long[] { 2_000_000, 10_000_000, 60_000_000 })
         {
             var startUs = Math.Max(0, timeUs - lookbackUs);
-            var frames = await EnumerateCandidatesAsync(sourcePath, startUs, timeUs + 100_000, ct).ConfigureAwait(false);
+            // The growing lookback is this search's own lead-in, and the player is waiting on the answer.
+            var frames = await EnumerateCandidatesAsync(sourcePath, startUs, timeUs + 100_000, ct, leadIn: false).ConfigureAwait(false);
             var previous = frames.Where(f => f.timeUs < timeUs - 2).Select(f => (long?)f.timeUs).Max();
             if (previous is not null || startUs == 0) return previous;
         }

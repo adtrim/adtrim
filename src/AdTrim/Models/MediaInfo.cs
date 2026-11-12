@@ -30,7 +30,9 @@ public sealed record MediaInfo(
     IReadOnlyList<AudioStream> AudioStreams,
     int PrimaryAudioIndex,
     long VideoStartTimeUs = 0,
-    long TimelineStartTimeUs = 0)
+    long TimelineStartTimeUs = 0,
+    // The stream whose first timestamp is the TS container's start; -1 when the timeline starts at zero.
+    int TimelineAnchorStreamIndex = -1)
 {
     public AudioStream? PrimaryAudio =>
         AudioStreams.FirstOrDefault(a => a.Index == PrimaryAudioIndex);
