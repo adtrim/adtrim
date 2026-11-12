@@ -90,8 +90,12 @@ public partial class App : Application
             empty = NewWindow(path);
             await empty.Ready;
         }
-        else await empty.OpenFileAsync(path);
-        empty.BringForward();
+        else
+        {
+            // Forward first: loading can take seconds, and the user may have moved on by the end.
+            empty.BringForward();
+            await empty.OpenFileAsync(path);
+        }
         return empty;
     }
 

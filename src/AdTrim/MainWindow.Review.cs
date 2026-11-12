@@ -35,7 +35,16 @@ public partial class MainWindow
         Height = Math.Clamp(double.IsFinite(_preferences.Height) ? _preferences.Height : 720, MinHeight, Math.Max(MinHeight, area.Height));
         Left = Math.Clamp(double.IsFinite(_preferences.Left) ? _preferences.Left : area.Left, area.Left, Math.Max(area.Left, area.Right - Width));
         Top = Math.Clamp(double.IsFinite(_preferences.Top) ? _preferences.Top : area.Top, area.Top, Math.Max(area.Top, area.Bottom - Height));
-        if (_preferences.IsMaximized == true || legacyMaximized) SystemCommands.MaximizeWindow(this);
+        if (_preferences.IsMaximized == true || legacyMaximized) { SystemCommands.MaximizeWindow(this); return; }
+        // Every window restores the same saved position; step aside instead of hiding the one already there.
+        const double step = 28;
+        while (Left + step + Width <= area.Right && Top + step + Height <= area.Bottom
+            && Application.Current.Windows.OfType<MainWindow>().Any(w => w != this && w.WindowState == WindowState.Normal
+                && Math.Abs(w.Left - Left) < 1 && Math.Abs(w.Top - Top) < 1))
+        {
+            Left += step;
+            Top += step;
+        }
     }
     private Task<bool> SavePreferencesAsync(MainViewModel vm) => SavePreferencesSnapshotAsync(vm, false);
 
