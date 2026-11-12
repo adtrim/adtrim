@@ -108,4 +108,31 @@ public sealed class UpdateBackupTests : IDisposable
         Assert.Equal("old player", ReadInstalled(@"binaries\mpv\libmpv-2.dll"));
         Assert.False(Directory.Exists(Backup + ".partial"));
     }
+
+    // Setup is not elevated. An installation folder this account cannot write to must stop the
+    // update while AdTrim is still open, not after its windows have closed.
+    [Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public void AnInstallationFolderThatCannotBeWrittenStopsTheUpdateBeforeAdTrimCloses()
+    {
+        UpdateBackup.EnsureWritable(Install);
+        Assert.DoesNotContain(Directory.EnumerateFiles(Install), f => f.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase));
+
+        var folder = new DirectoryInfo(Install);
+        var deny = new System.Security.AccessControl.FileSystemAccessRule(System.Security.Principal.WindowsIdentity.GetCurrent().User!,
+            System.Security.AccessControl.FileSystemRights.CreateFiles, System.Security.AccessControl.AccessControlType.Deny);
+        var security = folder.GetAccessControl();
+        security.AddAccessRule(deny);
+        folder.SetAccessControl(security);
+        try
+        {
+            var error = Assert.Throws<IOException>(() => UpdateBackup.EnsureWritable(Install));
+            Assert.Contains("manual download", error.Message);
+        }
+        finally
+        {
+            security.RemoveAccessRule(deny);
+            folder.SetAccessControl(security);
+        }
+    }
 }

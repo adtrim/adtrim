@@ -51,6 +51,7 @@ public partial class App
     {
         if (_updatePreparing) throw new IOException("Another update is already preparing to restart.");
         var directory = UpdateInstallation.InstalledDirectoryForCurrentApp();
+        UpdateBackup.EnsureWritable(directory);
         var windows = Windows.OfType<MainWindow>().ToArray();
         if (windows.Any(w => !w.CanRestartForUpdate || w.IsBlockedByDialog))
             throw new IOException("Finish exports, close export setup and other dialogs, and wait for analysis or file opening to finish before restarting.");

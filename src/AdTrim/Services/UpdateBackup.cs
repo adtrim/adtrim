@@ -15,6 +15,23 @@ public static class UpdateBackup
     // Setup writes these beside the listed payload; they belong to the installation too.
     private static readonly string[] SetupFiles = ["Uninstall.exe", ListName];
 
+    /// <summary>
+    /// Setup runs as this user, without elevation. A folder this account cannot write to would fail
+    /// only after AdTrim had closed, so it is checked while the windows are still open.
+    /// </summary>
+    public static void EnsureWritable(string installDirectory)
+    {
+        try
+        {
+            using var probe = new FileStream(Path.Combine(installDirectory, $".adtrim-{Guid.NewGuid():N}.tmp"),
+                FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException("AdTrim cannot write to its installation folder, so this update cannot be installed automatically. Use See what's new for a manual download.", ex);
+        }
+    }
+
     /// <summary>The installation's own files, relative to its folder. Throws when Setup did not record them.</summary>
     public static IReadOnlyList<string> InstalledFiles(string installDirectory)
     {
