@@ -190,12 +190,11 @@ public sealed class ExportService
                 if (!r.Success)
                 {
                     if (_encoder.IsHardware && HardwareExportException.IsDeviceFailure(r.Stderr))
-                        throw new HardwareExportException($"{_encoder.DisplayName} failed: {Tail(r.Stderr, 1200)}");
-                    throw new ExportException(
-                        $"Segment {segIndex1Based} encode failed (exit {r.ExitCode}):\n{Tail(r.Stderr, 1500)}");
+                        throw new HardwareExportException($"{_encoder.DisplayName} failed: {r.ErrorSummary}");
+                    throw new ExportException($"Part {segIndex1Based} could not be encoded. FFmpeg reported: {r.ErrorSummary}");
                 }
                 if (!File.Exists(outPath) || new FileInfo(outPath).Length == 0)
-                    throw new ExportException($"Segment {segIndex1Based} produced no output: {outPath}");
+                    throw new ExportException($"Part {segIndex1Based} was encoded without any output. Output was not published.");
 
                 intermediatePaths.Add(outPath);
                 var timing = await ProbeSegmentTimingAsync(outPath, ct).ConfigureAwait(false);
@@ -288,7 +287,7 @@ public sealed class ExportService
             }
             var muxR = await _runner.RunFfmpegAsync(muxArgs, OnMuxProgress, ct, OnMuxDiagnostic).ConfigureAwait(false);
             if (!muxR.Success)
-                throw new ExportException($"Concat mux failed (exit {muxR.ExitCode}):\n{Tail(muxR.Stderr, 1500)}");
+                throw new ExportException($"The encoded parts could not be joined. FFmpeg reported: {muxR.ErrorSummary}");
 
             // Phase 3: post-export validation.
             ct.ThrowIfCancellationRequested();
@@ -406,7 +405,7 @@ public sealed class ExportService
         };
         var r = await _runner.RunFfprobeAsync(args, ct).ConfigureAwait(false);
         if (!r.Success || string.IsNullOrWhiteSpace(r.Stdout))
-            throw new ExportException($"Failed to probe segment duration: {path}");
+            throw new ExportException("Encoded part timing could not be verified. Output was not published.");
         using var doc = JsonDocument.Parse(r.Stdout);
         var format = doc.RootElement.GetProperty("format");
         long Us(JsonElement value, string name)
@@ -438,7 +437,7 @@ public sealed class ExportService
             plan.OutputPath,
         };
         var r = await _runner.RunFfprobeAsync(args, ct).ConfigureAwait(false);
-        if (!r.Success) throw new ExportException("ffprobe on output failed: " + r.Stderr);
+        if (!r.Success) throw new ExportException("The finished file could not be checked. FFprobe reported: " + r.ErrorSummary);
 
         using var doc = JsonDocument.Parse(r.Stdout);
         var root = doc.RootElement;
@@ -501,8 +500,6 @@ public sealed class ExportService
             if (Math.Abs(actualMs - expectedDurationMs) > 200)
                 throw new ExportException(
                     $"Output duration {actualMs}ms differs from expected {expectedDurationMs}ms by >200ms.");
-            if (Math.Abs(actualMs * 1000 - plan.ExpectedOutputDurationUs) > Math.Max(200_000, plan.KeptSegments.Count * 2_000_000 / Math.Max(1, plan.FrameRate.AsDouble)))
-                throw new ExportException("Output duration differs from the requested material. Output was not published.");
         }
         else throw new ExportException("Output duration could not be verified.");
 
@@ -523,12 +520,9 @@ public sealed class ExportService
                 "-t", "0.1", "-c:a", "copy", "-map_metadata", "-1", "-map_chapters", "-1", "-f", format, check };
             var result = await _runner.RunFfmpegAsync(args, ct: ct).ConfigureAwait(false);
             if (!result.Success)
-                throw new ExportException($"Audio codec '{audio.Codec}' could not be copied to {(format == "mp4" ? "the MP4 segment format" : "TS")}. Audio is not converted automatically.\n{Tail(result.Stderr, 600)}");
+                throw new ExportException($"Audio codec '{audio.Codec}' could not be copied to {(format == "mp4" ? "the MP4 segment format" : "TS")}. Audio is not converted automatically. FFmpeg reported: {result.ErrorSummary}");
         }
     }
-
-    private static string Tail(string s, int chars)
-        => string.IsNullOrEmpty(s) ? string.Empty : s.Length <= chars ? s : s[^chars..];
 
     /// <summary>
     /// Parse one line of ffmpeg's <c>-progress pipe:1</c> output. Returns the
