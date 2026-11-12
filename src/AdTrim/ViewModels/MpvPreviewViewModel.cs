@@ -355,8 +355,11 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
             if (!_initialized) Initialize();
             _currentPath = path;
             // TS seeks can land on the following GOP. Include enough preroll for broadcast GOPs.
-            mpv_set_property_string(_ctx, "hr-seek-demuxer-offset",
-                System.IO.Path.GetExtension(path).Equals(".ts", StringComparison.OrdinalIgnoreCase) ? "3" : "1");
+            // The collapsed preview is an edl:// list whose entries name the recording.
+            bool transport = path.StartsWith("edl://", StringComparison.Ordinal)
+                ? path.Contains(".ts,", StringComparison.OrdinalIgnoreCase)
+                : System.IO.Path.GetExtension(path).Equals(".ts", StringComparison.OrdinalIgnoreCase);
+            mpv_set_property_string(_ctx, "hr-seek-demuxer-offset", transport ? "3" : "1");
             _loading = true;
             _fileLoaded = false;
             _pendingSeek = null;
