@@ -35,6 +35,11 @@ public sealed class MediaProbeService
 
         bool transportStream = root.TryGetProperty("format", out var container)
             && container.TryGetProperty("format_name", out var formatName) && formatName.GetString() == "mpegts";
+        bool namedTransport = System.IO.Path.GetExtension(path).Equals(".ts", StringComparison.OrdinalIgnoreCase);
+        if (transportStream != namedTransport)
+            throw new NotSupportedException(transportStream
+                ? "This file is a TS recording with another file extension. Rename it to .ts and open it again."
+                : "This file is named .ts but is not a TS recording. Give it the extension of its real format and open it again.");
         if (transportStream && root.TryGetProperty("programs", out var programs)
             && programs.EnumerateArray().Count(p => p.TryGetProperty("streams", out var ps)
                 && ps.EnumerateArray().Any(s => s.TryGetProperty("codec_type", out var t) && t.GetString() is "video" or "audio")) > 1)

@@ -372,4 +372,21 @@ public sealed class TransportStreamTests : IDisposable
         var frame = await new RefineService(_runner).FindBoundaryFrameAsync(source, black.End, media.DurationUs, timeout.Token);
         Assert.NotNull(frame);
     }
+
+    // The container sets the timeline's clock and the file name sets the probes and export seeks.
+    // A file where the two disagree would be read with one and cut with the other.
+    [SkippableFact]
+    public async Task AFileWhoseNameAndContainerDisagreeIsRefused()
+    {
+        string ts = await Source(".ts");
+        string disguised = FilePath("disguised.mp4");
+        File.Copy(ts, disguised);
+        var error = await Assert.ThrowsAsync<NotSupportedException>(() => new MediaProbeService(_runner).ProbeAsync(disguised));
+        Assert.Contains("Rename it to .ts", error.Message);
+        string mp4 = FilePath("real.mp4");
+        await Run("-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x96:rate=25:duration=2", "-c:v", "libx264", "-preset", "ultrafast", mp4);
+        string misnamed = FilePath("misnamed.ts");
+        File.Copy(mp4, misnamed);
+        await Assert.ThrowsAsync<NotSupportedException>(() => new MediaProbeService(_runner).ProbeAsync(misnamed));
+    }
 }
