@@ -480,4 +480,26 @@ public sealed class UpdateTests : IDisposable
         _key.Dispose();
         if (Directory.Exists(_directory)) Directory.Delete(_directory, true);
     }
+
+    // A server that sends no length must still be cut off at the limit.
+    [Fact]
+    public async Task AnOversizedResponseWithoutADeclaredLengthDoesNotProduceAnAnnouncement()
+    {
+        var service = new UpdateService(_directory, _key.ExportSubjectPublicKeyInfoPem(), new HttpClient(new UnknownLengthHandler()), Installed);
+        await service.CheckAsync();
+        Assert.NotNull(service.Error);
+        Assert.Null(service.Notice);
+    }
+
+    private sealed class UnknownLengthHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+            => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new UnknownLengthContent() });
+    }
+    private sealed class UnknownLengthContent : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+            => stream.WriteAsync(new byte[UpdateFeedReader.MaximumBytes + 1]).AsTask();
+        protected override bool TryComputeLength(out long length) { length = 0; return false; }
+    }
 }
