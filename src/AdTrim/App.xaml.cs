@@ -376,7 +376,11 @@ public partial class App : Application
                 await server.WaitForConnectionAsync(ct).ConfigureAwait(false);
 
                 using var reader = new StreamReader(server, Encoding.UTF8, leaveOpen: true);
-                var path = await reader.ReadLineAsync(ct).ConfigureAwait(false);
+                // One connection is served at a time. A client that sends nothing must not keep
+                // every later launch from reaching this app.
+                using var read = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                read.CancelAfter(TimeSpan.FromSeconds(5));
+                var path = await reader.ReadLineAsync(read.Token).ConfigureAwait(false);
                 if (path is null) continue;
 
                 _ = Current.Dispatcher.BeginInvoke(new Action(() =>
@@ -395,7 +399,7 @@ public partial class App : Application
                 using var writer = new StreamWriter(server, Encoding.UTF8, leaveOpen: true) { AutoFlush = true };
                 await writer.WriteLineAsync("OK");
             }
-            catch (OperationCanceledException) { return; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
             catch { /* per-iteration failure: log later, keep listening */ }
         }
     }

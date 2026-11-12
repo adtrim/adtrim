@@ -243,7 +243,9 @@ public partial class App
                     PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
                 await server.WaitForConnectionAsync(ct);
                 using var reader = new StreamReader(server, Encoding.UTF8, leaveOpen: true);
-                var path = await reader.ReadLineAsync(ct);
+                using var read = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                read.CancelAfter(TimeSpan.FromSeconds(5));
+                var path = await reader.ReadLineAsync(read.Token);
                 if (!string.IsNullOrWhiteSpace(path) && Path.IsPathFullyQualified(path)) worker.Defer(path);
                 await Dispatcher.InvokeAsync(() =>
                 {
@@ -253,7 +255,8 @@ public partial class App
                 using var writer = new StreamWriter(server, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
                 await writer.WriteLineAsync("OK");
             }
-            catch (OperationCanceledException) { return; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+            catch (OperationCanceledException) { /* a client that sent nothing; listen again */ }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { await Task.Delay(200, CancellationToken.None); }
         }
     }
