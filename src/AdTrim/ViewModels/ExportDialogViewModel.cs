@@ -328,7 +328,6 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
     public void BeginExport(ExportPlan plan)
     {
         CleanupWarning = "";
-        CanRetrySoftware = false;
         FallbackNotice = "";
         ActiveEncoder = SelectedAcceleration.Name;
         Parts.Clear();

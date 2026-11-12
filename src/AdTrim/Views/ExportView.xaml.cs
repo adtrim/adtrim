@@ -160,9 +160,8 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
         AcceptedPlan = _vm.BuildPlan();
         if (AcceptedPlan is null || _runner is null)
         {
-            // Should not happen - MainWindow attaches the runner before showing
-            // the dialog. Fall back to legacy "close + caller runs export".
-            Outcome = AcceptedPlan is not null ? ExportDialogOutcome.LegacyAcceptedPlan : ExportDialogOutcome.Cancelled;
+            // Should not happen - MainWindow attaches the runner before showing the dialog.
+            Outcome = ExportDialogOutcome.Cancelled;
             Close();
             return;
         }
@@ -218,7 +217,6 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
         catch (Exception ex)
         {
             _vm.MarkFailed(ex.Message);
-            _vm.CanRetrySoftware = ex is HardwareExportException;
             Outcome = ExportDialogOutcome.Failed;
         }
         finally
@@ -310,13 +308,6 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
         if (_vm is null) return;
         _vm.ShowEvaluation = false;
     }
-    private async void OnRetrySoftware(object sender, RoutedEventArgs e)
-    {
-        if (_vm is null || !_vm.CanRetrySoftware) return;
-        _vm.SelectedAcceleration = _vm.AccelerationOptions.FirstOrDefault(o => o.Id == "software") ?? ExportAccelerationOption.Software;
-        await StartExportAsync();
-    }
-
     private void OnCancelExport(object sender, RoutedEventArgs e)
     {
         _exportCts?.Cancel();
@@ -350,5 +341,4 @@ public enum ExportDialogOutcome
     Cancelled,
     Completed,
     Failed,
-    LegacyAcceptedPlan,
 }

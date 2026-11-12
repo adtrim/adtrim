@@ -92,8 +92,6 @@ public sealed partial class ExportDialogViewModel
     };
     private string _fallbackNotice = "";
     public string FallbackNotice { get => _fallbackNotice; private set => Set(ref _fallbackNotice, value); }
-    private bool _canRetrySoftware;
-    public bool CanRetrySoftware { get => _canRetrySoftware; set => Set(ref _canRetrySoftware, value); }
 
     public EncoderDetection? Evaluation => _detection;
     public bool IsListingHardware { get; private set; }

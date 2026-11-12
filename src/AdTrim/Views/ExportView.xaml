@@ -401,8 +401,6 @@
                        Foreground="{StaticResource Text.Primary}" Margin="0,4,0,0"
                        TextWrapping="Wrap"/>
             </ScrollViewer>
-            <Button Content="Retry using software" Click="OnRetrySoftware" HorizontalAlignment="Left" Margin="0,8,0,0"
-                    Visibility="{Binding CanRetrySoftware, Converter={StaticResource Bool2Vis}}"/>
           </StackPanel>
         </Border>
 
