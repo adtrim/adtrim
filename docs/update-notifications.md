@@ -163,6 +163,22 @@ Private material is encrypted for the current Windows account. Never commit it,
 publish it, or place it in website deployment credentials. Keep an independently
 encrypted recovery backup in separate storage before production deployment.
 
+Create the backup with tools/backup-update-key.ps1 -KeyPath <private-path> -BackupPath <backup-file>.
+It asks for the passphrase twice. Then check the backup, which writes nothing:
+
+```powershell
+tools/restore-update-key.ps1 -BackupPath <backup-file> -PublicKeyPath src/AdTrim/Services/update-public-key.pem
+```
+
+The check confirms that the backup opens with the passphrase and holds the private half of
+the public key the app trusts. Repeat it from time to time: a backup that cannot be opened
+is the same as no backup.
+
+To restore on a new computer or Windows account, copy the backup file there and add
+-KeyPath <private-path>. The key is written encrypted for that Windows account and
+verified. An existing key file is never overwritten. Without the backup or its passphrase
+the root key cannot be recovered; see Key rotation below for what that means.
+
 Sign with -KeyPath <private-path> -FeedPath <updates.json>, then validate:
 
 ```powershell
