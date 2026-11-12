@@ -88,10 +88,10 @@ public sealed class SuggestionEngine(FfmpegRunner runner)
             {
                 start = candidate.StartUs <= 0 ? 0 : await refiner.FindTransitionFrameAsync(path,
                     await FadeEdgeAsync(candidate.StartUs, entering: true).ConfigureAwait(false), media.DurationUs,
-                    entering: true, evidence.FieldTransitions, cancellationToken).ConfigureAwait(false);
+                    entering: true, evidence.FieldTransitions, cancellationToken, nearest: true).ConfigureAwait(false);
                 end = candidate.EndUs >= media.DurationUs ? media.DurationUs : await refiner.FindTransitionFrameAsync(path,
                     await FadeEdgeAsync(candidate.EndUs, entering: false).ConfigureAwait(false), media.DurationUs,
-                    entering: false, evidence.FieldTransitions, cancellationToken).ConfigureAwait(false);
+                    entering: false, evidence.FieldTransitions, cancellationToken, nearest: true).ConfigureAwait(false);
             }
             catch (Exception ex) when (IsUnreadableBoundary(ex)) { start = end = null; }
             shown.Add(start is { } s && end is { } e && s < e

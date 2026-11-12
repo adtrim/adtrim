@@ -329,4 +329,16 @@ public sealed class SuggestionEngineTests
         var evidence = new SuggestionEvidence([], [(150_000_000L, .8), (180_000_000L, .8), (210_000_000L, .8), (315_000_000L, .8)], scores, 44, false);
         Assert.Empty(SuggestionEngine.FindBreaks(evidence, 600_000_000));
     }
+
+    // An uncertain candidate's time comes from one-second samples. On a progressive recording
+    // it was never a frame time, and the candidate was hidden for lack of an exact match.
+    [Fact]
+    public void AnUncertainCandidateTakesTheFrameBesideItButNotOneAcrossAGap()
+    {
+        long[] frames = [10_000_000, 10_016_683, 10_033_367, 10_500_000];
+        Assert.Null(RefineService.SelectTransitionFrame(frames, 10_020_000, 500_000_000, true, false));
+        Assert.Equal(10_016_683, RefineService.SelectTransitionFrame(frames, 10_020_000, 500_000_000, true, false, nearest: true));
+        Assert.Equal(10_033_367, RefineService.SelectTransitionFrame(frames, 10_033_000, 500_000_000, false, false, nearest: true));
+        Assert.Null(RefineService.SelectTransitionFrame(frames, 10_250_000, 500_000_000, true, false, nearest: true));
+    }
 }

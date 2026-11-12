@@ -31,6 +31,24 @@ public sealed class RefineService
 
     public RefineService(FfmpegRunner runner) => _runner = runner;
 
+    // Every boundary lookup needs the recording's clock. Mapping one analysis asks dozens of times.
+    private readonly Dictionary<(string Path, long Size, long Written), MediaInfo> _probes = new();
+    private async Task<MediaInfo> ProbeAsync(string sourcePath, CancellationToken ct)
+    {
+        var file = new FileInfo(sourcePath);
+        // A missing file fails in the probe itself, with the error its callers expect.
+        if (!file.Exists) return await new MediaProbeService(_runner).ProbeAsync(sourcePath, ct).ConfigureAwait(false);
+        var key =(Path.GetFullPath(sourcePath).ToUpperInvariant(), file.Length, file.LastWriteTimeUtc.Ticks);
+        lock (_probes) if (_probes.TryGetValue(key, out var known)) return known;
+        var media = await new MediaProbeService(_runner).ProbeAsync(sourcePath, ct).ConfigureAwait(false);
+        lock (_probes)
+        {
+            if (_probes.Count >= 8) _probes.Clear();
+            _probes[key] = media;
+        }
+        return media;
+    }
+
     /// <summary>
     /// Refine a single split using actual frames strictly inside the supplied
     /// neighboring boundaries, including source bookends.
@@ -50,7 +68,7 @@ public sealed class RefineService
         candidates = candidates.Where(f => f.timeUs > minBoundUs && f.timeUs < maxBoundUs
             && f.timeUs >= winStartUs && f.timeUs <= winEndUs).ToArray();
         if (candidates.Count == 0) return null;
-        primaryAudioIndex ??= (await new MediaProbeService(_runner).ProbeAsync(sourcePath, ct).ConfigureAwait(false)).PrimaryAudioIndex;
+        primaryAudioIndex ??= (await ProbeAsync(sourcePath, ct).ConfigureAwait(false)).PrimaryAudioIndex;
 
         // ffmpeg with `-ss N -i FILE` (input seek, no -copyts) emits frames
         // whose pts_time is *seek-normalized*: source_pts - N. Frames before
@@ -166,7 +184,7 @@ public sealed class RefineService
         // ffprobe returns transport PTS; the editor and mpv use a timeline relative to the TS start.
         bool transport = Path.GetExtension(sourcePath).Equals(".ts", StringComparison.OrdinalIgnoreCase);
         long originUs = transport
-            ? (await new MediaProbeService(_runner).ProbeAsync(sourcePath, ct).ConfigureAwait(false)).TimelineStartTimeUs : 0;
+            ? (await ProbeAsync(sourcePath, ct).ConfigureAwait(false)).TimelineStartTimeUs : 0;
         // In a TS, ffprobe begins an interval at the next keyframe, which broadcast GOPs put seconds
         // after the requested time. Read a bounded lead-in so the window itself is complete.
         long readStartUs = transport && leadIn ? Math.Max(0, winStartUs - TransportLeadInUs) : winStartUs;
@@ -202,18 +220,23 @@ public sealed class RefineService
     }
 
     public async Task<long?> FindTransitionFrameAsync(string sourcePath, long timeUs, long durationUs,
-        bool entering, bool fieldTransition, CancellationToken ct)
+        bool entering, bool fieldTransition, CancellationToken ct, bool nearest = false)
     {
         var frames = await EnumerateCandidatesAsync(sourcePath, Math.Max(0, timeUs - 2_000_000),
             Math.Min(durationUs, timeUs + 2_000_000), ct).ConfigureAwait(false);
-        return SelectTransitionFrame(frames.Select(f => f.timeUs).ToArray(), timeUs, durationUs, entering, fieldTransition);
+        return SelectTransitionFrame(frames.Select(f => f.timeUs).ToArray(), timeUs, durationUs, entering, fieldTransition, nearest);
     }
 
     internal static long? SelectTransitionFrame(IReadOnlyList<long> frames, long timeUs, long durationUs,
-        bool entering, bool fieldTransition)
+        bool entering, bool fieldTransition, bool nearest = false)
     {
         var exact = frames.Where(t => t > 0 && t < durationUs && Math.Abs(t - timeUs) <= 1_000)
             .OrderBy(t => Math.Abs(t - timeUs)).Select(t => (long?)t).FirstOrDefault();
+        // A time that was never a frame time (an uncertain candidate) takes the frame beside it,
+        // but never one across a gap in the recording.
+        if (exact is null && nearest && !fieldTransition)
+            return frames.Where(t => t > 0 && t < durationUs && Math.Abs(t - timeUs) <= 100_000)
+                .OrderBy(t => Math.Abs(t - timeUs)).Select(t => (long?)t).FirstOrDefault();
         if (exact is not null || !fieldTransition) return exact;
         var before = frames.Where(t => t > 0 && t < timeUs).Select(t => (long?)t).Max();
         var after = frames.Where(t => t > timeUs && t < durationUs).Select(t => (long?)t).Min();
@@ -237,7 +260,7 @@ public sealed class RefineService
         var gate = new object();
         int cornerWidth = width * 3 / 10, cornerHeight = height * 3 / 10;
         long start = Math.Max(0, blackStart - 1_000_000);
-        var media = await new MediaProbeService(_runner).ProbeAsync(sourcePath, ct).ConfigureAwait(false);
+        var media = await ProbeAsync(sourcePath, ct).ConfigureAwait(false);
         string[] args = ["-nostdin", "-hide_banner", "-v", "info",
             "-ss", (start / 1_000_000.0).ToString("0.000", CultureInfo.InvariantCulture),
             "-t", ((blackEnd - start + 200_000) / 1_000_000.0).ToString("0.000", CultureInfo.InvariantCulture),
