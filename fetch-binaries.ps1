@@ -5,7 +5,8 @@
 # ffmpeg: BtbN's release-branch "gpl" build (GitHub CI, fast, includes libx264),
 #   verified against BtbN's published checksums.sha256. Falls back to gyan.dev's
 #   release-full build (verified against gyan's SHA-256) if BtbN is unreachable.
-# libmpv: latest shinchiro build from SourceForge, verified against the RSS MD5.
+# libmpv: latest shinchiro build from SourceForge, checked against the RSS MD5. MD5 only catches a
+#   damaged download; the hashes recorded in binaries/native-build.json are what publish.cmd trusts.
 #
 # By default it stays on the major version already installed - a routine run
 # picks up patch/minor security fixes (e.g. 8.1.2 -> 8.1.3) but never silently
@@ -13,8 +14,9 @@
 # crossing one is opt-in: pass -AllowMajorUpgrade.
 #
 # BtbN ships .zip (extracted with the built-in Expand-Archive); gyan and libmpv
-# ship .7z, so 7-Zip is used for those (the standalone 7zr.exe is fetched if
-# 7-Zip isn't installed). After installing it runs the build gate.
+# ship .7z, so an installed 7-Zip is required for those. This script does not download an
+# extractor: nothing published lets it check one before running it. After installing it runs
+# the build gate.
 
 [CmdletBinding()]
 param(
@@ -56,10 +58,7 @@ function Get-SevenZip {
     }
     $cmd = Get-Command 7z.exe -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
-    Write-Host "  7-Zip not installed - fetching standalone 7zr.exe"
-    $seven = Join-Path $tmp '7zr.exe'
-    Save-Url 'https://www.7-zip.org/a/7zr.exe' $seven
-    return $seven
+    throw '7-Zip is required to unpack the libmpv archive. Install it from https://www.7-zip.org/ and run this again.'
 }
 
 function Expand-SevenZip($sevenZip, $archive, $dest) {
@@ -191,15 +190,12 @@ function Update-Libmpv($sevenZip) {
     $archive = Join-Path $tmp 'libmpv.7z'
     Save-Url $url $archive
     $hashNode = $item.SelectSingleNode(".//media:hash[@algo='md5']", $ns)
-    if ($hashNode) {
-        $expected = $hashNode.InnerText.Trim().ToLower()
-        if ((Get-FileHash $archive -Algorithm MD5).Hash.ToLower() -ne $expected) {
-            throw 'libmpv MD5 mismatch - download corrupt or tampered'
-        }
-        Write-Host "  MD5 verified"
-    } else {
-        Write-Host "  (no MD5 in feed; skipping hash check)"
+    if (-not $hashNode) { throw 'the SourceForge feed lists no MD5 for this build; not installing an unchecked archive' }
+    $expected = $hashNode.InnerText.Trim().ToLower()
+    if ((Get-FileHash $archive -Algorithm MD5).Hash.ToLower() -ne $expected) {
+        throw 'libmpv MD5 mismatch - download corrupt or tampered'
     }
+    Write-Host "  MD5 matches the feed"
     $out = Join-Path $tmp 'mpv'
     Expand-SevenZip $sevenZip $archive $out
     $dll = Get-ChildItem $out -Recurse -Filter 'libmpv-2.dll' | Select-Object -First 1
