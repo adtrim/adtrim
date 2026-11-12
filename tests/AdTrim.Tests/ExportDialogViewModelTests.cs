@@ -75,3 +75,112 @@ public class ExportNamingTests
         ExportNaming.IsValidFilename(name).Should().Be(expected);
     }
 }
+
+// Export setup decides what may be written and where. These rules stand between an edit and a
+// recording: a wrong one either blocks a valid export or lets one replace a file it must not.
+public sealed class ExportDialogViewModelTests : IDisposable
+{
+    private readonly string _folder = Path.Combine(Path.GetTempPath(), "adtrim-export-setup-" + Guid.NewGuid().ToString("N"));
+    private readonly string _source;
+    private static readonly MediaInfo Media = new(30_000_000, "h264", 1920, 1080, new Rational(30000, 1001),
+        new[] { new AudioStream(1, "ac3", 6, true) }, 1);
+
+    public ExportDialogViewModelTests()
+    {
+        Directory.CreateDirectory(_folder);
+        _source = Path.Combine(_folder, "Show.mp4");
+        File.WriteAllText(_source, "recording");
+    }
+    public void Dispose() => Directory.Delete(_folder, true);
+
+    // Three sections of 10 s; the middle one is the ad break.
+    private AdTrim.ViewModels.ExportDialogViewModel Setup(bool excludeMiddle = true, MediaInfo? media = null)
+    {
+        var project = EditingRegressionTests.Project();
+        project.SourcePath = _source;
+        if (excludeMiddle) project.CommandStack.Execute(new AdTrim.Commands.ToggleExcludedCommand(project, project.Segments[1]));
+        return new AdTrim.ViewModels.ExportDialogViewModel(project, media ?? Media);
+    }
+    private static IEnumerable<string> Blocking(AdTrim.ViewModels.ExportDialogViewModel vm)
+        => vm.Validate().Where(v => v.Kind == AdTrim.ViewModels.ExportValidationKind.Blocking).Select(v => v.Message);
+
+    [Fact]
+    public void AReadyProjectExportsOnlyItsKeptSectionsInOrder()
+    {
+        var vm = Setup();
+        Assert.Empty(Blocking(vm));
+        Assert.Equal(Path.Combine(_folder, "Show [AdTrim].mp4"), vm.FullOutputPath);
+        var plan = vm.BuildPlan()!;
+        Assert.Equal(new[] { (1, 0L, 10_000_000L), (2, 20_000_000L, 30_000_000L) },
+            plan.KeptSegments.Select(s => (s.Index, s.StartUs, s.EndUs)));
+        Assert.Equal(20_000_000, vm.FinalDurationUs);
+        Assert.Equal(_source, plan.SourcePath);
+        Assert.False(plan.Overwrite);
+    }
+
+    [Fact]
+    public void TheSourceRecordingCanNeverBeTheOutput()
+    {
+        var vm = Setup();
+        vm.OutputFilename = "SHOW.MP4";
+        // Confirming an overwrite is for an earlier export, never for the recording itself.
+        vm.OverwriteConfirmed = true;
+        Assert.Contains(Blocking(vm), m => m.Contains("identical to the source"));
+    }
+
+    [Fact]
+    public void AnExistingFileBlocksUntilConfirmedAndTheConfirmationDoesNotFollowANewName()
+    {
+        File.WriteAllText(Path.Combine(_folder, "Earlier.mp4"), "earlier export");
+        File.WriteAllText(Path.Combine(_folder, "Other.mp4"), "something else");
+        var vm = Setup();
+        vm.OutputFilename = "Earlier.mp4";
+        Assert.Contains(Blocking(vm), m => m.Contains("already exists"));
+        Assert.Equal("Export & overwrite", vm.ExportButtonText);
+
+        vm.OverwriteConfirmed = true;
+        Assert.Empty(Blocking(vm));
+        Assert.True(vm.BuildPlan()!.Overwrite);
+
+        vm.OutputFilename = "Other.mp4";
+        Assert.Contains(Blocking(vm), m => m.Contains("already exists"));
+        Assert.False(vm.BuildPlan()!.Overwrite);
+    }
+
+    [Fact]
+    public void AnExportThatWouldRemoveNothingOrEverythingIsBlocked()
+    {
+        Assert.Contains(Blocking(Setup(excludeMiddle: false)), m => m.Contains("nothing would be removed"));
+        var all = EditingRegressionTests.Project();
+        all.SourcePath = _source;
+        foreach (var segment in all.Segments.ToArray())
+            all.CommandStack.Execute(new AdTrim.Commands.ToggleExcludedCommand(all, segment));
+        Assert.Contains(Blocking(new AdTrim.ViewModels.ExportDialogViewModel(all, Media)), m => m.Contains("nothing to export"));
+    }
+
+    [Fact]
+    public void ARecordingThatChangedOrHasNoAudioIsBlocked()
+    {
+        Assert.Contains(Blocking(Setup(media: Media with { DurationUs = 31_000_000 })), m => m.Contains("duration has changed"));
+        Assert.Contains(Blocking(Setup(media: Media with { AudioStreams = Array.Empty<AudioStream>(), PrimaryAudioIndex = -1 })),
+            m => m.Contains("No primary audio"));
+        File.Delete(_source);
+        Assert.Equal(new[] { "Source file is missing." }, Blocking(Setup()));
+    }
+
+    [Fact]
+    public void ChoosingTsRenamesTheOutputAndKeepsANameTheUserTyped()
+    {
+        var vm = Setup();
+        vm.SelectedFormat = ExportFormat.Ts;
+        Assert.Equal("Show [AdTrim].ts", vm.OutputFilename);
+        Assert.Equal(ExportFormat.Ts, vm.BuildPlan()!.Format);
+        Assert.Empty(Blocking(vm));
+
+        vm.OutputFilename = "My cut.ts";
+        vm.SelectedFormat = ExportFormat.Mp4;
+        Assert.Equal("My cut.mp4", vm.OutputFilename);
+        vm.OutputFilename = "My cut.mkv";
+        Assert.Contains(Blocking(vm), m => m.Contains("must end with '.mp4'"));
+    }
+}
