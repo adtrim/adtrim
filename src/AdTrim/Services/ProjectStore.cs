@@ -264,6 +264,7 @@ public sealed class ProjectStore
         try
         {
             WriteAtomic(primary, project);
+            RemoveSupersededFallback(project);
             return primary;
         }
         catch (UnauthorizedAccessException) { /* fall through */ }
@@ -273,6 +274,24 @@ public sealed class ProjectStore
         Directory.CreateDirectory(_fallbackDirectory);
         WriteAtomic(fallback, project with { SidecarLocation = SidecarLocation.AppdataFallback });
         return fallback;
+    }
+
+    // The save beside the recording now holds the current edits. Loading picks the newer file, and
+    // file times on a network share follow the server's clock, so an earlier fallback save could
+    // otherwise come back in place of later edits.
+    private void RemoveSupersededFallback(AdTrimProject saved)
+    {
+        var fallback = AppDataFallbackPathFor(saved.SourcePath);
+        try
+        {
+            if (!File.Exists(fallback)) return;
+            var old = JsonSerializer.Deserialize<AdTrimProject>(File.ReadAllBytes(fallback), JsonOpts);
+            // One this version cannot read, or for another size or duration, may be someone's only copy.
+            if (old is not null && old.SchemaVersion <= AdTrimProject.CurrentSchemaVersion && Validate(old) is null
+                && old.Fingerprint.SizeBytes == saved.Fingerprint.SizeBytes && old.Fingerprint.DurationUs == saved.Fingerprint.DurationUs)
+                File.Delete(fallback);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { }
     }
 
     private void WriteAtomic(string path, AdTrimProject project)

@@ -305,4 +305,39 @@ public class ProjectStoreTests : IDisposable
         var asNow = fitted with { Fingerprint = fitted.Fingerprint with { DurationUs = durationNow }, Media = _media with { DurationUs = durationNow } };
         Assert.Null(ProjectStore.Validate(asNow));
     }
+
+    // Loading picks the newer of the two saves, and file times on a network share follow the
+    // server's clock. A fallback save left behind could come back in place of later edits.
+    [Fact]
+    public void FallbackSave_IsRemovedOnceASaveBesideTheRecordingSucceeds()
+    {
+        var store = new ProjectStore(Path.Combine(_testDir, "fallback-superseded"));
+        var project = new AdTrimProject(AdTrimProject.CurrentSchemaVersion, _sourcePath, ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs),
+            _media, new() { new("a", 1_000_000, SplitSource.Manual, null, null, false, "Earlier") }, new(), SidecarLocation.NextToSource);
+        var primary = store.Save(project with { Splits = new() });
+        File.SetAttributes(primary, FileAttributes.ReadOnly);
+        string fallback;
+        try { fallback = store.Save(project); }
+        finally { File.SetAttributes(primary, FileAttributes.Normal); }
+        Assert.Equal(store.AppDataFallbackPathFor(_sourcePath), fallback);
+        // This computer's clock is ahead of the share's.
+        File.SetLastWriteTimeUtc(fallback, DateTime.UtcNow.AddMinutes(10));
+
+        store.Save(project with { Splits = new() { new("a", 1_000_000, SplitSource.Manual, null, null, false, "Current") } });
+
+        Assert.Equal("Current", store.Load(_sourcePath, _media).Project!.Splits[0].ChapterTitle);
+        Assert.False(File.Exists(fallback));
+    }
+
+    [Fact]
+    public void FallbackSaveThisVersionCannotRead_IsKept()
+    {
+        var store = new ProjectStore(Path.Combine(_testDir, "fallback-kept"));
+        var fallback = store.AppDataFallbackPathFor(_sourcePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(fallback)!);
+        File.WriteAllText(fallback, "{\"schema_version\":999}");
+        store.Save(new AdTrimProject(AdTrimProject.CurrentSchemaVersion, _sourcePath, ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs),
+            _media, new(), new(), SidecarLocation.NextToSource));
+        Assert.Equal("{\"schema_version\":999}", File.ReadAllText(fallback));
+    }
 }
