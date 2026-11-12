@@ -224,4 +224,52 @@ public sealed class UpdatePackageTests : IDisposable
             Directory.Delete(_directory, true);
         }
     }
+
+    // An update window that was ended mid-install leaves a backup and no completion record. The next
+    // start must be able to tell that apart from every ordinary leftover.
+    [Fact]
+    public void AnInstallThatNeverFinishedIsFoundUntilItIsAcknowledgedOrSuperseded()
+    {
+        string Job(string version, bool backup, bool completed)
+        {
+            var folder = UpdateStaging.CreateDirectory(_directory);
+            // The shape UpdateInstallation.WriteJob saves.
+            File.WriteAllText(Path.Combine(folder, "job.json"),
+                JsonSerializer.Serialize(new { Version = version, InstallDirectory = @"C:\Programs\AdTrim", ParentId = 1, ParentStartedTicks = 1L }));
+            if (backup) Directory.CreateDirectory(Path.Combine(folder, "backup"));
+            if (completed) File.WriteAllText(Path.Combine(folder, "completed.json"), "{}");
+            return folder;
+        }
+        Job("9.0.0", backup: false, completed: false);
+        Job("9.0.0", backup: true, completed: true);
+        var unreadable = UpdateStaging.CreateDirectory(_directory);
+        Directory.CreateDirectory(Path.Combine(unreadable, "backup"));
+        File.WriteAllText(Path.Combine(unreadable, "job.json"), "{");
+        Assert.Null(UpdateStaging.FindInterruptedInstall(_directory, "2.0.0"));
+
+        var interrupted = Job("9.0.0", backup: true, completed: false);
+        Assert.Equal(new UpdateStaging.InterruptedInstall(interrupted, "9.0.0"), UpdateStaging.FindInterruptedInstall(_directory, "2.0.0"));
+        // The app the update is restarting, and an installation already on that version, are not interrupted.
+        Assert.Null(UpdateStaging.FindInterruptedInstall(_directory, "2.0.0", keep: interrupted));
+        Assert.Null(UpdateStaging.FindInterruptedInstall(_directory, "9.0.0"));
+
+        UpdateStaging.AcknowledgeInterruptedInstall(_directory, interrupted);
+        Assert.Null(UpdateStaging.FindInterruptedInstall(_directory, "2.0.0"));
+    }
+
+    // A server that sends no length must still be cut off at the limit, not read to the end.
+    [Fact]
+    public async Task MetadataWithoutADeclaredLengthIsStillBounded()
+    {
+        using var handler = new PackageHandler(_ => new(HttpStatusCode.OK) { Content = new UnknownLengthContent(new byte[UpdateFeedReader.MaximumBytes + 1]) });
+        using var client = new HttpClient(handler);
+        await Assert.ThrowsAsync<InvalidDataException>(() => Service(client).DownloadAsync(Version, "0.0.0", null, CancellationToken.None));
+        Assert.False(Directory.Exists(UpdateStaging.Root(_directory)));
+    }
+
+    private sealed class UnknownLengthContent(byte[] bytes) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) => stream.WriteAsync(bytes).AsTask();
+        protected override bool TryComputeLength(out long length) { length = 0; return false; }
+    }
 }

@@ -80,6 +80,45 @@ public static class UpdateStaging
         return remaining;
     }
 
+    public const string AcknowledgedName = "interruption-acknowledged";
+    public sealed record InterruptedInstall(string Directory, string Version);
+
+    /// <summary>
+    /// An update to a newer version that backed up the installation and never recorded finishing:
+    /// the update window was closed or ended while files were being replaced, or could not put the
+    /// previous version back. Call only while no update is installing.
+    /// </summary>
+    public static InterruptedInstall? FindInterruptedInstall(string dataDirectory, string currentVersion, string? keep = null)
+    {
+        var root = Root(dataDirectory);
+        if (!Directory.Exists(root)) return null;
+        string? kept = keep is null ? null : Path.TrimEndingDirectorySeparator(Path.GetFullPath(keep));
+        foreach (var directory in new DirectoryInfo(root).EnumerateDirectories())
+        {
+            try
+            {
+                if (!Guid.TryParseExact(directory.Name, "N", out _) || directory.Attributes.HasFlag(FileAttributes.ReparsePoint)
+                    || string.Equals(directory.FullName, kept, StringComparison.OrdinalIgnoreCase)
+                    || !Directory.Exists(Path.Combine(directory.FullName, "backup"))
+                    || File.Exists(Path.Combine(directory.FullName, "completed.json"))
+                    || File.Exists(Path.Combine(directory.FullName, AcknowledgedName))) continue;
+                var job = new FileInfo(Path.Combine(directory.FullName, "job.json"));
+                if (job.Length > 16 * 1024) continue;
+                using var json = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(job.FullName));
+                if (json.RootElement.GetProperty("Version").GetString() is not { } version) continue;
+                // Running the version it was installing means the installer did finish.
+                if (UpdateFeedReader.ParseVersion(version) > UpdateFeedReader.ParseVersion(currentVersion))
+                    return new(directory.FullName, version);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException
+                or InvalidDataException or FormatException or ArgumentException or KeyNotFoundException or InvalidOperationException) { }
+        }
+        return null;
+    }
+
+    public static void AcknowledgeInterruptedInstall(string dataDirectory, string directory)
+        => File.WriteAllText(Path.Combine(ValidateDirectory(dataDirectory, directory), AcknowledgedName), "");
+
     private static void RejectLink(FileSystemInfo item)
     {
         if (item.Exists && item.Attributes.HasFlag(FileAttributes.ReparsePoint))

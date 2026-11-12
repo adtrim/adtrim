@@ -236,6 +236,7 @@ public partial class App : Application
         if (resumeDirectory is not null) _ = CleanUpCompletedUpdateAsync(resumeDirectory);
         _ = Task.Run(() => RecoverExportsAsync(win, _pipeServerCts.Token));
         _ = CheckUpdatesAtStartupAsync(win, _pipeServerCts.Token);
+        _ = WarnOfInterruptedUpdateAsync(win, _pipeServerCts.Token);
         _ = Task.Run(CleanUpMediaCaches);
     }
 

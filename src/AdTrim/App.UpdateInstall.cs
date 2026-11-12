@@ -32,6 +32,39 @@ public partial class App
         catch (Exception ex) { WriteCrashLog("Update startup protection", ex); }
     }
 
+    // The update window was ended, or the computer lost power, while files were being replaced.
+    // Nothing else tells the user that the installation may be a mix of two versions.
+    private async Task WarnOfInterruptedUpdateAsync(MainWindow window, CancellationToken ct)
+    {
+        try
+        {
+            await window.Ready.WaitAsync(ct);
+            string data = UserPreferences.DataDirectory;
+            if (UpdateInstallation.IsUpdating(data)) return;
+            var found = await Task.Run(() => UpdateStaging.FindInterruptedInstall(data, AppVersion.Numeric, _resumeDirectory), ct);
+            if (found is null || window.DataContext is not ViewModels.MainViewModel vm || vm.Banner is not null) return;
+            vm.Banner = new Models.BannerInfo(Models.StatusKind.Warning, $"The update to v{found.Version} did not finish.",
+                "AdTrim's program files may be a mix of two versions. If anything misbehaves, reinstall AdTrim from adtrim.github.io; "
+                + "your settings and projects are not affected. The previous version's files are kept for 30 days.",
+                new[]
+                {
+                    new Models.BannerAction("Show kept files", () =>
+                    {
+                        try { Process.Start("explorer.exe", $"\"{Path.Combine(found.Directory, "backup")}\""); }
+                        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException) { }
+                    }),
+                    new Models.BannerAction("Don't show again", () =>
+                    {
+                        try { UpdateStaging.AcknowledgeInterruptedInstall(data, found.Directory); }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { WriteCrashLog("Update notice", ex); }
+                        vm.Banner = null;
+                    }),
+                });
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex) { WriteCrashLog("Update notice", ex); }
+    }
+
     public static string UpdatePublicKey()
     {
         using var stream = typeof(App).Assembly.GetManifestResourceStream("AdTrim.Services.update-public-key.pem")!;
