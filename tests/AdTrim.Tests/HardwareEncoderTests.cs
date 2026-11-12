@@ -42,6 +42,9 @@ public class HardwareEncoderTests
     [InlineData("No space left on device", false)]
     [InlineData("AMF_FAIL: I/O error", false)]
     [InlineData("Invalid data found when processing input", false)]
+    // A damaged recording logs decoder errors all the way through; a lost device must still be recognized.
+    [InlineData("[h264] Invalid data found when processing input\nDXGI_ERROR_DEVICE_REMOVED", true)]
+    [InlineData("No such file or directory\nDevice creation failed", false)]
     public void FallbackIsLimitedToIdentifiableHardwareFailures(string error, bool expected)
         => Assert.Equal(expected, HardwareExportException.IsDeviceFailure(error));
 
