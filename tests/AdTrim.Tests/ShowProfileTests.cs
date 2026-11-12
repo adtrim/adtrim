@@ -112,4 +112,14 @@ public sealed class ShowProfileTests
         var candidate = new CommercialBreakProposal(68_000_000, 175_000_000, Confidence.Low, false, "Uncertain: audio contradicts");
         Assert.Null(SuggestionEngine.Promote(evidence, profile, candidate));
     }
+
+    // Scoring a long recording takes seconds and runs after the passes that already honor Cancel.
+    [Fact]
+    public void ScoringStopsWhenTheAnalysisIsCancelled()
+    {
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        Assert.Throws<OperationCanceledException>(() => ShowProfile.Score(Recording(), 1_800_000_000, cancelled.Token));
+        Assert.Throws<OperationCanceledException>(() => LogoFreeSegmenter.FindBreaks(Recording(), 1_800_000_000, cancelled.Token));
+    }
 }

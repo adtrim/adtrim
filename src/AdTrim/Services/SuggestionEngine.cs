@@ -45,7 +45,7 @@ public sealed class SuggestionEngine(FfmpegRunner runner)
         IProgress<CommercialDetectionProgress>? progress = null)
     {
         var uncertain = new List<CommercialBreakProposal>();
-        var proposals = Classify(evidence, media.DurationUs, uncertain.Add);
+        var proposals = Classify(evidence, media.DurationUs, uncertain.Add, cancellationToken);
         int candidates = proposals.Count + uncertain.Count;
         var refined = new List<CommercialBreakProposal>();
         // Proposals whose edges have no valid source frames stay in the report, never shown.
@@ -117,14 +117,14 @@ public sealed class SuggestionEngine(FfmpegRunner runner)
     /// <summary>Graphic-based breaks, plus uncertain candidates that the recording's own
     /// learned program profile clearly marks as non-program, with edges re-chosen from it.</summary>
     public static IReadOnlyList<CommercialBreakProposal> Classify(SuggestionEvidence evidence, long durationUs,
-        Action<CommercialBreakProposal>? onUncertain = null)
+        Action<CommercialBreakProposal>? onUncertain = null, CancellationToken ct = default)
     {
         // Without a learnable station graphic, only the recording's own profile and splices can speak.
         if (evidence.GraphicPixels == 0 || evidence.GraphicMatches.Count == 0)
-            return LogoFreeSegmenter.FindBreaks(evidence, durationUs);
+            return LogoFreeSegmenter.FindBreaks(evidence, durationUs, ct);
         var uncertain = new List<CommercialBreakProposal>();
         var accepted = FindBreaks(evidence, durationUs, uncertain.Add).ToList();
-        var profile = uncertain.Count > 0 ? ShowProfile.Score(evidence, durationUs) : null;
+        var profile = uncertain.Count > 0 ? ShowProfile.Score(evidence, durationUs, ct) : null;
         foreach (var candidate in uncertain)
         {
             var promoted = profile is null ? null : Promote(evidence, profile, candidate);
@@ -138,7 +138,7 @@ public sealed class SuggestionEngine(FfmpegRunner runner)
         // credits, so these are only ever shown as uncertain, never promoted, and only when the
         // inner edge is a station splice and the stretch does not look like the program itself.
         var edges = EdgeCandidates(evidence, durationUs);
-        if (edges.Count > 0) profile ??= ShowProfile.Score(evidence, durationUs);
+        if (edges.Count > 0) profile ??= ShowProfile.Score(evidence, durationUs, ct);
         foreach (var edge in edges)
             if (IsSplice(evidence, quiet, edge.StartUs <= 0 ? edge.EndUs : edge.StartUs) && !LooksLikeProgram(profile, edge))
                 onUncertain?.Invoke(edge);

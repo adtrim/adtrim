@@ -18,9 +18,9 @@ public static class LogoFreeSegmenter
     private const long UnitTolerance = 300_000, DipReach = 250_000;
     private static readonly long[] Units = [15_000_000, 30_000_000, 45_000_000, 60_000_000];
 
-    public static IReadOnlyList<CommercialBreakProposal> FindBreaks(SuggestionEvidence evidence, long durationUs)
+    public static IReadOnlyList<CommercialBreakProposal> FindBreaks(SuggestionEvidence evidence, long durationUs, CancellationToken ct = default)
     {
-        var raw = ShowProfile.Score(evidence, durationUs);
+        var raw = ShowProfile.Score(evidence, durationUs, ct);
         if (raw is null || evidence.Loudness.Length == 0) return [];
         var smooth = ShowProfile.Smooth(raw, 15);
         if (smooth.Count(p => p > .5) > .45 * smooth.Length

@@ -40,12 +40,12 @@ public static class ShowProfile
     }
 
     /// <summary>Per-second probability that each second is not program, or null.</summary>
-    public static double[]? Score(SuggestionEvidence evidence, long durationUs)
+    public static double[]? Score(SuggestionEvidence evidence, long durationUs, CancellationToken ct = default)
     {
         int n = Math.Min(evidence.Appearance.Length / Width, (int)(durationUs / 1_000_000) + 1);
         if (n < 600) return null;
         var z = Standardize(n, evidence.Appearance);
-        var typicality = Smooth(Typicality(z), Window);
+        var typicality = Smooth(Typicality(z, ct), Window);
         var cuts = new double[n];
         foreach (var (time, score) in evidence.Scenes)
             if (score > .4 && time >= 0 && time / 1_000_000 < n) cuts[time / 1_000_000]++;
@@ -65,6 +65,7 @@ public static class ShowProfile
         double[] raw = [];
         for (int round = 0; round < Rounds; round++)
         {
+            ct.ThrowIfCancellationRequested();
             if (program.Count(v => v) < 120 || ad.Count(v => v) < 40) return null;
             var (weights, bias) = FitLogistic(x, program, ad);
             raw = x.Select(row => Sigmoid(Dot(row, weights) + bias)).ToArray();
@@ -93,13 +94,15 @@ public static class ShowProfile
 
     /// <summary>Mean distance to the nearest seconds elsewhere in the recording (outside +/-1 min).
     /// Long recordings compare against evenly spaced reference seconds to stay bounded.</summary>
-    private static double[] Typicality(double[][] z)
+    private static double[] Typicality(double[][] z, CancellationToken ct)
     {
         int n = z.Length, step = Math.Max(1, (n + MaxReferences - 1) / MaxReferences);
         var result = new double[n];
         var nearest = new double[Neighbors];
         for (int i = 0; i < n; i++)
         {
+            // The longest step for a long recording; Cancel must not wait it out.
+            ct.ThrowIfCancellationRequested();
             Array.Fill(nearest, double.PositiveInfinity);
             for (int r = 0; r < n; r += step)
             {
