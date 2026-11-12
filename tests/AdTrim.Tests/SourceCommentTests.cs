@@ -582,4 +582,36 @@ public sealed class SourceCommentTests : IDisposable
         Assert.Equal(new[] { fallback }, store.DeletableSidecarsFor(source, project.Fingerprint));
         Assert.Empty(store.DeletableSidecarsFor(source, project.Fingerprint with { SizeBytes = project.Fingerprint.SizeBytes + 1 }));
     }
+
+    // Choosing a whole drive would otherwise list deleted recordings from its Recycle Bin and an
+    // access error for System Volume Information.
+    [Fact]
+    public async Task DiscoverySkipsWindowsSystemFolders()
+    {
+        string visible = Fixture("kept.mp4");
+        string bin = FilePath("$RECYCLE.BIN");
+        Directory.CreateDirectory(bin);
+        File.WriteAllText(Path.Combine(bin, "deleted.mp4"), "Must not be listed");
+        File.SetAttributes(bin, File.GetAttributes(bin) | FileAttributes.Hidden | FileAttributes.System);
+        try
+        {
+            var rows = new List<UnexportedFile>();
+            await foreach (var row in UnexportedFiles.ScanAsync(_directory, includeFolders: true)) rows.Add(row);
+            Assert.Contains(rows, r => r.Path == visible);
+            Assert.DoesNotContain(rows, r => r.Path.Contains("$RECYCLE.BIN"));
+        }
+        finally { File.SetAttributes(bin, FileAttributes.Directory); }
+    }
+
+    // The list only reads. A recording another program has open for writing is still listed, and
+    // that program is not blocked while the list is built.
+    [Fact]
+    public async Task DiscoveryReadsARecordingAnotherProgramHasOpenForWriting()
+    {
+        string source = Fixture("in-use.mp4");
+        using var writer = new FileStream(source, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+        var rows = new List<UnexportedFile>();
+        await foreach (var row in UnexportedFiles.ScanAsync(_directory)) rows.Add(row);
+        Assert.Contains(rows, r => r.Path == source && r.Error is null);
+    }
 }

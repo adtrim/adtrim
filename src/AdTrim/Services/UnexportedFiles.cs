@@ -44,7 +44,9 @@ public static class UnexportedFiles
                             try
                             {
                                 var attrs = File.GetAttributes(path);
-                                if ((attrs & FileAttributes.Directory) != 0 && System.IO.Path.GetFileName(path).StartsWith('.')) continue;
+                                // System folders: a drive's Recycle Bin and System Volume Information.
+                                if ((attrs & FileAttributes.Directory) != 0
+                                    && (System.IO.Path.GetFileName(path).StartsWith('.') || (attrs & FileAttributes.System) != 0)) continue;
                                 if ((attrs & FileAttributes.ReparsePoint) != 0)
                                 { entry = new(path, false, "Filesystem link skipped."); }
                                 else if ((attrs & FileAttributes.Directory) != 0) folders.Push(path);

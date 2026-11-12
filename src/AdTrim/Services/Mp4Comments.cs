@@ -30,7 +30,8 @@ public static class Mp4Comments
 
     public static IReadOnlyList<string> Read(string path)
     {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        // Listing a folder must not stop a recorder or tagger from writing to a file in it.
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         return Comments(Load(stream).Bytes);
     }
 
