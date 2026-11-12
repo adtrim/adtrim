@@ -976,7 +976,7 @@
           <TextBlock Text=" · " Foreground="{StaticResource Text.Tertiary}" FontSize="12"/>
           <TextBlock Foreground="{StaticResource Text.Primary}" FontWeight="Medium" FontSize="12"
                      Text="{Binding ConfirmProgressLabel}"/>
-          <TextBlock Text=" splits confirmed · drag or ←/→ to nudge, press "
+          <TextBlock Text=" splits confirmed · drag to move, press "
                      Foreground="{StaticResource Text.Secondary}" FontSize="12"/>
           <Border Background="{StaticResource Bg.Surface2}" BorderBrush="{StaticResource Border.Subtle}"
                   BorderThickness="1" CornerRadius="3" Padding="5,0">

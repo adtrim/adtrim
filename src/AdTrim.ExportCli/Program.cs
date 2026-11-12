@@ -125,10 +125,19 @@ var progress = new Progress<ExportProgress>(p =>
     }
 });
 
+// Ctrl+C cancels the export so its temporary files are removed, instead of ending the process mid-write.
+using var cancellation = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
+
 var sw = Stopwatch.StartNew();
 try
 {
-    await export.RunExportAsync(plan, progress);
+    await export.RunExportAsync(plan, progress, cancellation.Token);
+}
+catch (OperationCanceledException)
+{
+    Console.Error.WriteLine("[export cancelled]");
+    return 130;
 }
 catch (Exception ex)
 {
