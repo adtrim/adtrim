@@ -226,16 +226,18 @@ public class ProjectStoreTests : IDisposable
     }
 
     [Fact]
-    public void Save_AtomicWriteLeavesNoTmpFile()
+    public void RepeatedSaves_ReplaceTheProjectAndLeaveNoTempFile()
     {
+        // Autosave replaces the project every few seconds; each save must land and clean up after itself.
         var store = new ProjectStore(Path.Combine(_testDir, "fallback"));
         var fp = ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs);
         var proj = new AdTrimProject(
             AdTrimProject.CurrentSchemaVersion, _sourcePath, fp, _media,
             new List<PersistedSplit>(), new List<string>(), SidecarLocation.NextToSource);
         store.Save(proj);
-        File.Exists(_sourcePath + ".adt.json.tmp").Should().BeFalse();
-        File.Exists(_sourcePath + ".adt.json").Should().BeTrue();
+        store.Save(proj with { Splits = new() { new("a", 1_000_000, SplitSource.Manual, null, null, false, "Second") } });
+        Directory.GetFiles(_testDir, "*.tmp").Should().BeEmpty();
+        store.Load(_sourcePath, _media).Project!.Splits.Should().ContainSingle().Which.ChapterTitle.Should().Be("Second");
     }
 
     [Fact]
@@ -339,5 +341,26 @@ public class ProjectStoreTests : IDisposable
         store.Save(new AdTrimProject(AdTrimProject.CurrentSchemaVersion, _sourcePath, ProjectStore.FingerprintOf(_sourcePath, _media.DurationUs),
             _media, new(), new(), SidecarLocation.NextToSource));
         Assert.Equal("{\"schema_version\":999}", File.ReadAllText(fallback));
+    }
+
+    // The same recording reaches AdTrim as d:\tv\a.ts and D:\TV\A.ts; both must find one fallback save.
+    [Fact]
+    public void FallbackSave_IsSharedByEverySpellingOfThePath()
+    {
+        var store = new ProjectStore(Path.Combine(_testDir, "fallback"));
+        Assert.Equal(store.AppDataFallbackPathFor(_sourcePath.ToLowerInvariant()), store.AppDataFallbackPathFor(_sourcePath.ToUpperInvariant()));
+    }
+
+    [Fact]
+    public void FallbackSaveNamedByAnEarlierVersion_IsStillUsed()
+    {
+        var directory = Path.Combine(_testDir, "fallback");
+        var store = new ProjectStore(directory);
+        var name = Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(_sourcePath))))[..16].ToLowerInvariant();
+        var legacy = Path.Combine(directory, name + ".adt.json");
+        Assert.NotEqual(legacy, store.AppDataFallbackPathFor(_sourcePath));
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(legacy, "{}");
+        Assert.Equal(legacy, store.AppDataFallbackPathFor(_sourcePath));
     }
 }

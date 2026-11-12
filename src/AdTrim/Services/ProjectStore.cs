@@ -51,9 +51,11 @@ public sealed class ProjectStore
 
     public string AppDataFallbackPathFor(string sourcePath)
     {
-        var dir = _fallbackDirectory;
-        var hash = FingerprintHash(sourcePath);
-        return Path.Combine(dir, hash + ".adt.json");
+        // Earlier versions named the file after the exact spelling of the path; keep using such a file.
+        var legacy = Path.Combine(_fallbackDirectory, FingerprintHash(sourcePath) + ".adt.json");
+        if (File.Exists(legacy)) return legacy;
+        // Windows paths differ in case between Explorer, the command line and saved lists.
+        return Path.Combine(_fallbackDirectory, FingerprintHash(Path.GetFullPath(sourcePath).ToUpperInvariant()) + ".adt.json");
     }
 
     public IEnumerable<string> CandidateSidecarPathsFor(string sourcePath)

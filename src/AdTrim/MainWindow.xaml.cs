@@ -47,6 +47,7 @@ public partial class MainWindow : Window
     private bool _switching;
     private bool _closeWhenSwitchCompletes;
     private bool _saveInProgress;
+    private string? _fallbackSaveNoticeFor;
     private long? _playUntilUs;
 
     private ExportView? _activeExportDialog;
@@ -1443,7 +1444,16 @@ public partial class MainWindow : Window
         vm.SaveStatus = "Saving";
         try
         {
-            await _session.SaveAsync(_store, snapshot);
+            var savedTo = await _session.SaveAsync(_store, snapshot);
+            // Said once per recording: the edits are safe, but they are not where the user expects.
+            if (vm.SourcePath == source && _fallbackSaveNoticeFor != source && vm.Banner is null
+                && !string.Equals(savedTo, _store.SidecarPathFor(source), StringComparison.OrdinalIgnoreCase))
+            {
+                _fallbackSaveNoticeFor = source;
+                vm.Banner = new BannerInfo(StatusKind.Info, "Edits are saved on this computer only.",
+                    "AdTrim cannot write beside this recording, so the project is kept in AdTrim's data folder and will not move with the recording.",
+                    Array.Empty<BannerAction>());
+            }
             if (vm.SourcePath == source && vm.Revision == revision)
             { vm.IsDirty = false; vm.SaveStatus = "Saved"; }
             else if (vm.SourcePath == source)
