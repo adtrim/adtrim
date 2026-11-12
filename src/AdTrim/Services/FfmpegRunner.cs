@@ -160,6 +160,7 @@ public sealed class FfmpegRunner
             FileName = FfmpegPath, RedirectStandardOutput = true, RedirectStandardError = true,
             UseShellExecute = false, CreateNoWindow = true, StandardErrorEncoding = Encoding.UTF8,
         };
+        psi.ArgumentList.Add("-nostdin");
         foreach (var arg in args) psi.ArgumentList.Add(arg);
         using var process = new Process { StartInfo = psi };
         var diagnostics = new StringBuilder();
@@ -207,6 +208,8 @@ public sealed class FfmpegRunner
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
         };
+        // FFmpeg must never read keys from a console it inherits; ffprobe has no such option.
+        if (exe == FfmpegPath) psi.ArgumentList.Add("-nostdin");
         foreach (var a in args) psi.ArgumentList.Add(a);
 
         using var p = new Process { StartInfo = psi, EnableRaisingEvents = true };
