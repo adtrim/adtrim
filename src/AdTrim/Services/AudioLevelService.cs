@@ -122,6 +122,18 @@ public sealed class AudioLevelService(FfmpegRunner? runner, string? cacheRoot = 
     {
         if (media.PrimaryAudio is not { } audio) return new([], []);
         var ffmpeg = runner ?? throw new InvalidOperationException("FFmpeg is required to measure audio levels.");
+        // Each pass reads a whole recording. Two windows opening at once would otherwise make
+        // a hard disk seek between two files for minutes.
+        await PassGate.WaitAsync(ct).ConfigureAwait(false);
+        try { return await MeasureGatedAsync(ffmpeg, audio, sourcePath, media, ct, waitForIdle, partialLoudness, progress).ConfigureAwait(false); }
+        finally { PassGate.Release(); }
+    }
+
+    private static readonly SemaphoreSlim PassGate = new(1, 1);
+
+    private static async Task<AudioLevels> MeasureGatedAsync(FfmpegRunner ffmpeg, AudioStream audio, string sourcePath, MediaInfo media,
+        CancellationToken ct, Func<CancellationToken, ValueTask>? waitForIdle, Action<byte[]>? partialLoudness, Action<double>? progress)
+    {
         if (waitForIdle is not null) await waitForIdle(ct).ConfigureAwait(false);
         var stream = media.PrimaryAudioIndex.ToString(CultureInfo.InvariantCulture);
         bool dialogue = audio.Channels == 6 && await HasSurroundLayoutAsync(ffmpeg, sourcePath, stream, ct).ConfigureAwait(false);
