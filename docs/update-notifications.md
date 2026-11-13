@@ -144,7 +144,7 @@ After building a release installer, prepare its immutable package information:
 
 ```powershell
 powershell -File tools/prepare-update-package.ps1 -InstallerPath <installer.exe> -OutputDirectory <release-folder>
-pwsh -File tools/sign-update-feed.ps1 -KeyPath <private-key> -FeedPath <release-folder>/update-package.json
+dotnet run --project tools/AdTrim.UpdateFeed -- --sign <release-folder>/update-package.json <private-key>
 dotnet run --project tools/AdTrim.UpdateFeed -- --package <release-folder>/update-package.json src/AdTrim/Services/update-public-key.pem <version>
 ```
 
@@ -157,31 +157,48 @@ hosts the downloads; no paid updater service is required.
 
 ## Preparing a feed
 
-Use PowerShell 7 and tools/sign-update-feed.ps1. Create the protected key outside
-the repositories using -CreateKey -KeyPath <private-path> -PublicKeyPath <public-path>.
-Private material is encrypted for the current Windows account. Never commit it,
-publish it, or place it in website deployment credentials. Keep an independently
-encrypted recovery backup in separate storage before production deployment.
+Signing, verification and key management are all commands of tools/AdTrim.UpdateFeed.
+They need only the .NET SDK. Run it without arguments for the list.
 
-Create the backup with tools/backup-update-key.ps1 -KeyPath <private-path> -BackupPath <backup-file>.
-It asks for the passphrase twice. Then check the backup, which writes nothing:
+Create the protected key outside the repositories:
 
 ```powershell
-tools/restore-update-key.ps1 -BackupPath <backup-file> -PublicKeyPath src/AdTrim/Services/update-public-key.pem
+dotnet run --project tools/AdTrim.UpdateFeed -- --create-key <private-path> <public-path>
 ```
 
-The check confirms that the backup opens with the passphrase and holds the private half of
-the public key the app trusts. Repeat it from time to time: a backup that cannot be opened
-is the same as no backup.
-
-To restore on a new computer or Windows account, copy the backup file there and add
--KeyPath <private-path>. The key is written encrypted for that Windows account and
-verified. An existing key file is never overwritten. Without the backup or its passphrase
-the root key cannot be recovered; see Key rotation below for what that means.
-
-Sign with -KeyPath <private-path> -FeedPath <updates.json>, then validate:
+Private material is encrypted for the current Windows account, so signing on that
+computer needs no passphrase. Never commit it, publish it, or place it in website
+deployment credentials. Keep an independently encrypted recovery backup in separate
+storage before production deployment:
 
 ```powershell
+dotnet run --project tools/AdTrim.UpdateFeed -- --backup-key <private-path> <backup-file>
+dotnet run --project tools/AdTrim.UpdateFeed -- --check-backup <backup-file> src/AdTrim/Services/update-public-key.pem
+```
+
+The backup asks for a passphrase twice. The check confirms that the backup opens with
+the passphrase and holds the private half of the public key the app trusts, and writes
+nothing. Repeat it from time to time: a backup that cannot be opened is the same as no
+backup.
+
+To restore on a new computer or Windows account, copy the backup file there:
+
+```powershell
+dotnet run --project tools/AdTrim.UpdateFeed -- --restore-key <backup-file> src/AdTrim/Services/update-public-key.pem <private-path>
+```
+
+The key is written encrypted for that Windows account and verified. An existing key
+file is never overwritten. Without the backup or its passphrase the root key cannot be
+recovered; see Key rotation below for what that means. --check-key <private-path>
+<public-path> confirms that a key file opens for this account and matches a public key.
+
+tools/test-update-signing.ps1 exercises every command with throwaway keys in a
+temporary folder.
+
+Sign and validate an announcement:
+
+```powershell
+dotnet run --project tools/AdTrim.UpdateFeed -- --sign updates.json <private-path>
 dotnet run --project tools/AdTrim.UpdateFeed -- updates.json src/AdTrim/Services/update-public-key.pem
 ```
 
@@ -206,10 +223,14 @@ whether the vulnerability affects this application's build and enabled features.
 
 ## Key rotation
 
+Rotation is optional and has never been used. The root key has no expiry, so a
+project that never rotates has nothing to renew.
+
 For a replacement operational key, use the original root key with
--AuthorizePublicKeyPath <replacement-public.pem> -AuthorizationPath <authorization.json>.
-The authorization expires after one year. Sign subsequent feeds using the new
-private key and -AuthorizationPath <authorization.json>.
+--authorize <root-private-path> <replacement-public.pem> <authorization.json>.
+The authorization expires after one year: renew it and sign the current announcement
+again before then, or announcements signed with the replacement stop verifying.
+Sign subsequent feeds with --sign <file> <replacement-private-path> <authorization.json>.
 
 The signature file then contains signature, authorization, and
 authorizationSignature, each base64. Authorization decodes to UTF-8 JSON with
