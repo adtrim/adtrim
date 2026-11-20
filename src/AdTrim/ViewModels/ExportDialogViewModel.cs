@@ -17,13 +17,22 @@ public enum ExportDialogMode { Configuring, Exporting, Completed, Failed, Cancel
 
 public enum ExportPartStatus { Queued, InProgress, Done, Failed }
 
+/// <summary>The work after the video is published: none without a host, a quick export record, or the
+/// export record after the long source-comment copy.</summary>
+public enum AfterExportStep { None, RecordExport, SourceComment }
+
 /// <summary>
 /// One row in the progress view's parts list. Notifies on Status/Percent so
 /// the row icon + right-hand status text reflect live ExportService updates.
 /// </summary>
 public sealed class ExportPartItem : INotifyPropertyChanged
 {
-    public int Index { get; init; }            // 1-based segments; 0 for stitching; -1 for encoder evaluation
+    public const int StitchIndex = 0, EvaluateIndex = -1, CheckIndex = -2, AfterExportIndex = -3;
+    public const string StitchLabel = "Stitch parts", CheckLabel = "Check the video",
+        SourceCommentLabel = "Add comment to source file", RecordExportLabel = "Save export status";
+    public static string AfterExportLabel(AfterExportStep step)
+        => step == AfterExportStep.SourceComment ? SourceCommentLabel : RecordExportLabel;
+    public int Index { get; init; }            // 1-based segments, or one of the step indexes above
     public string Label { get; init; } = "";
     public string TimeRange { get; init; } = "";
 
@@ -297,6 +306,15 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
     private TimeSpan? _recordingStart;
     private double _recordingFraction;
     private string _recordingHeading = "";
+    // The ring divides 0-100% between the export and the step after it. A source comment's share
+    // follows the measured export time against the comment's estimated disk time.
+    // A conservative hard-disk rate for the comment's reads and writes; its own progress takes over once it runs.
+    private const double SourceCommentBytesPerSecond = 100_000_000;
+    private const double DefaultExportShareWithComment = 0.75;
+    private double _exportShare = 1;
+    private double? _commentSeconds;
+    private TimeSpan _exportTimeStart;
+    private double? _recordingBase;
 
     // Ticks the Elapsed / Remaining display while a long ffmpeg encode is in
     // flight. ExportService only reports progress on phase boundaries (≈ once
@@ -324,8 +342,8 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
 
     // -------- progress-view orchestration --------
 
-    /// <summary>Switch to the progress view and seed the parts list from the plan.</summary>
-    public void BeginExport(ExportPlan plan)
+    /// <summary>Switch to the progress view and seed the parts list with every step that will run, in order.</summary>
+    public void BeginExport(ExportPlan plan, AfterExportStep afterExport = AfterExportStep.None)
     {
         CleanupWarning = "";
         FallbackNotice = "";
@@ -341,14 +359,20 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
                 Status = ExportPartStatus.Queued,
             });
         }
-        // Synthetic tail row - the concat-mux + validate phase. Index 0 marks it
-        // as "not a real segment" for the progress mapping below.
-        Parts.Add(new ExportPartItem
+        Parts.Add(new ExportPartItem { Index = ExportPartItem.StitchIndex, Label = ExportPartItem.StitchLabel });
+        Parts.Add(new ExportPartItem { Index = ExportPartItem.CheckIndex, Label = ExportPartItem.CheckLabel });
+        if (afterExport != AfterExportStep.None)
+            Parts.Add(new ExportPartItem { Index = ExportPartItem.AfterExportIndex, Label = ExportPartItem.AfterExportLabel(afterExport) });
+        _commentSeconds = afterExport == AfterExportStep.SourceComment && plan.Fingerprint is { SizeBytes: > 0 } source
+            ? SourceCommentSeconds(source.SizeBytes) : null;
+        _exportShare = afterExport switch
         {
-            Index = 0,
-            Label = "Stitch parts",
-            Status = ExportPartStatus.Queued,
-        });
+            AfterExportStep.None => 1,
+            AfterExportStep.RecordExport => 0.99,
+            _ => DefaultExportShareWithComment,
+        };
+        _exportTimeStart = TimeSpan.Zero;
+        _recordingBase = null;
 
         ProgressPercent = 0;
         ProgressLine = "Preparing…";
@@ -428,22 +452,22 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
             ? _runTimer.Elapsed + TimeSpan.FromSeconds(Math.Min(seconds, 86400)) : null;
         if (p.EncoderName is not null) ActiveEncoder = p.EncoderName;
         if (p.FallbackNotice is not null) FallbackNotice = p.FallbackNotice;
-        ProgressPercent = Math.Clamp(p.OverallPercent, 0, 1);
 
-        var concatIndex = Parts.Count - 1;
         switch (p.Phase)
         {
             case ExportPhase.Restarting:
                 foreach (var part in Parts) { part.Status = ExportPartStatus.Queued; part.Percent = 0; }
+                // The new attempt starts over, so its time estimate excludes the failed one.
+                _exportTimeStart = _runTimer.Elapsed;
+                ProgressPercent = Math.Clamp(p.OverallPercent, 0, 1);
                 ProgressLine = p.Message;
                 break;
             case ExportPhase.EncodingSegment:
                 // Mark prior parts done, current part in-progress.
-                for (int i = 0; i < concatIndex; i++)
+                foreach (var part in Parts)
                 {
-                    var part = Parts[i];
                     if (part.Index > 0 && part.Index < p.CurrentSegment) part.Status = ExportPartStatus.Done;
-                    else if (part.Index == p.CurrentSegment)
+                    else if (part.Index > 0 && part.Index == p.CurrentSegment)
                     {
                         part.Status = ExportPartStatus.InProgress;
                         part.Percent = Math.Clamp(p.SegmentPercent, 0, 1);
@@ -453,35 +477,44 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
                 ProgressLine = seg is null
                     ? $"Encoding part {p.CurrentSegment}/{p.TotalSegments}"
                     : $"Encoding part {p.CurrentSegment}/{p.TotalSegments} · {seg.TimeRange}";
+                ShowExportProgress(p.OverallPercent);
                 break;
             case ExportPhase.Concatenating:
             case ExportPhase.Finalizing:
+                if (StartStep(ExportPartItem.StitchIndex) is { } stitch)
+                {
+                    stitch.Percent = p.Phase == ExportPhase.Concatenating ? p.SegmentPercent : 1;
+                    stitch.StatusDetail = p.Phase == ExportPhase.Finalizing ? "finalizing" : p.SegmentPercent == 0 ? "preparing" : null;
+                }
+                ProgressLine = p.Phase == ExportPhase.Finalizing ? "Finalizing video…" : p.Message;
+                ShowExportProgress(p.OverallPercent);
+                break;
             case ExportPhase.Validating:
-                for (int i = 0; i < concatIndex; i++) Parts[i].Status = ExportPartStatus.Done;
-                Parts[concatIndex].Status = ExportPartStatus.InProgress;
-                Parts[concatIndex].Percent = p.Phase == ExportPhase.Concatenating ? p.SegmentPercent : 1;
-                Parts[concatIndex].StatusDetail = p.Phase == ExportPhase.Finalizing ? "finalizing"
-                    : p.Phase == ExportPhase.Validating ? "checking"
-                    : p.SegmentPercent == 0 ? "preparing" : null;
-                ProgressLine = p.Phase == ExportPhase.Validating
-                    ? "Validating output…"
-                    : p.Phase == ExportPhase.Finalizing ? "Finalizing video…" : p.Message;
+                if (StartStep(ExportPartItem.CheckIndex) is { } check) check.StatusDetail = "checking";
+                ProgressLine = "Validating output…";
+                ShowExportProgress(p.OverallPercent);
                 break;
             case ExportPhase.Done:
-                foreach (var part in Parts) part.Status = ExportPartStatus.Done;
+                foreach (var part in Parts)
+                    if (part.Index != ExportPartItem.AfterExportIndex) part.Status = ExportPartStatus.Done;
                 ProgressLine = "Export complete";
+                ShowExportProgress(p.OverallPercent);
                 break;
             case ExportPhase.RecordingExport:
-                foreach (var part in Parts) part.Status = ExportPartStatus.Done;
                 _recordingFraction = Math.Clamp(p.SegmentPercent, 0, 1);
+                if (StartStep(ExportPartItem.AfterExportIndex) is { } after) after.Percent = _recordingFraction;
+                else foreach (var part in Parts) part.Status = ExportPartStatus.Done;
                 // Each operation restarts at zero (a rollback has a new heading), so its estimate excludes earlier work.
                 if (_recordingStart is null || _recordingFraction == 0 || p.Message != _recordingHeading) _recordingStart = _runTimer.Elapsed;
                 _recordingHeading = p.Message;
                 string percent = $"{_recordingFraction * 100:0}%";
                 ProgressLine = p.Detail is { } detail ? $"{detail} · {percent}"
                     : _recordingFraction > 0 ? $"{percent} of this step" : "";
+                _recordingBase ??= ProgressPercent;
+                ShowOverall(_recordingBase.Value + (1 - _recordingBase.Value) * _recordingFraction);
                 break;
             case ExportPhase.Failed:
+                ProgressPercent = Math.Clamp(p.OverallPercent, 0, 1);
                 ProgressLine = p.Message;
                 break;
             case ExportPhase.Planning:
@@ -492,6 +525,44 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
         RefreshElapsed();
         RefreshRemaining();
         RefreshPresentation();
+    }
+
+    /// <summary>Marks the rows before a step done and the step in progress. Rows after it stay queued.</summary>
+    private ExportPartItem? StartStep(int index)
+    {
+        var step = Parts.FirstOrDefault(part => part.Index == index);
+        if (step is null) return null;
+        foreach (var part in Parts.TakeWhile(part => part != step)) part.Status = ExportPartStatus.Done;
+        step.Status = ExportPartStatus.InProgress;
+        return step;
+    }
+
+    /// <summary>Shows the export's own progress within its share of the ring.</summary>
+    private void ShowExportProgress(double exported)
+    {
+        exported = Math.Clamp(exported, 0, 1);
+        if (_commentSeconds is { } comment) _exportShare = ExportShare(_runTimer.Elapsed - _exportTimeStart, exported, comment, _exportShare);
+        ShowOverall(exported * _exportShare);
+    }
+
+    /// <summary>The export's share of the ring next to a source comment: its projected time against the comment's.
+    /// Keeps <paramref name="current"/> until the export has run long enough to project.</summary>
+    internal static double ExportShare(TimeSpan spent, double exported, double commentSeconds, double current)
+    {
+        if (exported < 0.01 || spent < TimeSpan.FromSeconds(1)) return current;
+        double exportSeconds = spent.TotalSeconds / exported;
+        return exportSeconds / (exportSeconds + commentSeconds);
+    }
+
+    /// <summary>Estimated seconds for the source comment's copy and checks of a source of this size.</summary>
+    internal static double SourceCommentSeconds(long sourceBytes)
+        => (double)SourceCommentService.SourcePasses * sourceBytes / SourceCommentBytesPerSecond;
+
+    /// <summary>The ring never moves back during a run and reads 100% only once every row is done.</summary>
+    private void ShowOverall(double value)
+    {
+        if (Parts.Any(part => !part.IsDone)) value = Math.Min(value, 0.99);
+        ProgressPercent = Math.Max(ProgressPercent, Math.Clamp(value, 0, 1));
     }
 
     /// <summary>
@@ -519,8 +590,10 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
         if (_progressPhase == ExportPhase.RecordingExport)
         {
             var spent = _runTimer.Elapsed - (_recordingStart ?? _runTimer.Elapsed);
-            RemainingFormatted = _recordingFraction is >= 0.02 and < 1 && spent >= TimeSpan.FromSeconds(1)
-                ? $"~{FormatStopwatch(spent * ((1 - _recordingFraction) / _recordingFraction))} remaining" : "";
+            var left = spent * ((1 - _recordingFraction) / Math.Max(_recordingFraction, 0.02));
+            // "~00:00" while the step is still running would claim it has already finished.
+            RemainingFormatted = _recordingFraction is >= 0.02 and < 1 && spent >= TimeSpan.FromSeconds(1) && left >= TimeSpan.FromSeconds(1)
+                ? $"~{FormatStopwatch(left)} remaining" : "";
             return;
         }
         if (_progressPhase != ExportPhase.EncodingSegment)

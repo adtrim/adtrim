@@ -636,10 +636,12 @@ internal static partial class Program
                 var progressDialog = new AdTrim.Views.ExportView();
                 progressDialog.Bind(vm, media, "software");
                 var progressVm = (ExportDialogViewModel)progressDialog.DataContext;
-                progressVm.BeginExport(plan);
-                Require(progressVm.Parts.Last().Label == "Stitch parts" && progressVm.Parts.Last().TimeRange == "",
-                    "Final export row describes stitching without repeating the output filename");
-                Require(progressVm.Parts.All(p => p.Index >= 0), "Export has no evaluation step until tests actually start");
+                progressVm.BeginExport(plan, AfterExportStep.SourceComment);
+                var finalRows = progressVm.Parts.Skip(plan.KeptSegments.Count).ToList();
+                Require(finalRows.Select(p => p.Label).SequenceEqual(new[] { "Stitch parts", "Check the video", "Add comment to source file" })
+                    && finalRows.All(p => p.TimeRange == "" && p.IsQueued),
+                    "Rows after the parts name every remaining step in order without repeating the output filename");
+                Require(progressVm.Parts.All(p => p.Index != ExportPartItem.EvaluateIndex), "Export has no evaluation step until tests actually start");
                 progressVm.BeginEncoderEvaluation();
                 Require(progressVm.Parts[0].Index == -1 && progressVm.Parts[0].IsInProgress,
                     "Encoder evaluation appears first and active before encoding");
@@ -651,8 +653,9 @@ internal static partial class Program
                 progressVm.BeginEncoderEvaluation();
                 progressVm.MarkCancelled();
                 Require(progressVm.Parts[0].IsFailed, "Cancellation stops the active evaluation row");
-                progressVm.BeginExport(plan);
+                progressVm.BeginExport(plan, AfterExportStep.SourceComment);
                 var progressHost = ShowExportForTest(progressDialog, window);
+                var stitchRow = progressVm.Parts.First(p => p.Index == ExportPartItem.StitchIndex);
                 progressVm.UpdateProgress(new(ExportPhase.EncodingSegment, 1, 2, 1, 0.95, "Encoding"));
                 progressVm.UpdateProgress(new(ExportPhase.Concatenating, 2, 2, 0, 0.95, "Preparing parts…"));
                 Require(progressVm.RemainingFormatted == "" && progressVm.IsProgressIndeterminate,
@@ -661,20 +664,25 @@ internal static partial class Program
                 var stitchEstimate = progressVm.RemainingFormatted;
                 await Task.Delay(2200);
                 await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
-                Require(progressVm.Parts.Last().Percent == 0.5 && progressVm.RemainingFormatted != stitchEstimate,
-                    $"Measured stitching progress drives its own countdown between callbacks ({stitchEstimate} -> {progressVm.RemainingFormatted}, {progressVm.Parts.Last().Percent})");
+                Require(stitchRow.Percent == 0.5 && progressVm.RemainingFormatted != stitchEstimate,
+                    $"Measured stitching progress drives its own countdown between callbacks ({stitchEstimate} -> {progressVm.RemainingFormatted}, {stitchRow.Percent})");
                 progressVm.UpdateProgress(new(ExportPhase.Finalizing, 2, 2, 1, 0.98, "Finalizing MP4…"));
                 Require(progressVm.RemainingFormatted == "" && progressVm.IsProgressIndeterminate
                     && progressVm.TimeHeadline == "Finalizing video…", "MP4 finalization never shows a stale countdown");
                 progressDialog.UpdateLayout();
                 Capture(progressDialog, Path.Combine(directory, "finalizing-mp4.png"));
+                var beforeComment = progressVm.ProgressPercent;
                 progressDialog.ReportSourceCommentProgress(new(false, "", 0));
-                Require(progressVm.CurrentPartHeading == "Adding the export comment to the source file" && progressVm.ProgressPercentText == "99%"
-                    && progressVm.TimeHeadline == "Finishing up…" && progressVm.Parts.All(p => p.IsDone),
-                    "The source-comment step names itself instead of showing a frozen finalization");
+                var commentRow = progressVm.Parts.Last();
+                Require(progressVm.CurrentPartHeading == "Adding the export comment to the source file"
+                    && progressVm.ProgressPercent >= beforeComment && progressVm.ProgressPercent < 1
+                    && progressVm.TimeHeadline == "Finishing up…" && commentRow.IsInProgress
+                    && progressVm.Parts.Where(p => p != commentRow).All(p => p.IsDone),
+                    "The source-comment step names itself and is the one row still running");
                 await Task.Delay(1100);
                 progressDialog.ReportSourceCommentProgress(new(false, SourceCommentService.CheckingStep, 0.25));
-                Require(progressVm.ProgressLine == "Checking the copy · 25%" && progressVm.ProgressPercentText == "99%"
+                Require(progressVm.ProgressLine == "Checking the copy · 25%" && commentRow.Percent == 0.25
+                    && progressVm.ProgressPercent >= beforeComment && progressVm.ProgressPercent < 1
                     && progressVm.RemainingFormatted.EndsWith("remaining") && progressVm.TimeHeadline == progressVm.RemainingFormatted,
                     $"Source-comment progress names its step and moves with its own estimate ({progressVm.ProgressLine}; {progressVm.TimeHeadline})");
                 progressDialog.UpdateLayout();
@@ -713,6 +721,7 @@ internal static partial class Program
                 Capture(progressDialog, Path.Combine(directory, "quiet-focus.png"));
 
 
+                double? progressWidth = null;
                 foreach (int count in new[] { 1, 12, 100 })
                 {
                     progressVm.Parts.Clear();
@@ -727,20 +736,22 @@ internal static partial class Program
                         "Progress window stays within its monitor height cap");
                     Require(Math.Abs(progressDialog.ActualHeight - collapsedHeight) < 2, "Opening details preserves the progress window height");
                     var mainPanel = (Grid)progressDialog.FindName("ProgressMainPanel");
-                    Require(Math.Abs(mainPanel.ActualWidth - 420) < 2,
-                        "Progress panel keeps its readable width while details expand");
+                    progressWidth ??= mainPanel.ActualWidth;
+                    Require(mainPanel.ActualWidth >= 420 && Math.Abs(mainPanel.ActualWidth - progressWidth.Value) < 2,
+                        "Progress panel keeps its readable width while the parts list grows");
                     if (count == 100)
                     {
 
                         Require(scroll.ScrollableHeight > 0, "Long export parts list scrolls within available height");
+                        var destination = (Grid)progressDialog.FindName("ExportDestinationDetails");
+                        var destinationTop = destination.TransformToAncestor(progressDialog).Transform(new Point()).Y;
                         scroll.ScrollToBottom();
                         progressDialog.UpdateLayout();
                         Require(scroll.VerticalOffset > 0, "Final export parts can be reached by scrolling");
                         var title = (TextBlock)progressDialog.FindName("ProgressDetailsTitle");
                         Require(title.IsVisible, "Details title remains outside the scroll body");
-                        var destination = (Grid)progressDialog.FindName("ExportDestinationDetails");
-                        Require(destination.TransformToAncestor(scroll).Transform(new Point()).Y < 0,
-                            "Scrolling details moves destination information along with the parts list");
+                        Require(Math.Abs(destination.TransformToAncestor(progressDialog).Transform(new Point()).Y - destinationTop) < 1,
+                            "Destination and encoder stay in view while the parts list scrolls");
                     }
                 }
                 ((ScrollViewer)progressDialog.FindName("PartsScrollViewer")).ScrollToTop();

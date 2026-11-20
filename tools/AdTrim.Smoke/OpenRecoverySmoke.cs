@@ -210,6 +210,15 @@ internal static partial class Program
         return result;
     }
 
+    // As an export does it: the choice is read when the export starts, and the step after it follows that choice.
+    private static async Task<string?> CommentAsExportWould(MainWindow window, MainViewModel vm, ExportView export)
+    {
+        var choice = await (Task<SourceCommentChoice>)Invoke(window, "ReadSourceCommentChoiceAsync", export.AcceptedPlan!)!;
+        typeof(ExportView).GetProperty(nameof(ExportView.SourceComment))!.SetValue(export, choice);
+        export.SourceCommentFailed = false;
+        return await (Task<string?>)Invoke(window, "AddSourceCommentAsync", vm, export, CancellationToken.None)!;
+    }
+
     private static async Task CheckUnreadableSourcePreferences(MainWindow window, MainViewModel vm, MediaInfo media, string source, string directory)
     {
         var menu = (MenuItem)window.FindName("SourceCommentMenu");
@@ -226,7 +235,7 @@ internal static partial class Program
             foreach (string contents in new[] { "{", "null" })
             {
                 await File.WriteAllTextAsync(path, contents);
-                var note = await (Task<string?>)Invoke(window, "AddSourceCommentAsync", vm, export, CancellationToken.None)!;
+                var note = await CommentAsExportWould(window, vm, export);
                 var actualHash = SHA256.HashData(await File.ReadAllBytesAsync(source));
                 Require(hash.SequenceEqual(actualHash) && export.SourceCommentFailed
                     && note?.Contains("preferences could not be read") == true, "Unreadable preferences block source writes and report why");
@@ -248,7 +257,7 @@ internal static partial class Program
             for (int i = 0; i < 100 && !menu.IsEnabled; i++) await Task.Delay(20);
             Require((await UserPreferences.ReadAsync()).AddSourceExportComment == enabled, "The known source-comment choice is saved before its file is removed");
             File.Delete(path);
-            var note = await (Task<string?>)Invoke(window, "AddSourceCommentAsync", vm, export, CancellationToken.None)!;
+            var note = await CommentAsExportWould(window, vm, export);
             var currentHash = SHA256.HashData(await File.ReadAllBytesAsync(source));
             if (enabled)
                 Require(Mp4Comments.HasExportLabel(Mp4Comments.Read(source)) && !export.SourceCommentFailed,
@@ -258,7 +267,7 @@ internal static partial class Program
                     "Missing settings with comments turned off leave the source unchanged");
         }
         await new UserPreferences { ShowThumbnails = false, ShowWaveform = false, AddSourceExportComment = true }.SaveAsync();
-        await (Task<string?>)Invoke(window, "AddSourceCommentAsync", vm, export, CancellationToken.None)!;
+        await CommentAsExportWould(window, vm, export);
         Require(Mp4Comments.HasExportLabel(Mp4Comments.Read(source)) && !export.SourceCommentFailed,
             "Repairing settings restores the explicitly enabled source-comment feature");
 

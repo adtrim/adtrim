@@ -37,6 +37,32 @@ public sealed partial class ExportDialogViewModel
         : CurrentPart is { Index: > 0 } part ? $"Encoding {part.Label}" : ProgressLine;
     public sealed record PlannedPart(int Number, string Name, string TimeRange, string Length);
 
+    /// <summary>The step after the video is saved, as export setup expects it. The export decides again when it starts.</summary>
+    public AfterExportStep PlannedAfterExport { get; set; } = AfterExportStep.RecordExport;
+
+    /// <summary>The steps after the parts, named as the progress list will name them.</summary>
+    public IReadOnlyList<string> PlannedSteps => PlannedAfterExport == AfterExportStep.None
+        ? [ExportPartItem.StitchLabel, ExportPartItem.CheckLabel]
+        : [ExportPartItem.StitchLabel, ExportPartItem.CheckLabel, ExportPartItem.AfterExportLabel(PlannedAfterExport)];
+
+    public string PageTitle => Mode switch
+    {
+        ExportDialogMode.Configuring => "Export video",
+        ExportDialogMode.Completed => "Export complete",
+        ExportDialogMode.Cancelled => "Export cancelled",
+        ExportDialogMode.Failed => "Export stopped",
+        _ => "Exporting video",
+    };
+
+    /// <summary>Title of the pane that lists the job: the same pane, before, during and after the export.</summary>
+    public string JobTitle => Mode switch
+    {
+        ExportDialogMode.Configuring => "What will be exported",
+        ExportDialogMode.Exporting => "What is being exported",
+        ExportDialogMode.Completed => "What was exported",
+        _ => "What was being exported",
+    };
+
     /// <summary>What an export started now would contain, in order: the rows of the setup screen's parts list.</summary>
     public IReadOnlyList<PlannedPart> PlannedParts => _project.Segments.Where(s => !s.IsExcluded).OrderBy(s => s.StartUs)
         .Select((s, index) => new PlannedPart(index + 1, s.Label ?? SectionNames.Format(null, index + 1),
@@ -47,6 +73,8 @@ public sealed partial class ExportDialogViewModel
     private void RefreshPresentation()
     {
         Notify(nameof(ProgressHeading));
+        Notify(nameof(PageTitle));
+        Notify(nameof(JobTitle));
         Notify(nameof(ProgressCaption));
         Notify(nameof(TimeHeadline));
         Notify(nameof(IsProgressIndeterminate));

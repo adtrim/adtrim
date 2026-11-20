@@ -22,6 +22,10 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
 
     public bool IsExportInFlight { get; private set; }
     public Func<CancellationToken, Task<string?>>? AfterSuccessfulExportAsync { get; set; }
+    /// <summary>Decides at the start whether the export adds the source comment, so its progress list shows that step only when it runs.</summary>
+    public Func<ExportPlan, Task<SourceCommentChoice>>? ChooseSourceCommentAsync { get; set; }
+    public SourceCommentChoice SourceComment { get; private set; }
+    private AfterExportStep _afterExport;
     public string? SourceCommentNote { get; private set; }
     public bool SourceCommentFailed { get; set; }
 
@@ -69,13 +73,14 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
     }
 
     public void Bind(MainViewModel project, MediaInfo? media, string? preferredAcceleration = null, ExportFormat format = ExportFormat.Mp4,
-        bool deleteSidecarAfterExport = false)
+        bool deleteSidecarAfterExport = false, AfterExportStep plannedAfterExport = AfterExportStep.RecordExport)
     {
         _preferredAcceleration = preferredAcceleration;
         _vm = new ExportDialogViewModel(project, media)
         {
             SelectedFormat = ExportFormats.Normalize(format),
             DeleteSidecarAfterExport = deleteSidecarAfterExport,
+            PlannedAfterExport = plannedAfterExport,
         };
         DataContext = _vm;
         _vm.RefreshValidation();
@@ -184,7 +189,6 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
             return;
         }
         _vm.ShowEvaluation = false;
-        _vm.BeginExport(AcceptedPlan);
         _exportCts = new CancellationTokenSource();
 
         var dialogProgress = new Progress<ExportProgress>(p =>
@@ -194,7 +198,7 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
         });
 
         IsExportInFlight = true;
-        ExportTask = RunExportWithRecoveryAsync(dialogProgress, _exportCts.Token);
+        ExportTask = BeginAndRunExportAsync(dialogProgress, _exportCts.Token);
         try
         {
             await ExportTask;
@@ -241,6 +245,17 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
         catch (OperationCanceledException) { }
     }
 
+    private async Task BeginAndRunExportAsync(IProgress<ExportProgress> progress, CancellationToken ct)
+    {
+        try { SourceComment = ChooseSourceCommentAsync is null ? default : await ChooseSourceCommentAsync(AcceptedPlan!); }
+        catch (Exception ex) { SourceComment = new(false, "Source comment was not added: " + ex.Message); }
+        _afterExport = AfterSuccessfulExportAsync is null ? AfterExportStep.None
+            : SourceComment.Add ? AfterExportStep.SourceComment : AfterExportStep.RecordExport;
+        ct.ThrowIfCancellationRequested();
+        _vm!.BeginExport(AcceptedPlan!, _afterExport);
+        await RunExportWithRecoveryAsync(progress, ct);
+    }
+
     private async Task RunExportWithRecoveryAsync(IProgress<ExportProgress> progress, CancellationToken ct)
     {
         var vm = _vm!;
@@ -274,7 +289,7 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
                 if (choice.ShowDialog() != true || choice.SelectedOption is null)
                     throw new OperationCanceledException("Export restart cancelled.");
                 vm.SelectedAcceleration = vm.AccelerationOptions.FirstOrDefault(o => o.Id == choice.SelectedOption.Id) ?? choice.SelectedOption;
-                vm.BeginExport(AcceptedPlan!);
+                vm.BeginExport(AcceptedPlan!, _afterExport);
             }
         }
         }

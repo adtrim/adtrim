@@ -2308,13 +2308,16 @@ public partial class MainWindow : Window
         var dlg = new ExportView();
         _activeExportDialog = dlg;
         var exportPreferences = await UserPreferences.LoadAsync();
-        dlg.Bind(vm, _media, _preferences.ExportAcceleration, exportPreferences.ExportFormat, exportPreferences.DeleteSidecarAfterExport);
+        dlg.Bind(vm, _media, _preferences.ExportAcceleration, exportPreferences.ExportFormat, exportPreferences.DeleteSidecarAfterExport,
+            vm.SourcePath is { } source && CanCommentSource(source) && exportPreferences.AddSourceExportComment
+                ? AfterExportStep.SourceComment : AfterExportStep.RecordExport);
         dlg.Closed += async (_, _) =>
         {
             if (dlg.DataContext is ExportDialogViewModel completed)
             { _preferences = _preferences with { ExportAcceleration = !completed.CanCheckHardware ? _preferences.ExportAcceleration : completed.SelectedAcceleration.Id }; await SavePreferencesAsync(vm); }
         };
         dlg.AttachExportRunner(_ffmpeg, statusBarProgress);
+        dlg.ChooseSourceCommentAsync = ReadSourceCommentChoiceAsync;
         dlg.AfterSuccessfulExportAsync = ct => RecordSuccessfulExportAsync(vm, dlg, ct);
         dlg.ExportFinished += (_, _) => HandleExportFinished(vm, dlg);
         dlg.Closed += (_, _) =>

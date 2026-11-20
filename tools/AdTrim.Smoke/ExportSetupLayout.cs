@@ -31,8 +31,12 @@ internal static partial class Program
             for (int i = 1; i < cards.Length; i++)
                 Require(Math.Abs(Bounds(cards[i]).Left - Bounds(cards[0]).Left) < 1
                     && Math.Abs(cards[i].ActualWidth - cards[0].ActualWidth) < 1
-                    && Bounds(cards[i]).Top >= Bounds(cards[i - 1]).Bottom + 15,
+                    && Bounds(cards[i]).Top >= Bounds(cards[i - 1]).Bottom - 1,
                     $"Export settings stay in one column in format, destination, acceleration, after-export order at {size}: {i}");
+            // The job pane sits beside the settings, never on top of them or pushing them down.
+            var job = (FrameworkElement)view.FindName("ProgressDetails");
+            Require(job.IsVisible && Bounds(job).Left >= Bounds(cards[0]).Right && Bounds(job).Top <= Bounds(cards[0]).Top,
+                $"Parts list sits beside the settings at {size}");
             Require(visible.Contains(Bounds(banner)) && Bounds(banner).Contains(Bounds(notice)),
                 $"TS chapter limitation is fully visible without scrolling at {size}");
             Require(banner.BorderThickness.Left >= 3 && banner.Background is SolidColorBrush { Color.A: > 0 }

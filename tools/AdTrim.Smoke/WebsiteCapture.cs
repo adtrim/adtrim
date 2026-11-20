@@ -85,7 +85,7 @@ internal static partial class Program
                 exportVm.SelectedFormat = ExportFormat.Mp4;
                 var plan = new ExportPlan(source, Path.Combine(exportVm.OutputFolder, exportVm.OutputFilename), media.DurationUs,
                     1, vm.Segments.Where(s => s.State != SegmentState.Excluded).Select((s, i) => new ExportSegment(i + 1, s.StartUs, s.EndUs, s.Label ?? $"Part {i + 1}")).ToArray(), vm.FrameRate);
-                exportVm.BeginExport(plan);
+                exportVm.BeginExport(plan, AfterExportStep.SourceComment);
                 exportVm.UpdateProgress(new(ExportPhase.EncodingSegment, 3, plan.KeptSegments.Count, 0.5, 0.42,
                     "Encoding part 3/4", "Software"));
                 ((System.Windows.Threading.DispatcherTimer?)typeof(ExportDialogViewModel).GetField("_tickTimer", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(exportVm))?.Stop();

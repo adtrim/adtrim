@@ -88,10 +88,14 @@ public partial class MainWindow
         finally { vm.IsBusy = busy; }
     }
 
-    private async Task<string?> AddSourceCommentAsync(MainViewModel vm, ExportView view, CancellationToken ct)
+    /// <summary>Only MP4 recordings get the Windows-visible export comment.</summary>
+    private static bool CanCommentSource(string sourcePath)
+        => Path.GetExtension(sourcePath).Equals(".mp4", StringComparison.OrdinalIgnoreCase);
+
+    // Read when the export starts, so its progress list shows the comment step exactly when it will run.
+    private async Task<SourceCommentChoice> ReadSourceCommentChoiceAsync(ExportPlan plan)
     {
-        if (view.AcceptedPlan is not { } plan
-            || !Path.GetExtension(plan.SourcePath).Equals(".mp4", StringComparison.OrdinalIgnoreCase)) return null;
+        if (!CanCommentSource(plan.SourcePath)) return default;
         UserPreferences preferences;
         try { preferences = await UserPreferences.ReadAsync(); }
         // No settings file yet (first launch): the File menu's current choice applies.
@@ -99,10 +103,20 @@ public partial class MainWindow
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             if (ex is DamagedPreferencesException) ShowDamagedPreferencesBanner();
-            view.SourceCommentFailed = true;
-            return "Source comment was not added because saved preferences could not be read. " + ex.Message;
+            return new(false, "Source comment was not added because saved preferences could not be read. " + ex.Message);
         }
-        if (!preferences.AddSourceExportComment) return null;
+        return new(preferences.AddSourceExportComment);
+    }
+
+    private async Task<string?> AddSourceCommentAsync(MainViewModel vm, ExportView view, CancellationToken ct)
+    {
+        if (view.AcceptedPlan is not { } plan) return null;
+        if (view.SourceComment.Failure is { } failure)
+        {
+            view.SourceCommentFailed = true;
+            return failure;
+        }
+        if (!view.SourceComment.Add) return null;
         view.SourceCommentFailed = true;
         if (_sourceFingerprint is null || _store is null) return "Source comment was not added: the project is unavailable.";
         bool busy = vm.IsBusy;

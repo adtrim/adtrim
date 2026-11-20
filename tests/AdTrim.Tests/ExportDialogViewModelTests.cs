@@ -1,6 +1,7 @@
 using AwesomeAssertions;
 using AdTrim.Services;
 using AdTrim.Models;
+using AdTrim.ViewModels;
 using Xunit;
 
 namespace AdTrim.Tests;
@@ -195,5 +196,122 @@ public sealed class ExportDialogViewModelTests : IDisposable
         Assert.Equal(plan.KeptSegments.Select(s => (s.Index, s.PartTitle)), vm.PlannedParts.Select(p => (p.Number, p.Name)));
         Assert.Equal("00:00.00 → 00:10.00", vm.PlannedParts[0].TimeRange);
         Assert.Equal("00:10.00", vm.PlannedParts[1].Length);
+    }
+
+    // The progress list is the user's guide from 0% to 100%: every step that will run is there from the
+    // start, in order, and a step that will not run is never shown.
+    [Theory]
+    [InlineData(AfterExportStep.None, new[] { "Part 1", "Part 2", "Stitch parts", "Check the video" })]
+    [InlineData(AfterExportStep.RecordExport, new[] { "Part 1", "Part 2", "Stitch parts", "Check the video", "Save export status" })]
+    [InlineData(AfterExportStep.SourceComment, new[] { "Part 1", "Part 2", "Stitch parts", "Check the video", "Add comment to source file" })]
+    public void TheProgressListShowsEveryStepThatWillRunFromTheStart(AfterExportStep after, string[] rows)
+    {
+        var vm = Setup();
+        vm.BeginExport(vm.BuildPlan()!, after);
+        Assert.Equal(rows, vm.Parts.Select(p => p.Label));
+        Assert.All(vm.Parts, p => Assert.True(p.IsQueued));
+        Assert.Equal(0, vm.ProgressPercent);
+    }
+
+    // Replays what the export and the step after it report. The ring must never move back, must not read
+    // 100% while a row is unchecked, and must not have every row checked while it still reads below 100%.
+    [Theory]
+    [InlineData(AfterExportStep.None)]
+    [InlineData(AfterExportStep.RecordExport)]
+    [InlineData(AfterExportStep.SourceComment)]
+    public void TheRingAndTheChecklistAgreeThroughEveryPhase(AfterExportStep after)
+    {
+        var vm = Setup();
+        vm.BeginExport(vm.BuildPlan()!, after);
+        var events = new List<(ExportProgress Progress, string Running)>
+        {
+            (new(ExportPhase.Planning, 0, 2, 0, 0, "Preparing"), ""),
+            (new(ExportPhase.EncodingSegment, 1, 2, 0, 0, "Encoding"), "Part 1"),
+            (new(ExportPhase.EncodingSegment, 1, 2, 0.5, 0.24, "Encoding"), "Part 1"),
+            (new(ExportPhase.EncodingSegment, 2, 2, 0, 0.475, "Encoding"), "Part 2"),
+            (new(ExportPhase.EncodingSegment, 2, 2, 1, 0.95, "Encoding"), "Part 2"),
+            (new(ExportPhase.Concatenating, 2, 2, 0, 0.95, "Preparing parts"), "Stitch parts"),
+            (new(ExportPhase.Concatenating, 2, 2, 0.5, 0.965, "Stitching parts"), "Stitch parts"),
+            (new(ExportPhase.Finalizing, 2, 2, 1, 0.98, "Finalizing MP4"), "Stitch parts"),
+            (new(ExportPhase.Validating, 2, 2, 0, 0.99, "Validating output"), "Check the video"),
+            (new(ExportPhase.Done, 2, 2, 1, 1, "Export complete"), ""),
+        };
+        string? afterRow = vm.Parts.Last().Index == AdTrim.ViewModels.ExportPartItem.AfterExportIndex ? vm.Parts.Last().Label : null;
+        if (afterRow is not null)
+            events.Add((new(ExportPhase.RecordingExport, 0, 0, 0, 0.99, "Recording the successful export..."), afterRow));
+        if (after == AfterExportStep.SourceComment)
+            foreach (var (step, fraction) in new[] { ("", 0.0), (SourceCommentService.CopyingStep, 0.3), (SourceCommentService.VerifyingStep, 0.99), (SourceCommentService.VerifyingStep, 1.0) })
+                events.Add((new(ExportPhase.RecordingExport, 0, 0, fraction, 0.99, "Adding the export comment to the source file",
+                    Detail: step == "" ? null : step), afterRow!));
+
+        double previous = 0;
+        foreach (var (progress, running) in events)
+        {
+            vm.UpdateProgress(progress);
+            string at = $"{progress.Phase} {progress.SegmentPercent}";
+            Assert.True(vm.ProgressPercent >= previous, $"The ring moved back at {at}");
+            previous = vm.ProgressPercent;
+            Assert.Equal(running, string.Join(",", vm.Parts.Where(p => p.IsInProgress).Select(p => p.Label)));
+            bool allDone = vm.Parts.All(p => p.IsDone);
+            Assert.True(allDone == (vm.ProgressPercent == 1), $"Rows and ring disagree at {at}: {vm.ProgressPercentText}, all done {allDone}");
+            Assert.True(vm.ProgressPercentText != "100%" || allDone, $"The ring reads 100% with work left at {at}");
+            // Rows after the running one have not started.
+            int active = vm.Parts.ToList().FindIndex(p => p.IsInProgress);
+            if (active >= 0) Assert.All(vm.Parts.Skip(active + 1), p => Assert.True(p.IsQueued, $"{p.Label} started early at {at}"));
+        }
+        vm.MarkComplete();
+        Assert.Equal(1, vm.ProgressPercent);
+        Assert.All(vm.Parts, p => Assert.True(p.IsDone));
+    }
+
+    // A long source comment gets a real share of the ring instead of all of it happening at 99%.
+    [Fact]
+    public void ALongSourceCommentHasItsOwnShareOfTheRing()
+    {
+        var vm = Setup();
+        vm.BeginExport(vm.BuildPlan()!, AfterExportStep.SourceComment);
+        vm.UpdateProgress(new(ExportPhase.Done, 2, 2, 1, 1, "Export complete"));
+        double exported = vm.ProgressPercent;
+        Assert.InRange(exported, 0.05, 0.9);
+        vm.UpdateProgress(new(ExportPhase.RecordingExport, 0, 0, 0.5, 0.99, "Adding the export comment to the source file"));
+        Assert.Equal(exported + (1 - exported) * 0.5, vm.ProgressPercent, 6);
+
+        // A 5 GB source on a disk at the assumed rate: an export projected at two minutes leaves the comment most of the ring.
+        double comment = AdTrim.ViewModels.ExportDialogViewModel.SourceCommentSeconds(5_000_000_000);
+        Assert.Equal(250, comment, 6);
+        Assert.Equal(120 / 370.0, AdTrim.ViewModels.ExportDialogViewModel.ExportShare(TimeSpan.FromSeconds(60), 0.5, comment, 0.75), 6);
+        // Too early to project: the current share stands.
+        Assert.Equal(0.75, AdTrim.ViewModels.ExportDialogViewModel.ExportShare(TimeSpan.FromMilliseconds(500), 0.5, comment, 0.75));
+        Assert.Equal(0.75, AdTrim.ViewModels.ExportDialogViewModel.ExportShare(TimeSpan.FromSeconds(60), 0.001, comment, 0.75));
+    }
+
+    // "~00:00 remaining" while the source is still being verified claims the step already finished.
+    [Fact]
+    public void AStepStillRunningNeverClaimsNoTimeRemains()
+    {
+        var vm = Setup();
+        vm.BeginExport(vm.BuildPlan()!, AfterExportStep.SourceComment);
+        vm.UpdateProgress(new(ExportPhase.RecordingExport, 0, 0, 0, 0.99, "Adding the export comment to the source file"));
+        Thread.Sleep(1100);
+        vm.UpdateProgress(new(ExportPhase.RecordingExport, 0, 0, 0.99, 0.99, "Adding the export comment to the source file",
+            Detail: SourceCommentService.VerifyingStep));
+        Assert.DoesNotContain("00:00", vm.TimeHeadline);
+        Assert.Equal("Finishing up…", vm.TimeHeadline);
+        Assert.True(vm.Parts.Last().IsInProgress);
+    }
+
+    // Setup shows the whole job before it starts; the progress list must then be the same rows,
+    // so nothing appears or disappears when Export is pressed.
+    [Theory]
+    [InlineData(AdTrim.ViewModels.AfterExportStep.SourceComment)]
+    [InlineData(AdTrim.ViewModels.AfterExportStep.RecordExport)]
+    public void TheSetupPlanNamesEveryRowTheProgressListThenShows(AdTrim.ViewModels.AfterExportStep after)
+    {
+        var vm = Setup();
+        vm.PlannedAfterExport = after;
+        var planned = vm.PlannedParts.Select(p => p.Name).Concat(vm.PlannedSteps).ToArray();
+        vm.BeginExport(vm.BuildPlan()!, after);
+        Assert.Equal(planned, vm.Parts.Select(p => p.Label));
+        Assert.Equal("What is being exported", vm.JobTitle);
     }
 }

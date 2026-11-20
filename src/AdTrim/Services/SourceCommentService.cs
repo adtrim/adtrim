@@ -9,6 +9,9 @@ namespace AdTrim.Services;
 /// Restoring is set while a failed or cancelled update puts the original back.</summary>
 public readonly record struct SourceCommentProgress(bool Restoring, string Step, double Fraction);
 
+/// <summary>Whether an export adds the source comment, decided when it starts. Failure explains why the choice could not be read.</summary>
+public readonly record struct SourceCommentChoice(bool Add, string? Failure = null);
+
 /// <summary>Recoverable source/comment and project fingerprint transaction.</summary>
 public static class SourceCommentService
 {
@@ -24,6 +27,9 @@ public static class SourceCommentService
     public const string RecheckingStep = "Rechecking the original";
     public const string VerifyingStep = "Verifying the updated file";
     public const string RestoringStep = "Restoring the original file";
+
+    /// <summary>Source-sized reads and writes in a changing update: copy read, copy write, check, recheck and verify.</summary>
+    public const int SourcePasses = 5;
 
     /// <summary>
     /// Marks the source with the export comment. On a change, the source-sized passes are: one copy
@@ -41,7 +47,7 @@ public static class SourceCommentService
         if (before != expected) throw new IOException("The source changed before its comment could be added.");
         if (File.Exists(Backup(source))) throw new IOException("A source comment backup already exists; it was preserved.");
         var date = DateOnly.FromDateTime(DateTime.Now);
-        var passes = new PassProgress(before.SizeBytes * 5, progress);
+        var passes = new PassProgress(before.SizeBytes * SourcePasses, progress);
         // The same label for the same version and date would rewrite the file unchanged.
         if (!Mp4Comments.NeedsUpdate(source, AppVersion.Numeric, date))
         {
