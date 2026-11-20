@@ -15,16 +15,18 @@
         </Button>
       </Grid>
       <StackPanel Margin="20">
-        <Label Content="_Name for segments you have not named" Target="{Binding ElementName=TemplateBox}"/>
+        <Label Foreground="{StaticResource Text.Primary}" Padding="0,0,0,6" Content="_Name for segments you have not named" Target="{Binding ElementName=TemplateBox}"/>
         <TextBox x:Name="TemplateBox" TextChanged="OnTemplateChanged" MaxLength="40"/>
         <TextBlock x:Name="PreviewText" Margin="0,10,0,0" Foreground="{StaticResource Text.Primary}" TextWrapping="Wrap"/>
         <TextBlock Text="Write {n} where the number goes. Kept segments are numbered in order; removed segments and segments with their own name are skipped. Used as chapter names in exported videos, in every recording."
                    Margin="0,10,0,18" Foreground="{StaticResource Text.Secondary}" TextWrapping="Wrap"/>
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-          <Button Content="Use default" Style="{StaticResource Button.Ghost}" Margin="0,0,8,0" Click="OnUseDefault"/>
-          <Button Content="Cancel" IsCancel="True" Style="{StaticResource Button.Ghost}" Margin="0,0,8,0"/>
-          <Button x:Name="SaveButton" Content="Save" IsDefault="True" Style="{StaticResource Button.Primary}" Click="OnSave"/>
-        </StackPanel>
+        <Grid>
+          <Button Content="Use default" Style="{StaticResource Button.Ghost}" HorizontalAlignment="Left" Click="OnUseDefault"/>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Cancel" IsCancel="True" Style="{StaticResource Button.Ghost}" Margin="0,0,8,0"/>
+            <Button x:Name="SaveButton" Content="Save" IsDefault="True" Style="{StaticResource Button.Primary}" Click="OnSave"/>
+          </StackPanel>
+        </Grid>
       </StackPanel>
     </DockPanel>
   </Border>

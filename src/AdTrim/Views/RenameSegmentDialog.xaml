@@ -15,7 +15,7 @@
         </Button>
       </Grid>
   <StackPanel Margin="20">
-    <Label Content="Segment _name" Target="{Binding ElementName=NameBox}"/>
+    <Label Foreground="{StaticResource Text.Primary}" Padding="0,0,0,6" Content="Segment _name" Target="{Binding ElementName=NameBox}"/>
     <TextBox x:Name="NameBox" TextChanged="OnNameChanged"/>
     <TextBlock Text="Used as the chapter name in the exported video." Margin="0,10,0,18"
                Foreground="{StaticResource Text.Secondary}" TextWrapping="Wrap"/>

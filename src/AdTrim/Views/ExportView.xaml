@@ -571,8 +571,14 @@
     <Border Grid.Column="2" Style="{StaticResource PaneCard}" Padding="20,18"
             Visibility="{Binding ShowEvaluation, Converter={StaticResource Bool2Vis}}">
       <DockPanel>
-        <Button DockPanel.Dock="Bottom" Content="Hide results" Click="OnHideEvaluation" Margin="0,14,0,0" HorizontalAlignment="Left"/>
-        <TextBlock DockPanel.Dock="Top" Text="Evaluation results" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,18"/>
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,18">
+          <Button x:Name="HideEvaluationButton" Click="OnHideEvaluation" Padding="8,6" Margin="0,0,12,0" VerticalAlignment="Center"
+                  ToolTip="Back to the parts in this export" AutomationProperties.Name="Back to the parts in this export">
+            <Path Width="14" Height="12" Stretch="Uniform" Stroke="{StaticResource Text.Primary}" StrokeThickness="1.8"
+                  StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Data="M17,12 L5,12 M11,6 L5,12 L11,18"/>
+          </Button>
+          <TextBlock Text="Evaluation results" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/>
+        </StackPanel>
         <Border x:Name="FastestCard" DockPanel.Dock="Top" Background="#304F8CFF" BorderBrush="{StaticResource Accent.Base}"
                 BorderThickness="2" CornerRadius="6" Padding="12" Margin="0,0,0,18"
                 Visibility="{Binding HasFastest, Converter={StaticResource Bool2Vis}}">
