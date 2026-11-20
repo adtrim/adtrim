@@ -20,6 +20,8 @@ public sealed record UserPreferences
     public string ExportAcceleration { get; init; } = "automatic";
     public bool AddSourceExportComment { get; init; } = true;
     public NewFileMarkerSource NewFileMarkerSource { get; init; } = NewFileMarkerSource.Imported;
+    /// <summary>Name of segments the user has not named, with {n} for the number.</summary>
+    public string SectionNameTemplate { get; init; } = SectionNames.DefaultTemplate;
     public bool? IsMaximized { get; init; }
     public double Left { get; init; }
     public double Top { get; init; }
@@ -116,6 +118,7 @@ public sealed record UserPreferences
                 ExportAcceleration = ExportAcceleration != previous.ExportAcceleration ? ExportAcceleration : latest.ExportAcceleration,
                 AddSourceExportComment = AddSourceExportComment != previous.AddSourceExportComment ? AddSourceExportComment : latest.AddSourceExportComment,
                 NewFileMarkerSource = saveMarkerSource || NewFileMarkerSource != previous.NewFileMarkerSource ? NewFileMarkerSource : latest.NewFileMarkerSource,
+                SectionNameTemplate = SectionNameTemplate != previous.SectionNameTemplate ? SectionNameTemplate : latest.SectionNameTemplate,
                 Positions = positions,
             }).WriteAsync();
         }
@@ -129,6 +132,17 @@ public sealed record UserPreferences
         {
             var latest = await ReadOrDefaultAsync();
             await (latest with { ExportFormat = ExportFormats.Normalize(format) }).WriteAsync();
+        }
+        finally { SaveGate.Release(); }
+    }
+
+    public static async Task SaveSectionNameTemplateAsync(string template)
+    {
+        await SaveGate.WaitAsync();
+        try
+        {
+            var latest = await ReadOrDefaultAsync();
+            await (latest with { SectionNameTemplate = SectionNames.Normalize(template) }).WriteAsync();
         }
         finally { SaveGate.Release(); }
     }

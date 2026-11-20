@@ -416,6 +416,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     else ExcludedSegmentIds.Remove(s.Id);
                     MarkDirty();
                     RefreshKeptTimeline();
+                    RefreshSegmentLabels();
                     Notify(nameof(ExpectedOutputDurationUs));
                     Notify(nameof(IsTimelineEdited), nameof(MarkerSetLabel));
                 }
@@ -532,6 +533,39 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public HashSet<string> CaptureExclusions() => Segments.Where(s => s.IsExcluded)
         .Select(s => s.BoundaryKey).ToHashSet();
 
+    private string _sectionNameTemplate = AdTrim.Services.SectionNames.DefaultTemplate;
+    /// <summary>The name of segments the user has not named, with {n} for the number. A user preference.</summary>
+    public string SectionNameTemplate
+    {
+        get => _sectionNameTemplate;
+        set
+        {
+            var template = AdTrim.Services.SectionNames.Normalize(value);
+            if (template == _sectionNameTemplate) return;
+            _sectionNameTemplate = template;
+            RefreshSegmentLabels();
+        }
+    }
+
+    /// <summary>Renumbers the unnamed segments. Display only: it changes nothing that is saved.</summary>
+    public void RefreshSegmentLabels()
+    {
+        bool rebuilding = _rebuilding;
+        _rebuilding = true;
+        try { ApplySegmentLabels(); }
+        finally { _rebuilding = rebuilding; }
+    }
+
+    // Kept segments without a name count up in order. Removed segments and named ones use no number,
+    // so the chapters of an export never skip one.
+    private void ApplySegmentLabels()
+    {
+        int number = 0;
+        foreach (var segment in Segments)
+            segment.Label = segment.Name ?? (segment.IsExcluded ? AdTrim.Services.SectionNames.Removed
+                : AdTrim.Services.SectionNames.Format(_sectionNameTemplate, ++number));
+    }
+
     public void RebuildSegmentsFromSplits(HashSet<string>? restoreExclusions = null)
     {
         var sorted = Markers.OrderBy(m => m.TimeUs).ToList();
@@ -550,7 +584,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     BoundaryKey = sorted[i].Id + ":" + sorted[i + 1].Id,
                     StartUs = sorted[i].TimeUs,
                     EndUs = sorted[i + 1].TimeUs,
-                    Label = sorted[i].ChapterTitle ?? $"Part {i + 1}",
+                    Name = sorted[i].ChapterTitle,
                 };
                 byBoundary.TryGetValue(seg.BoundaryKey, out var same);
                 var overlap = same is null ? prior.Where(s => s.StartUs < seg.EndUs && s.EndUs > seg.StartUs).ToArray() : Array.Empty<Segment>();
@@ -563,6 +597,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
             ExcludedSegmentIds.Clear();
             foreach (var seg in Segments.Where(s => s.IsExcluded)) ExcludedSegmentIds.Add(seg.Id);
+            ApplySegmentLabels();
             if (selected is not null && Segments.FirstOrDefault(s => s.BoundaryKey == selected) is { } selection)
                 SelectSegment(selection);
         }

@@ -20,6 +20,7 @@ public partial class MainWindow
         RefreshSourceCommentMenu();
         vm.ShowWaveform = _preferences.ShowWaveform;
         vm.ShowThumbnails = _preferences.ShowThumbnails;
+        vm.SectionNameTemplate = _preferences.SectionNameTemplate;
         RefreshDefaultMarkerSourceMenu();
         var desired = new Rect(double.IsFinite(_preferences.Left) ? _preferences.Left : 0,
             double.IsFinite(_preferences.Top) ? _preferences.Top : 0,

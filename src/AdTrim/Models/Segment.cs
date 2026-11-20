@@ -14,6 +14,8 @@ public enum SegmentState
 public sealed class Segment : INotifyPropertyChanged
 {
     public string BoundaryKey { get; init; } = "";
+    /// <summary>The name the user or an imported chapter gave this segment; null when it is numbered automatically.</summary>
+    public string? Name { get; init; }
     private long _startUs;
     private long _endUs;
     private SegmentState _state;

@@ -301,6 +301,36 @@ public sealed class RenameSegmentCommand : IEditCommand
     }
 }
 
+/// <summary>
+/// Clears every name that is only the numbering template with a number ("Part 3"), typed by hand
+/// or imported, so those segments number themselves again. Other names are left alone.
+/// </summary>
+public sealed class ResetNumberedNamesCommand : IEditCommand
+{
+    private readonly MainViewModel _vm;
+    private readonly (Split Marker, string Title)[] _named;
+
+    public ResetNumberedNamesCommand(MainViewModel vm)
+    {
+        _vm = vm;
+        _named = vm.Markers.Where(m => AdTrim.Services.SectionNames.IsNumbered(m.ChapterTitle, vm.SectionNameTemplate))
+            .Select(m => (m, m.ChapterTitle!)).ToArray();
+    }
+
+    public int Count => _named.Length;
+    public string Description => "Reset numbered segment names";
+    public void Do()
+    {
+        foreach (var (marker, _) in _named) marker.ChapterTitle = null;
+        _vm.RebuildSegmentsFromSplits();
+    }
+    public void Undo()
+    {
+        foreach (var (marker, title) in _named) marker.ChapterTitle = title;
+        _vm.RebuildSegmentsFromSplits();
+    }
+}
+
 public sealed class ToggleExcludedCommand : IEditCommand
 {
     private readonly MainViewModel _vm;

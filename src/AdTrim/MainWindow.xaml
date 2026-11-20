@@ -174,6 +174,7 @@
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem Header="Mark segment as excluded"   InputGestureText="X"             Style="{StaticResource DropdownMenuItem}" Click="OnToggleExcluded"/>
             <MenuItem Header="Rename segment"             InputGestureText="F2"            Style="{StaticResource DropdownMenuItem}" Click="OnRenameSelectedSegment"/>
+            <MenuItem Header="Reset numbered segment names"                                Style="{StaticResource DropdownMenuItem}" Click="OnResetNumberedSegmentNames"/>
           </MenuItem>
           <MenuItem Header="_View" Style="{StaticResource MenuBarItem}" IsEnabled="{Binding CanInteract}">
             <MenuItem Header="Zoom in"        InputGestureText="Ctrl+="  Style="{StaticResource DropdownMenuItem}" Click="OnZoomIn"/>
@@ -202,6 +203,8 @@
             <MenuItem Header="Refine selected splits"     InputGestureText="R"      Style="{StaticResource DropdownMenuItem}" Click="OnRefineSelected" IsEnabled="{Binding CanEdit}"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem Header="Auto-confirm high-confidence" Style="{StaticResource DropdownMenuItem}" Click="OnAutoConfirmHighConfidence" IsEnabled="{Binding CanEdit}"/>
+            <Separator Background="{StaticResource Border.Subtle}"/>
+            <MenuItem x:Name="SegmentNamesMenuItem" Header="Segment names…" Style="{StaticResource DropdownMenuItem}" Click="OnSegmentNames"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem x:Name="AdBreakDetectionMenu" Header="Ad break detection" InputGestureText="▸" Style="{StaticResource DropdownMenuItem}">
               <MenuItem x:Name="UseOriginalImportedMarkersMenuItem" Header="Revert to original imported markers" Style="{StaticResource DropdownMenuItem}" Click="OnUseImportedMarkers"/>

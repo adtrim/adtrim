@@ -169,4 +169,83 @@ public class EditingRegressionTests
         Assert.Equal("edl://%6%a,b.mp,122.634567,1.111111", map.ToMpvEdl("a,b.mp", 121_400_000));
         Assert.StartsWith("edl://%2%", map.ToMpvEdl("é"));
     }
+
+    // Five sections of 10 s each.
+    private static MainViewModel FiveSections()
+    {
+        var vm = new MainViewModel { DurationUs = 50_000_000 };
+        vm.Markers.Add(new Split { Id = "start", TimeUs = 0, Label = "Start" });
+        foreach (var (id, time) in new[] { ("a", 10), ("b", 20), ("c", 30), ("d", 40) })
+            vm.Markers.Add(new Split { Id = id, TimeUs = time * 1_000_000L });
+        vm.Markers.Add(new Split { Id = "end", TimeUs = 50_000_000, Label = "End" });
+        vm.RebuildSegmentsFromSplits();
+        return vm;
+    }
+    private static string?[] Labels(MainViewModel vm) => vm.Segments.Select(s => s.Label).ToArray();
+
+    // The chapters of an export are the kept sections. Their numbers must not skip what was removed,
+    // and a section the user named must not use one up.
+    [Fact]
+    public void UnnamedKeptSectionsNumberInOrderAroundRemovedAndNamedOnes()
+    {
+        var vm = FiveSections();
+        Assert.Equal(new[] { "Part 1", "Part 2", "Part 3", "Part 4", "Part 5" }, Labels(vm));
+
+        vm.CommandStack.Execute(new RenameSegmentCommand(vm, vm.Segments[1], "Intro"));
+        vm.CommandStack.Execute(new ToggleExcludedCommand(vm, vm.Segments[2]));
+        Assert.Equal(new[] { "Part 1", "Intro", "Removed", "Part 2", "Part 3" }, Labels(vm));
+
+        vm.CommandStack.Execute(new AddSplitCommand(vm, 45_000_000, SplitSource.Manual));
+        Assert.Equal(new[] { "Part 1", "Intro", "Removed", "Part 2", "Part 3", "Part 4" }, Labels(vm));
+
+        vm.CommandStack.Undo();
+        vm.CommandStack.Undo();
+        Assert.Equal(new[] { "Part 1", "Intro", "Part 2", "Part 3", "Part 4" }, Labels(vm));
+    }
+
+    [Fact]
+    public void TheNameTemplateRenamesUnnamedSectionsWithoutMarkingTheProjectChanged()
+    {
+        var vm = FiveSections();
+        vm.CommandStack.Execute(new RenameSegmentCommand(vm, vm.Segments[0], "Cold open"));
+        vm.IsDirty = false;
+        vm.SectionNameTemplate = "Chapter {n}";
+        Assert.Equal(new[] { "Cold open", "Chapter 1", "Chapter 2", "Chapter 3", "Chapter 4" }, Labels(vm));
+        Assert.False(vm.IsDirty);
+        // Nothing usable falls back to the built-in name; it never produces identical chapters.
+        vm.SectionNameTemplate = "Chapter";
+        Assert.Equal("Part 1", vm.Segments[1].Label);
+    }
+
+    [Fact]
+    public void ResetClearsOnlyNamesThatAreJustANumberAndUndoRestoresThem()
+    {
+        var vm = FiveSections();
+        vm.SectionNameTemplate = "Chapter {n}";
+        vm.Markers[0].ChapterTitle = "Part 7";
+        vm.Markers[1].ChapterTitle = "Intro";
+        vm.Markers[2].ChapterTitle = "chapter 12";
+        vm.Markers[3].ChapterTitle = "Part 2 of the finale";
+        vm.RebuildSegmentsFromSplits();
+
+        var reset = new ResetNumberedNamesCommand(vm);
+        Assert.Equal(2, reset.Count);
+        vm.CommandStack.Execute(reset);
+        Assert.Equal(new[] { "Chapter 1", "Intro", "Chapter 2", "Part 2 of the finale", "Chapter 3" }, Labels(vm));
+        Assert.Null(vm.Markers[0].ChapterTitle);
+
+        vm.CommandStack.Undo();
+        Assert.Equal(new[] { "Part 7", "Intro", "chapter 12", "Part 2 of the finale", "Chapter 1" }, Labels(vm));
+    }
+
+    [Theory]
+    [InlineData("Part {n}", true)]
+    [InlineData("{n}. rész", true)]
+    [InlineData("{n}", true)]
+    [InlineData("Chapter", false)]
+    [InlineData("{n} of {n}", false)]
+    [InlineData("", false)]
+    [InlineData("A name that is far too long to be a chapter title {n}", false)]
+    public void ATemplateNeedsTheNumberExactlyOnce(string template, bool valid)
+        => Assert.Equal(valid, AdTrim.Services.SectionNames.IsValid(template));
 }

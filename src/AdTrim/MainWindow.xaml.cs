@@ -2469,6 +2469,45 @@ public partial class MainWindow : Window
             vm.CommandStack.Execute(new RenameSegmentCommand(vm, segment, dialog.SegmentName));
     }
 
+    private void OnResetNumberedSegmentNames(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel { CanEdit: true } vm || vm.IsBusy) return;
+        var command = new ResetNumberedNamesCommand(vm);
+        if (command.Count == 0)
+        {
+            Notice(vm, StatusKind.Info, "No segment has a typed or imported name like \"" + SectionNames.Format(vm.SectionNameTemplate, 3)
+                + "\". Unnamed segments already number themselves.");
+            return;
+        }
+        vm.CommandStack.Execute(command);
+        vm.StatusOverride = command.Count == 1 ? "1 segment name reset to automatic numbering. Undo restores it."
+            : $"{command.Count} segment names reset to automatic numbering. Undo restores them.";
+    }
+
+    private async void OnSegmentNames(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm) return;
+        var dialog = new SegmentNamesDialog(vm.SectionNameTemplate) { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.NameTemplate == vm.SectionNameTemplate) return;
+        string template = SectionNames.Normalize(dialog.NameTemplate);
+        // One setting for every recording: each open window shows it at once.
+        foreach (var window in Application.Current.Windows.OfType<MainWindow>()) window.ApplySectionNameTemplate(template);
+        try { await UserPreferences.SaveSectionNameTemplateAsync(template); }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        {
+            vm.StatusOverride = "The segment name setting could not be saved. It applies until AdTrim closes.";
+            if (ex is DamagedPreferencesException) ShowDamagedPreferencesBanner();
+        }
+    }
+
+    private void ApplySectionNameTemplate(string template)
+    {
+        // Already saved by the window that changed it; this window's later saves must not undo it.
+        _preferences = _preferences with { SectionNameTemplate = template };
+        _savedPreferences = _savedPreferences with { SectionNameTemplate = template };
+        if (DataContext is MainViewModel vm) vm.SectionNameTemplate = template;
+    }
+
     private void OnShowShortcuts(object sender, RoutedEventArgs e) => new ShortcutsDialog { Owner = this }.ShowDialog();
 
     private void OnJumpPreviousUnconfirmed(object sender, RoutedEventArgs e)
