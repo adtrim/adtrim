@@ -32,24 +32,24 @@ internal static partial class Program
                 window.Show();
                 await window.Ready.WaitAsync(TimeSpan.FromSeconds(20));
                 var vm = (MainViewModel)window.DataContext;
-                DispatcherTimer Timer() => (DispatcherTimer)typeof(MainWindow).GetField("_rewindTimer", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                DispatcherTimer Timer() => window.Test.RewindTimer!;
                 void StartRewind()
                 {
                     vm.PlayheadUs = 8_000_000;
-                    Invoke(window, "Shuttle", vm, Key.J);
+                    window.Test.Shuttle(vm, Key.J);
                     Require(Timer().IsEnabled, "J starts the editor rewind timer");
                 }
                 void RequireStopped(string reason)
                 {
                     var position = vm.PlayheadUs;
-                    Invoke(window, "RewindTick");
+                    window.Test.RewindTick();
                     Require(!Timer().IsEnabled && vm.PlayheadUs == position, reason);
                 }
 
                 StartRewind();
-                Invoke(window, "RewindTick");
+                window.Test.RewindTick();
                 Require(vm.PlayheadUs < 8_000_000, "Rewind still moves the playhead in the editor");
-                Invoke(window, "OnExport", window, new RoutedEventArgs());
+                window.Test.Export();
                 await WaitForExportSetupAsync(window);
                 RequireStopped("Opening export stops rewind and late callbacks cannot move the hidden editor");
                 ((ExportView)((ContentControl)window.FindName("ExportHost")).Content).Close();
@@ -64,7 +64,7 @@ internal static partial class Program
                 vm = (MainViewModel)window.DataContext;
                 RequireStopped("Switching recordings stops rewind rather than carrying it into the next file");
                 StartRewind();
-                Invoke(window, "OnCloseProject", window, new RoutedEventArgs());
+                window.Test.CloseProject();
                 for (int i = 0; i < 250 && vm.IsFileLoaded; i++) await Task.Delay(20);
                 Require(!vm.IsFileLoaded, "Close project returns to the empty editor");
                 RequireStopped("Closing a project stops its rewind timer");
@@ -82,8 +82,8 @@ internal static partial class Program
             {
                 if (window is not null)
                 {
-                    Invoke(window, "StopRewind");
-                    typeof(MainWindow).GetField("_allowClose", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, true);
+                    window.Test.StopRewind();
+                    window.Test.AllowClose();
                     if (window.IsVisible) window.Close();
                 }
                 app.Shutdown();

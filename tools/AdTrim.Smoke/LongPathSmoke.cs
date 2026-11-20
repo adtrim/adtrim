@@ -87,24 +87,24 @@ internal static partial class Program
                 var vm = (MainViewModel)window.DataContext;
                 Require(vm.IsFileLoaded && vm.SourcePath == source && vm.Segments.Any(s => s.IsExcluded),
                     $"{kind}: opening loads the recording and its long-path sidecar");
-                var after = (MpvPreviewViewModel)typeof(MainWindow).GetField("_previewAfter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
-                var before = (MpvPreviewViewModel)typeof(MainWindow).GetField("_previewBefore", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                var after = window.Test.PreviewAfter;
+                var before = window.Test.PreviewBefore;
                 async Task Settle()
                 {
                     await Task.Delay(300);
                     for (int i = 0; i < 500 && (after.IsLoading || before.IsLoading || after.IsSeeking || before.IsSeeking); i++) await Task.Delay(20);
                 }
                 await Settle();
-                Invoke(window, "SeekTo", vm, 10_000_000L, true);
+                window.Test.SeekTo(vm, 10_000_000L, true);
                 await Settle();
                 Require(Math.Abs(after.PositionUs - 10_000_000) < 100_000 && before.PositionUs > 9_800_000 && before.PositionUs < after.PositionUs,
                     $"{kind}: both preview panes decode frames at a long path ({before.PositionUs}, {after.PositionUs})");
                 for (int i = 0; i < 500 && (vm.ThumbnailTiles.Count == 0 || vm.AudioLoudness is null); i++) await Task.Delay(20);
                 Require(vm.ThumbnailTiles.Count > 0 && vm.AudioLoudness is not null, $"{kind}: thumbnails and the waveform read a long-path recording");
 
-                Invoke(window, "SetCollapsed", vm, true);
+                window.Test.SetCollapsed(vm, true);
                 await Settle();
-                Invoke(window, "SeekTo", vm, 10_000_000L, true);
+                window.Test.SeekTo(vm, 10_000_000L, true);
                 await Settle();
                 var collapsedPath = (string)typeof(MpvPreviewViewModel).GetField("_currentPath", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(after)!;
                 Require(collapsedPath.StartsWith("edl://") && Math.Abs(after.PositionUs - 6_000_000) < 100_000 && vm.Banner is null,
@@ -113,17 +113,17 @@ internal static partial class Program
                 await Task.Delay(700);
                 after.Pause();
                 Require(after.PositionUs > 6_100_000, $"{kind}: collapsed playback advances ({after.PositionUs})");
-                Invoke(window, "SetCollapsed", vm, false);
+                window.Test.SetCollapsed(vm, false);
                 await Settle();
 
                 vm.CommandStack.Execute(new AdTrim.Commands.ToggleConfirmedCommand(vm.Markers[1]));
-                Require(await (Task<bool>)Invoke(window, "SaveProjectAsync", vm)!, $"{kind}: edits save to the long-path sidecar");
+                Require(await window.Test.SaveProjectAsync(vm), $"{kind}: edits save to the long-path sidecar");
                 var saved = new ProjectStore().Load(source, media);
                 Require(saved.Status == SidecarLoadStatus.Loaded && saved.Project!.Splits.Any(s => s.Confirmed),
                     $"{kind}: the saved long-path sidecar reloads with the edit");
 
                 string hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(source)));
-                Invoke(window, "OnExport", window, new RoutedEventArgs());
+                window.Test.Export();
                 await WaitForExportSetupAsync(window);
                 var export = (ExportView)((ContentControl)window.FindName("ExportHost")).Content;
                 var setup = (ExportDialogViewModel)export.DataContext;
@@ -154,7 +154,7 @@ internal static partial class Program
             }
             finally
             {
-                typeof(MainWindow).GetField("_allowClose", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, true);
+                window.Test.AllowClose();
                 window.Close();
             }
         }

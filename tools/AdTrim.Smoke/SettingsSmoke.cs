@@ -12,19 +12,16 @@ internal static partial class Program
 {
     /// <summary>Saves one settings change the way the Settings window does, shared with every open window.</summary>
     private static Task<UserPreferences?> ChangeSettings(MainWindow window, Func<UserPreferences, UserPreferences> change)
-        => (Task<UserPreferences?>)Invoke(window, "ChangeSettingsAsync", change)!;
+        => window.Test.ChangeSettingsAsync(change);
 
     private static UserPreferences WindowPreferences(MainWindow window)
-        => (UserPreferences)typeof(MainWindow).GetField("_preferences", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+        => window.Test.Preferences;
 
     private static SettingsWindow OpenSettingsForCheck(MainWindow window)
     {
-        var change = typeof(MainWindow).GetMethod("ChangeSettingsAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .CreateDelegate<Func<Func<UserPreferences, UserPreferences>, Task<UserPreferences?>>>(window);
-        var reset = typeof(MainWindow).GetMethod("ResetSettingsAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .CreateDelegate<Func<Task<(UserPreferences Saved, string? Kept)?>>>(window);
         // Shown without ShowDialog so the check can drive it; the app opens it modally.
-        var settings = new SettingsWindow(WindowPreferences(window), change, reset) { Owner = window, ShowActivated = false };
+        var settings = new SettingsWindow(WindowPreferences(window), window.Test.ChangeSettingsAsync, window.Test.ResetSettingsAsync)
+            { Owner = window, ShowActivated = false };
         settings.Show();
         settings.UpdateLayout();
         return settings;

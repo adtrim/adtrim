@@ -71,7 +71,7 @@ internal static partial class Program
                 CaptureWebsiteEditor(window, Path.Combine(output, "walkthrough-edit.png"), scratch);
                 CaptureWebsiteEditor(window, Path.Combine(output, "timeline-hero.png"), scratch);
                 await CaptureWebsiteTimelineAsync(window, vm, output, media.DurationUs);
-                Invoke(window, "OnExport", window, new RoutedEventArgs());
+                window.Test.Export();
                 await WaitForExportSetupAsync(window);
                 var view = (AdTrim.Views.ExportView)((ContentControl)window.FindName("ExportHost")).Content;
                 var exportVm = (ExportDialogViewModel)view.DataContext;
@@ -114,12 +114,11 @@ internal static partial class Program
 
     private static async Task SeekWebsite(MainWindow window, MainViewModel vm, long time)
     {
-        Invoke(window, "SeekTo", vm, time, true);
+        window.Test.SeekTo(vm, time, true);
         await Task.Delay(300);
         for (int attempt = 0; attempt < 250; attempt++)
         {
-            var players = new[] { "_previewBefore", "_previewAfter" }.Select(field =>
-                (MpvPreviewViewModel)typeof(MainWindow).GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!).ToArray();
+            var players = new[] { window.Test.PreviewBefore, window.Test.PreviewAfter };
             if (players.All(p => !p.IsLoading && !p.IsSeeking && p.PositionUs > 0)) return;
             await Task.Delay(20);
         }
@@ -180,14 +179,13 @@ internal static partial class Program
     // The site shows the finished thumbnail strip and waveform, not a partly loaded timeline.
     private static async Task WaitForTimelineMedia(MainWindow window, MainViewModel vm)
     {
-        object? Field(string name) => typeof(MainWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window);
         for (int attempt = 0; attempt < 6000; attempt++)
         {
-            if (Field("_audioPass") is AudioLevelPass { Completion.IsCompletedSuccessfully: true } && vm.AudioLoudness is not null
-                && Field("_thumbnailLoader") is ThumbnailLoader { IsBusy: false } && vm.ThumbnailTiles.Count > 0)
+            if (window.Test.AudioPass is AudioLevelPass { Completion.IsCompletedSuccessfully: true } && vm.AudioLoudness is not null
+                && window.Test.ThumbnailLoader is ThumbnailLoader { IsBusy: false } && vm.ThumbnailTiles.Count > 0)
             {
                 await Task.Delay(500);
-                if (Field("_thumbnailLoader") is ThumbnailLoader { IsBusy: false }) return;
+                if (window.Test.ThumbnailLoader is ThumbnailLoader { IsBusy: false }) return;
             }
             await Task.Delay(20);
         }
@@ -204,7 +202,7 @@ internal static partial class Program
             drawing.DrawRectangle(new VisualBrush(content), null, new Rect(content.RenderSize));
             foreach (var pair in new[] { ("_previewBefore", "MpvViewBefore"), ("_previewAfter", "MpvViewAfter") })
             {
-                var player = typeof(MainWindow).GetField(pair.Item1, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                var player = pair.Item1 == "_previewBefore" ? window.Test.PreviewBefore : window.Test.PreviewAfter;
                 var ctx = (IntPtr)typeof(MpvPreviewViewModel).GetField("_ctx", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(player)!;
                 var imagePath = Path.Combine(scratch, pair.Item1 + ".png");
                 var command = typeof(App).Assembly.GetType("AdTrim.Services.LibMpv")!.GetMethod("Command")!;

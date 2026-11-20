@@ -103,8 +103,7 @@ internal static partial class Program
         var dropData = new DataObject(DataFormats.FileDrop, new[] { Path.Combine(directory, "ignore.txt"), droppedSource });
         var drop = (DragEventArgs)typeof(DragEventArgs).GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic).Single()
             .Invoke(new object[] { dropData, DragDropKeyStates.None, DragDropEffects.Copy, dropWindow, new Point() });
-        typeof(MainWindow).GetMethod("OnDrop", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)!
-            .Invoke(dropWindow, new object[] { dropWindow, drop });
+        dropWindow.Test.Drop(drop);
         for (int i = 0; i < 500; i++)
         {
             var current = (MainViewModel)dropWindow.DataContext;
@@ -119,30 +118,30 @@ internal static partial class Program
         vm.CommandStack.Execute(new MoveSplitCommand(vm, vm.Markers[1], vm.Markers[1].TimeUs, 4_040_000));
         vm.CommandStack.Undo();
         Require(vm.Markers[1].TimeUs == 4_000_000 && vm.Segments[1].IsExcluded, "TS undo preserves the cut and exclusion decision");
-        Invoke(window, "SeekTo", vm, 3_000_000L, true);
+        window.Test.SeekTo(vm, 3_000_000L, true);
         await Task.Delay(200);
-        Invoke(window, "SetCollapsed", vm, true);
+        window.Test.SetCollapsed(vm, true);
         await Task.Delay(200);
         Require(vm.IsCollapsed && vm.KeptTimeline.DurationUs > 0, "TS collapsed preview uses the normal kept timeline");
-        var after = (MpvPreviewViewModel)typeof(MainWindow).GetField("_previewAfter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+        var after = window.Test.PreviewAfter;
         for (int i = 0; i < 250 && (after.IsLoading || after.IsSeeking); i++) await Task.Delay(20);
-        Invoke(window, "SeekTo", vm, 8_200_000L, true);
+        window.Test.SeekTo(vm, 8_200_000L, true);
         await Task.Delay(300);
         for (int i = 0; i < 250 && (after.IsLoading || after.IsSeeking); i++) await Task.Delay(20);
         Require(!after.IsLoading && !after.IsSeeking && Math.Abs(after.PositionUs - 4_200_000) < 100_000
             && Math.Abs(vm.PlayheadUs - 8_200_000) < 100_000, "Collapsed TS seek displays kept source footage on the output clock");
-        Invoke(window, "SeekTo", vm, 3_700_000L, true);
+        window.Test.SeekTo(vm, 3_700_000L, true);
         await Task.Delay(300);
-        Invoke(window, "PlayPauseBoth");
+        window.Test.PlayPauseBoth();
         await Task.Delay(900);
-        Invoke(window, "PlayPauseBoth");
+        window.Test.PlayPauseBoth();
         Require(vm.IsCollapsed && vm.PlayheadUs > 8_000_000 && vm.PlayheadUs < 9_500_000,
             "Collapsed TS playback crosses the excluded scene instead of playing it");
-        Invoke(window, "SetCollapsed", vm, false);
+        window.Test.SetCollapsed(vm, false);
         await CheckFramePair(window, vm);
         async Task<ExportView> OpenExport(MainWindow owner)
         {
-            Invoke(owner, "OnExport", owner, new RoutedEventArgs());
+            owner.Test.Export();
             await WaitForExportSetupAsync(owner);
             var view = (ExportView)((ContentControl)owner.FindName("ExportHost")).Content;
             var setup = (ExportDialogViewModel)view.DataContext;
@@ -240,7 +239,7 @@ internal static partial class Program
         }
         finally { File.SetAttributes(primarySidecar, FileAttributes.Normal); File.Delete(fallbackDirectory); }
         reopened.Close();
-        await (Task<bool>)Invoke(window, "SaveProjectAsync", vm)!;
+        await window.Test.SaveProjectAsync(vm);
         window.Close();
         for (int i = 0; i < 250 && app.Windows.OfType<MainWindow>().Contains(window); i++) await Task.Delay(20);
         Require(!app.Windows.OfType<MainWindow>().Contains(window), "The original recording window has finished closing");

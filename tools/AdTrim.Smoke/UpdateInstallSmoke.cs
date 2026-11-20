@@ -83,7 +83,7 @@ internal static partial class Program
                 }
                 finally { ownerField.SetValue(app, null); preparingField.SetValue(app, false); ((List<string>)deferredField.GetValue(app)!).Clear(); }
                 await CheckNativeDialogBlocksRestartAsync(first);
-                Invoke(first, "OnExport", first, new RoutedEventArgs());
+                first.Test.Export();
                 await WaitForExportSetupAsync(first);
                 Require(!first.CanRestartForUpdate, "Export setup blocks restart instead of losing its choices");
                 ((ExportView)((ContentControl)first.FindName("ExportHost")).Content).Close();
@@ -96,7 +96,7 @@ internal static partial class Program
                 first.CancelUpdatePreparation();
                 firstVm.PlayheadUs = 7_000_000;
                 firstVm.CommandStack.Execute(new AddSplitCommand(firstVm, 7_000_000, AdTrim.Models.SplitSource.Manual));
-                var store = (ProjectStore)typeof(MainWindow).GetField("_store", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(first)!;
+                var store = first.Test.Store!;
                 var fallbackPath = store.AppDataFallbackPathFor(source);
                 Directory.CreateDirectory(Path.GetDirectoryName(fallbackPath)!);
                 using (var fallbackLock = new FileStream(fallbackPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))

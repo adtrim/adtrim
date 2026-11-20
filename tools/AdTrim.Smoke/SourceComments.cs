@@ -48,8 +48,8 @@ internal static partial class Program
         {
             await window.Ready;
             var vm = (MainViewModel)window.DataContext;
-            Invoke(window, "ReleaseAudioPass", vm);
-            Invoke(window, "CancelThumbnailLoad", vm, true);
+            window.Test.ReleaseAudioPass(vm);
+            window.Test.CancelThumbnailLoad(vm, true);
             string thumbnailRoot = Path.Combine(directory, "comment-thumbnails"), audioRoot = Path.Combine(directory, "comment-levels");
             var thumbnails = new ThumbnailService(new FfmpegRunner(), thumbnailRoot);
             var tiles = await thumbnails.ExtractAsync(source, sourceMedia.DurationUs, [0]);
@@ -57,8 +57,8 @@ internal static partial class Program
             var audio = new AudioLevelService(new FfmpegRunner(), audioRoot);
             var levels = new AudioLevels([20, 40, 60], [true]);
             audio.SaveCached(source, sourceMedia.PrimaryAudioIndex, sourceMedia.DurationUs, levels);
-            typeof(MainWindow).GetField("_thumbnails", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, thumbnails);
-            typeof(MainWindow).GetField("_audioLevels", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, audio);
+            window.Test.Thumbnails = thumbnails;
+            window.Test.AudioLevels = audio;
             var suggestions = new MarkerSuggestionStore();
             var proposal = AdTrim.Commands.ReplaceMarkerSetCommand.Capture(vm) with { Source = AdTrim.Models.MarkerSetSource.AdTrim, BaselineId = null };
             proposal = proposal with { BaselineId = proposal.ContentId() };
@@ -76,7 +76,7 @@ internal static partial class Program
             Require((await UserPreferences.LoadAsync()).AddSourceExportComment && WindowPreferences(window).AddSourceExportComment,
                 "The source-comment setting persists between windows and sessions");
             string hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(source)));
-            Invoke(window, "OnExport", window, new RoutedEventArgs());
+            window.Test.Export();
             await WaitForExportSetupAsync(window);
             var export = (ExportView)((ContentControl)window.FindName("ExportHost")).Content;
             var setup = (ExportDialogViewModel)export.DataContext;
@@ -253,7 +253,7 @@ internal static partial class Program
         {
             var latest = await UserPreferences.LoadAsync();
             await (latest with { AddSourceExportComment = false }).SaveChangesAsync(latest, null);
-            typeof(MainWindow).GetField("_allowClose", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, true);
+            window.Test.AllowClose();
             window.Close();
         }
         await CheckSidecarOnlyExport(app, original, directory);
@@ -276,7 +276,7 @@ internal static partial class Program
         {
             await window.Ready;
             Require(((MainViewModel)window.DataContext).LastExport is null, "Opening an unexported project does not create an export record");
-            Invoke(window, "OnExport", window, new RoutedEventArgs());
+            window.Test.Export();
             await WaitForExportSetupAsync(window);
             var export = (ExportView)((ContentControl)window.FindName("ExportHost")).Content;
             var setup = (ExportDialogViewModel)export.DataContext;
@@ -295,13 +295,13 @@ internal static partial class Program
             await foreach (var row in UnexportedFiles.ScanAsync(directory)) rows.Add(row);
             Require(rows.Single(r => r.Path == source).Exported, "Empty MP4 Comments fall back to the successful sidecar export record");
             export.Close();
-            Invoke(window, "OnCloseProject", window, new RoutedEventArgs());
+            window.Test.CloseProject();
             await window.OpenFileAsync(source);
             Require(((MainViewModel)window.DataContext).LastExport is not null, "Reopening a project restores its export record");
         }
         finally
         {
-            typeof(MainWindow).GetField("_allowClose", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, true);
+            window.Test.AllowClose();
             window.Close();
         }
     }

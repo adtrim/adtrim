@@ -32,6 +32,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="AdTrim.Tests" />
+    <InternalsVisibleTo Include="AdTrim.Smoke" />
     <EmbeddedResource Include="Services/update-public-key.pem" />
     <!-- LibVLCSharp was removed when we migrated the preview to libmpv.
          Reintroducing it would pull tens of

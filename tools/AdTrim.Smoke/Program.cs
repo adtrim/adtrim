@@ -217,7 +217,7 @@ internal static partial class Program
                 await CheckSettingsWindow(window, vm, directory);
                 var beforeAnalysis = ReplaceMarkerSetCommand.Capture(vm);
                 var analysisKey = new MarkerSuggestionStore().Key(vm.SourcePath!, vm.SourceFingerprint!);
-                var cancelledAnalysis = (Task<MarkerSetState?>)Invoke(window, "AnalyzeCommercialsAsync", vm, analysisKey, CancellationToken.None)!;
+                var cancelledAnalysis = window.Test.AnalyzeCommercialsAsync(vm, analysisKey, CancellationToken.None);
                 window.UpdateLayout();
                 var cancelButton = (Button)window.FindName("CancelCommercialAnalysisButton");
                 var analysisToolbar = (FrameworkElement)window.FindName("TimelineToolbar");
@@ -242,7 +242,7 @@ internal static partial class Program
                 cancelButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 Require(await cancelledAnalysis is null && !vm.IsBusy && vm.CurrentMarkerSetId() == beforeAnalysis.ContentId(),
                     "Cancel analysis leaves existing splits and exclusions intact");
-                var completedAnalysis = await (Task<MarkerSetState?>)Invoke(window, "AnalyzeCommercialsAsync", vm, analysisKey, CancellationToken.None)!;
+                var completedAnalysis = await window.Test.AnalyzeCommercialsAsync(vm, analysisKey, CancellationToken.None);
                 Require(completedAnalysis is { Splits.Count: 0 } && vm.CurrentMarkerSetId() == beforeAnalysis.ContentId(),
                     "Analyzing ad-free disposable media does not mutate the editor: " + vm.Banner);
                 Require(vm.Banner is { Kind: StatusKind.Success } finished && finished.Title.StartsWith("Ad-break analysis finished in ")
@@ -251,8 +251,7 @@ internal static partial class Program
                     "A finished analysis summarizes its result and clears taskbar progress: " + vm.Banner);
                 Require(new[] { "TimelineToolbar", "TimelineScroll" }.All(name => ((FrameworkElement)window.FindName(name)).Effect is null),
                     "Frosting clears when analysis finishes");
-                var timeLeft = typeof(MainWindow).GetMethod("TimeLeftText", BindingFlags.Static | BindingFlags.NonPublic)!;
-                string? Left(double seconds, double done) => (string?)timeLeft.Invoke(null, [TimeSpan.FromSeconds(seconds), done, 1 - done]);
+                string? Left(double seconds, double done) => MainWindow.TestSurface.TimeLeftText(TimeSpan.FromSeconds(seconds), done, 1 - done);
                 Require(Left(4, .5) is null && Left(30, .01) is null && Left(30, .5) == "Less than a minute left"
                     && Left(60, .25) == "About 3 min left",
                     "Time left waits for a stable rate, then rounds up to whole minutes");
@@ -262,10 +261,9 @@ internal static partial class Program
                     && labels.Children.OfType<TextBlock>().Single(x => x.IsVisible).Text == "Analyze ad breaks again",
                     "After an analysis the toolbar offers Analyze ad breaks again");
                 // The discard question comes before any analysis work; declining runs nothing.
-                var askField = typeof(MainWindow).GetField("_askDiscardEdits", BindingFlags.Instance | BindingFlags.NonPublic)!;
-                var realAsk = askField.GetValue(window);
+                var realAsk = window.Test.AskDiscardEdits;
                 bool? busyWhenAsked = null;
-                askField.SetValue(window, new Func<string, string, bool>((_, _) => { busyWhenAsked = vm.IsBusy; return false; }));
+                window.Test.AskDiscardEdits = (_, _) => { busyWhenAsked = vm.IsBusy; return false; };
                 var editedBefore = vm.CurrentMarkerSetId();
                 if (vm.IsTimelineEdited)
                 {
@@ -279,9 +277,9 @@ internal static partial class Program
                     Require(busyWhenAsked == false && !analysisStarted && vm.CurrentMarkerSetId() == editedBefore,
                         "Analyze again asks before analyzing, and Cancel keeps the edits without running analysis");
                 }
-                askField.SetValue(window, realAsk);
-                Invoke(window, "SetCollapsed", vm, true);
-                Invoke(window, "ApplyMarkerSet", vm, completedAnalysis!, "Analyze ad breaks", false);
+                window.Test.AskDiscardEdits = realAsk;
+                window.Test.SetCollapsed(vm, true);
+                window.Test.ApplyMarkerSet(vm, completedAnalysis!, "Analyze ad breaks", false);
                 Require(!vm.IsCollapsed && vm.Segments.Count == 1 && !vm.Segments[0].IsExcluded,
                     "Applying suggestions leaves stale collapsed playback and includes unclassified video");
                 Require(ButtonText(markersButton) == "AdTrim suggested markers ▾",
@@ -294,7 +292,7 @@ internal static partial class Program
                     && !markersMenu.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "Delete all markings").IsEnabled
                     && !((Button)window.FindName("MarkersButton")).IsEnabled,
                     "Marker replacement is unavailable during export");
-                Invoke(window, "OnUseAdTrimSuggestions", window, new RoutedEventArgs());
+                window.Test.UseAdTrimSuggestions();
                 Require(vm.CurrentMarkerSetId() == beforeAnalysis.ContentId(), "Export also blocks marker handler invocation");
                 vm.IsExportScreen = false;
 
@@ -305,8 +303,8 @@ internal static partial class Program
                 vm.SourcePath = null;
                 window.UpdateLayout();
                 Require(!((MenuItem)window.FindName("ExportMenuItem")).IsEnabled, "Export menu is disabled without a source video");
-                Invoke(window, "OnExport", window, new RoutedEventArgs());
-                Require(typeof(MainWindow).GetField("_activeExportDialog", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window) is null,
+                window.Test.Export();
+                Require(window.Test.ActiveExport is null,
                     "Shared export handler cannot open an empty export dialog");
                 vm.SourcePath = loadedSource;
                 window.UpdateLayout();
@@ -320,13 +318,12 @@ internal static partial class Program
                     Require(vm.ZoomFactor == 1, resetName + " restores the full timeline in one click");
                 }
                 vm.SelectMarker(vm.Markers[1]);
-                var keyHandler = typeof(MainWindow).GetMethod("OnPreviewKeyDown", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)!;
                 for (int toggle = 0; toggle < 2; toggle++)
                 {
                     var key = new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,
                         PresentationSource.FromVisual(window), 0, System.Windows.Input.Key.P)
                         { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent };
-                    keyHandler.Invoke(window, new object[] { window, key });
+                    window.Test.PreviewKeyDown(key);
                     Require(key.Handled && vm.IsCollapsed == (toggle == 0),
                         $"P toggles collapsed scenes even with a split selected (handled={key.Handled}, collapsed={vm.IsCollapsed}, busy={vm.IsBusy}, modifiers={System.Windows.Input.Keyboard.Modifiers}, focus={System.Windows.Input.Keyboard.FocusedElement?.GetType().Name})");
                     foreach (var boundaryKey in new[] { System.Windows.Input.Key.End, System.Windows.Input.Key.Home })
@@ -334,14 +331,14 @@ internal static partial class Program
                         var boundaryEvent = new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,
                             PresentationSource.FromVisual(window), 0, boundaryKey)
                             { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent };
-                        keyHandler.Invoke(window, new object[] { window, boundaryEvent });
+                        window.Test.PreviewKeyDown(boundaryEvent);
                         long expectedPosition = boundaryKey == System.Windows.Input.Key.Home ? 0 : vm.TimelineDurationUs;
                         Require(boundaryEvent.Handled && vm.TimelinePositionUs == expectedPosition,
                             boundaryKey + " reaches the timeline boundary in " + (vm.IsCollapsed ? "collapsed" : "full") + " view");
                     }
                 }
-                if (vm.IsCollapsed) Invoke(window, "SetCollapsed", vm, false);
-                Invoke(window, "OnSelectAllMarkers", window, new RoutedEventArgs());
+                if (vm.IsCollapsed) window.Test.SetCollapsed(vm, false);
+                window.Test.SelectAllMarkers();
                 int internalMarkers = vm.Markers.Count(m => !m.IsBookend);
                 Require(vm.SelectedMarkerCount == internalMarkers
                     && vm.SelectionKind == (internalMarkers > 1 ? SelectionKind.Markers : SelectionKind.Marker),
@@ -352,14 +349,14 @@ internal static partial class Program
                     var moveKey = new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,
                         PresentationSource.FromVisual(window), 0, System.Windows.Input.Key.M)
                         { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent };
-                    keyHandler.Invoke(window, new object[] { window, moveKey });
+                    window.Test.PreviewKeyDown(moveKey);
                     Require(moveKey.Handled && vm.Markers.Select(m => m.TimeUs).SequenceEqual(times)
                         && vm.StatusOverride?.Contains("single marker") == true,
                         "M does nothing but explain itself when several markers are selected");
                     var deleteKey = new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,
                         PresentationSource.FromVisual(window), 0, System.Windows.Input.Key.Delete)
                         { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent };
-                    keyHandler.Invoke(window, new object[] { window, deleteKey });
+                    window.Test.PreviewKeyDown(deleteKey);
                     Require(deleteKey.Handled && vm.Markers.All(m => m.IsBookend) && vm.SelectionKind == SelectionKind.None,
                         "Del deletes exactly the selected markers");
                     vm.CommandStack.Undo();
@@ -370,18 +367,18 @@ internal static partial class Program
                 {
                     var args = new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,
                         PresentationSource.FromVisual(window), 0, k) { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent };
-                    keyHandler.Invoke(window, new object[] { window, args });
+                    window.Test.PreviewKeyDown(args);
                     return args;
                 }
                 // Alt+arrows (handler invoked directly: modifiers cannot be simulated here).
                 var internalSorted = vm.Markers.Where(m => !m.IsBookend).OrderBy(m => m.TimeUs).ToList();
                 if (internalSorted.Count > 0)
                 {
-                    Invoke(window, "SeekTo", vm, 0L, true);
-                    Invoke(window, "JumpToMarker", vm, 1);
+                    window.Test.SeekTo(vm, 0L, true);
+                    window.Test.JumpToMarker(vm, 1);
                     Require(vm.SelectedMarker == internalSorted[0] && vm.PlayheadUs == internalSorted[0].TimeUs,
                         "Next marker selects and goes to the first marker after the playhead");
-                    Invoke(window, "JumpToMarker", vm, -1);
+                    window.Test.JumpToMarker(vm, -1);
                     Require(vm.SelectedMarker == internalSorted[0] && vm.StatusOverride?.Contains("No marker before") == true,
                         "Previous marker explains when there is none");
                 }
@@ -395,8 +392,8 @@ internal static partial class Program
                     // Centre the first marker so at least one marker is on screen and others are not.
                     scroll.ScrollToHorizontalOffset(timelineWidth * internalSorted[0].TimeUs / (double)vm.DurationUs - scroll.ViewportWidth / 2);
                     window.UpdateLayout();
-                    Invoke(window, "OnSelectVisibleMarkers", window, new RoutedEventArgs());
-                    var (visibleFrom, visibleTo) = ((long, long))Invoke(window, "VisibleTimelineRange", vm)!;
+                    window.Test.SelectVisibleMarkers();
+                    var (visibleFrom, visibleTo) = window.Test.VisibleTimelineRange(vm);
                     var expected = internalSorted.Where(m => m.TimeUs >= visibleFrom && m.TimeUs <= visibleTo).ToList();
                     Require(expected.Count > 0 && expected.Count < internalSorted.Count && vm.SelectedMarkers.SequenceEqual(expected),
                         $"Select visible markers selects only markers on screen ({expected.Count} of {internalSorted.Count})");
@@ -411,9 +408,8 @@ internal static partial class Program
                     window.UpdateLayout();
                 }
                 // J / K / L shuttle.
-                var player = (AdTrim.ViewModels.MpvPreviewViewModel)typeof(MainWindow)
-                    .GetField("_previewAfter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
-                Invoke(window, "SeekTo", vm, vm.DurationUs / 2, true);
+                var player = window.Test.PreviewAfter;
+                window.Test.SeekTo(vm, vm.DurationUs / 2, true);
                 await Task.Delay(400);
                 Require(Press(System.Windows.Input.Key.L).Handled && vm.StatusOverride?.StartsWith("Playing 1") == true, "L plays forward");
                 for (int i = 0; i < 100 && !player.IsPlaying; i++) await Task.Delay(20);
@@ -468,7 +464,7 @@ internal static partial class Program
                     name.Text = chapterName;
                     accept.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 }), DispatcherPriority.ApplicationIdle);
-                Invoke(window, "OnToggleCollapsed", window, new RoutedEventArgs());
+                window.Test.ToggleCollapsed();
                 var band = ((Canvas)((TimelineView)timeline!).FindName("SegmentLayer")).Children.OfType<SegmentBand>().First();
                 band.RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice,
                     Environment.TickCount, System.Windows.Input.MouseButton.Right) { RoutedEvent = UIElement.MouseRightButtonUpEvent });
@@ -482,9 +478,9 @@ internal static partial class Program
                 Require(vm.Segments[0].Label != chapterName, "Preview rename supports undo");
                 vm.CommandStack.Redo();
                 Require(vm.Segments[0].Label == chapterName, "Preview rename supports redo");
-                Invoke(window, "OnToggleCollapsed", window, new RoutedEventArgs());
+                window.Test.ToggleCollapsed();
                 vm.CommandStack.Execute(new RenameSegmentCommand(vm, vm.Segments[2], "Final scene"));
-                Invoke(window, "OnToggleCollapsed", window, new RoutedEventArgs());
+                window.Test.ToggleCollapsed();
                 await Task.Delay(300);
                 Require(vm.IsCollapsed, "Collapsed mode enabled");
                 RequireSubtitlesDisabled(window);
@@ -504,31 +500,31 @@ internal static partial class Program
                 await Task.Delay(2600);
                 Require(vm.IsCollapsed && vm.PlayheadUs >= 8_000_000 && vm.TimelinePositionUs > 4_000_000,
                     "Review continues across the excluded scene into kept footage");
-                Invoke(window, "PlayPauseBoth");
-                Invoke(window, "SeekTo", vm, vm.Markers[2].TimeUs, true);
-                Invoke(window, "OnPreviousSplit", window, new RoutedEventArgs());
+                window.Test.PlayPauseBoth();
+                window.Test.SeekTo(vm, vm.Markers[2].TimeUs, true);
+                window.Test.PreviousSplit();
                 Require(vm.TimelinePositionUs == 0, "Previous split moves backward across a collapsed join");
-                Invoke(window, "OnToggleCollapsed", window, new RoutedEventArgs());
+                window.Test.ToggleCollapsed();
                 await Task.Delay(200);
                 Require(!vm.IsCollapsed && savedBounds.SequenceEqual(vm.Markers.Select(m => m.TimeUs)), "Toggle preserves cuts");
                 vm.CommandStack.Execute(new MoveSplitCommand(vm, vm.Markers[1], vm.Markers[1].TimeUs, vm.Markers[1].TimeUs + 100_000));
                 Require(vm.Segments[1].IsExcluded, "Moved exclusion survives");
-                var save = (Task<bool>)Invoke(window, "SaveProjectAsync", vm)!;
+                var save = window.Test.SaveProjectAsync(vm);
                 Require(await save && !vm.IsDirty && vm.SaveStatus == "Saved", "Save completes truthfully");
                 vm.CommandStack.Undo();
-                Require(await (Task<bool>)Invoke(window, "SaveProjectAsync", vm)!, "Undo saved: " + vm.Banner?.Body);
+                Require(await window.Test.SaveProjectAsync(vm), "Undo saved: " + vm.Banner?.Body);
                 vm.CommandStack.Execute(new ToggleConfirmedCommand(vm.Markers[1]));
-                var pending = (Task<bool>)Invoke(window, "SaveProjectAsync", vm)!;
+                var pending = window.Test.SaveProjectAsync(vm);
                 vm.CommandStack.Execute(new ToggleConfirmedCommand(vm.Markers[2]));
                 Require(await pending && vm.IsDirty, "An older save cannot clear newer edits");
-                Require(await (Task<bool>)Invoke(window, "SaveProjectAsync", vm)!, "Newer edits saved");
+                Require(await window.Test.SaveProjectAsync(vm), "Newer edits saved");
                 vm.CommandStack.Undo();
                 vm.CommandStack.Undo();
-                for (int i = 0; i < 10; i++) Invoke(window, "OnToggleCollapsed", window, new RoutedEventArgs());
+                for (int i = 0; i < 10; i++) window.Test.ToggleCollapsed();
                 await Task.Delay(300);
                 Require(!vm.IsCollapsed && vm.PlayheadUs >= 0 && vm.PlayheadUs <= vm.DurationUs, "Rapid toggling stays in sync");
-                Invoke(window, "OnToggleCollapsed", window, new RoutedEventArgs());
-                Invoke(window, "OnCloseProject", window, new RoutedEventArgs());
+                window.Test.ToggleCollapsed();
+                window.Test.CloseProject();
                 for (int i = 0; i < 100 && vm.SourcePath is not null; i++) await Task.Delay(20);
                 Require(vm.SourcePath is null, "Close flushes pending changes");
                 await window.OpenFileAsync(source);
@@ -547,7 +543,7 @@ internal static partial class Program
                 };
                 Require(protectionVm.Validate().Any(v => v.Kind == ExportValidationKind.Blocking && v.Message.Contains("source recording")),
                     "Source overwrite stays blocked even with overwrite confirmation");
-                Invoke(window, "OnExport", window, new RoutedEventArgs());
+                window.Test.Export();
                 await WaitForExportSetupAsync(window);
                 var folderDialog = (AdTrim.Views.ExportView)((ContentControl)window.FindName("ExportHost")).Content;
                 var folderVm = (ExportDialogViewModel)folderDialog.DataContext;
@@ -583,7 +579,7 @@ internal static partial class Program
                 Require(folderVm.OutputFilename == "my-custom-export.mp4", "Folder changes and export preparation preserve a manually chosen filename");
                 folderVm.OutputFolder = directory;
                 folderDialog.Close();
-                Invoke(window, "OnExport", window, new RoutedEventArgs());
+                window.Test.Export();
                 await WaitForExportSetupAsync(window);
                 folderDialog = (AdTrim.Views.ExportView)((ContentControl)window.FindName("ExportHost")).Content;
                 Require(((ExportDialogViewModel)folderDialog.DataContext).OutputFolder == Path.GetDirectoryName(source),
@@ -594,7 +590,7 @@ internal static partial class Program
                 var savedSegment = vm.SelectedSegment;
                 var savedZoom = vm.ZoomFactor;
                 var savedPosition = vm.PlayheadUs;
-                Invoke(window, "OnFitTimeline", window, new RoutedEventArgs());
+                window.Test.FitTimeline();
                 Require(vm.ZoomFactor == savedZoom, "Export screen blocks timeline commands outside the hidden editor");
                 window.UpdateLayout();
                 Capture(window, Path.Combine(directory, "export-page-setup.png"));
@@ -838,7 +834,7 @@ internal static partial class Program
             catch (Exception ex) { Console.Error.WriteLine(ex); }
             finally
             {
-                typeof(MainWindow).GetField("_allowClose", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, true);
+                window.Test.AllowClose();
                 window.Close();
                 Dispatcher.CurrentDispatcher.InvokeShutdown();
             }
@@ -853,8 +849,8 @@ internal static partial class Program
         second.Opacity = 0;
         second.ShowInTaskbar = false;
         ((MainViewModel)second.DataContext).Segments[0].State = SegmentState.Excluded;
-        Invoke(original, "OnExport", original, new RoutedEventArgs());
-        Invoke(second, "OnExport", second, new RoutedEventArgs());
+        original.Test.Export();
+        second.Test.Export();
         await WaitForExportSetupAsync(original);
         await WaitForExportSetupAsync(second);
         var firstView = (AdTrim.Views.ExportView)((ContentControl)original.FindName("ExportHost")).Content;
@@ -961,8 +957,8 @@ internal static partial class Program
         app.SetAutomaticUpdates(true);
         secondVm.CommandStack.Execute(new AddSplitCommand(secondVm, 2_000_000, SplitSource.Manual));
         Require(((MainViewModel)original.DataContext).Markers.Count == 4, "Editing the second recording leaves the first timeline unchanged");
-        await (Task)Invoke(second, "SavePreferencesAsync", secondVm)!;
-        await (Task)Invoke(original, "SavePreferencesAsync", (MainViewModel)original.DataContext)!;
+        await second.Test.SavePreferencesAsync(secondVm);
+        await original.Test.SavePreferencesAsync((MainViewModel)original.DataContext);
         var preferences = await UserPreferences.LoadAsync();
         Require(preferences.Positions.ContainsKey(source) && preferences.Positions.ContainsKey(secondSource), "Window saves merge playback positions instead of overwriting them");
         second.Close();
@@ -1091,8 +1087,8 @@ internal static partial class Program
                     System.Globalization.CultureInfo.InvariantCulture) * 1_000_000)).Distinct().Order().ToArray();
             await window.OpenFileAsync(path);
             var vm = (MainViewModel)window.DataContext;
-            var before = (MpvPreviewViewModel)typeof(MainWindow).GetField("_previewBefore", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
-            var after = (MpvPreviewViewModel)typeof(MainWindow).GetField("_previewAfter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+            var before = window.Test.PreviewBefore;
+            var after = window.Test.PreviewAfter;
             var keyframes = await runner.RunFfprobeAsync(new[] { "-v", "error", "-select_streams", "v:0",
                 "-read_intervals", "0%+12", "-show_entries", "frame=pts_time,key_frame", "-of", "json", path });
             using var keyJson = System.Text.Json.JsonDocument.Parse(keyframes.Stdout);
@@ -1106,7 +1102,7 @@ internal static partial class Program
                 var boundary = frames[keyIndex - 1];
                 for (int visit = 0; visit < 2; visit++)
                 {
-                    Invoke(window, "SeekTo", vm, boundary, true);
+                    window.Test.SeekTo(vm, boundary, true);
                     await Task.Delay(500);
                     for (int i = 0; i < 200 && (before.IsSeeking || after.IsSeeking); i++) await Task.Delay(20);
                     Require(Math.Abs(after.PositionUs - boundary) <= 2 && Math.Abs(before.PositionUs - frames[keyIndex - 2]) <= 2,
@@ -1115,11 +1111,11 @@ internal static partial class Program
             }
             foreach (long target in new long[] { 2_100_000, 4_500_000, 5_050_000, 6_800_000, 7_200_000, 9_000_000 })
             {
-                Invoke(window, "SeekTo", vm, target, true);
+                window.Test.SeekTo(vm, target, true);
                 await Task.Delay(500);
                 // Wait for the background predecessor lookup too; it runs FFmpeg and is slower under load.
                 for (int i = 0; i < 500 && (before.IsSeeking || after.IsSeeking || before.IsLoading || after.IsLoading
-                    || typeof(MainWindow).GetField("_frameRecovery", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window) is not null); i++)
+                    || window.Test.FrameRecoveryPending); i++)
                     await Task.Delay(20);
                 var index = Array.FindIndex(frames, f => Math.Abs(f - after.PositionUs) <= 2);
                 Require(index > 0 && !before.IsSeeking && !after.IsSeeking && Math.Abs(frames[index - 1] - before.PositionUs) <= 2,
@@ -1134,21 +1130,21 @@ internal static partial class Program
             Require(displayedIndex > 0 && Math.Abs(before.PositionUs - frames[displayedIndex - 1]) <= 2,
                 "Predecessor recovery crosses the target even when seeking overshoots");
             vm.FrameRate = new(24, 1);
-            Invoke(window, "AddSplitAtPlayhead", vm);
+            window.Test.AddSplitAtPlayhead(vm);
             var added = vm.Markers.Single(m => m.TimeUs == displayed);
-            Invoke(window, "SeekTo", vm, 6_800_000L, true);
+            window.Test.SeekTo(vm, 6_800_000L, true);
             await Task.Delay(700);
             for (int i = 0; i < 200 && after.IsSeeking; i++) await Task.Delay(20);
             vm.SelectMarker(added);
-            Invoke(window, "OnMoveSelectedToPlayhead", window, new RoutedEventArgs());
+            window.Test.MoveSelectedToPlayhead();
             for (int i = 0; i < 100 && added.TimeUs != after.PositionUs; i++) await Task.Delay(20);
             Require(added.TimeUs == after.PositionUs,
                 "Move split preserves the displayed timestamp despite a mismatched frame grid");
             Require(vm.StatusOverride?.StartsWith("Moved marker from") == true, "Moving a marker to the playhead says so: " + vm.StatusOverride);
             var savedBoundary = added.TimeUs;
-            Invoke(window, "SeekTo", vm, 0L, true);
+            window.Test.SeekTo(vm, 0L, true);
             await Task.Delay(300);
-            Invoke(window, "SeekTo", vm, savedBoundary, true);
+            window.Test.SeekTo(vm, savedBoundary, true);
             await Task.Delay(700);
             for (int i = 0; i < 200 && (before.IsSeeking || after.IsSeeking); i++) await Task.Delay(20);
             var savedIndex = Array.FindIndex(frames, f => Math.Abs(f - savedBoundary) <= 2);
@@ -1160,8 +1156,8 @@ internal static partial class Program
 
     private static async Task CheckFramePair(MainWindow window, MainViewModel vm)
     {
-        var before = (MpvPreviewViewModel)typeof(MainWindow).GetField("_previewBefore", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
-        var after = (MpvPreviewViewModel)typeof(MainWindow).GetField("_previewAfter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+        var before = window.Test.PreviewBefore;
+        var after = window.Test.PreviewAfter;
         before.Pause(); after.Pause();
         for (int i = 0; i < 250 && (before.IsPlaying || after.IsPlaying); i++) await Task.Delay(20);
         Require(!before.IsPlaying && !after.IsPlaying, "Frame-pair checks begin paused");
@@ -1171,7 +1167,7 @@ internal static partial class Program
         {
             await Task.Delay(300);
             for (int i = 0; i < 500 && (before.IsSeeking || after.IsSeeking || before.IsLoading || after.IsLoading
-                || typeof(MainWindow).GetField("_frameRecovery", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window) is not null); i++)
+                || window.Test.FrameRecoveryPending); i++)
                 await Task.Delay(20);
             var delta = after.PositionUs - before.PositionUs;
             Require(!before.IsSeeking && !after.IsSeeking && Math.Abs(delta - 33_333) <= 2,
@@ -1184,28 +1180,28 @@ internal static partial class Program
         {
             foreach (var target in new long[] { 2_000_000, 5_016_667, 7_000_000 })
             {
-                Invoke(window, "SeekTo", vm, target, true);
+                window.Test.SeekTo(vm, target, true);
                 await Check("Seek");
                 Require(Math.Abs(after.PositionUs - target) < 50_000,
                     "An exact seek reaches its requested position, including immediately after a timeline reload");
             }
             foreach (var target in new long[] { 3_135_000, 6_735_000, 8_135_000 })
             {
-                Invoke(window, "SeekTo", vm, target, false);
+                window.Test.SeekTo(vm, target, false);
                 await Check("Timeline click");
                 Require(((FrameworkElement)window.FindName("NoFrameOverlay")).Visibility != Visibility.Visible,
                     "Timeline click displays the preceding frame");
             }
             foreach (var direction in new[] { 1, -1, 1, 1, -1 })
             {
-                Invoke(window, "StepFrame", vm, direction);
+                window.Test.StepFrame(vm, direction);
                 await Check("Frame step");
             }
-            for (int i = 0; i < 8; i++) Invoke(window, "SeekTo", vm, 2_000_000L + i * 100_000, true);
+            for (int i = 0; i < 8; i++) window.Test.SeekTo(vm, 2_000_000L + i * 100_000, true);
             await Check("Rapid seeks");
-            Invoke(window, "PlayPauseBoth");
+            window.Test.PlayPauseBoth();
             await Task.Delay(600);
-            Invoke(window, "PlayPauseBoth");
+            window.Test.PlayPauseBoth();
             await Check("Pause after playback");
         }
         finally { vm.FrameRate = rate; }
@@ -1289,14 +1285,13 @@ internal static partial class Program
 
     private static void RequireSubtitlesDisabled(MainWindow window)
     {
-        foreach (var field in new[] { "_previewBefore", "_previewAfter" })
+        foreach (var player in new[] { window.Test.PreviewBefore, window.Test.PreviewAfter })
         {
-            var player = typeof(MainWindow).GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
             var ctx = (IntPtr)typeof(MpvPreviewViewModel).GetField("_ctx", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(player)!;
             foreach (var name in new[] { "sid", "secondary-sid", "sub-auto", "sub-visibility", "secondary-sub-visibility" })
             {
                 var value = mpv_get_property_string(ctx, name);
-                try { Require(value != IntPtr.Zero && Marshal.PtrToStringUTF8(value) == "no", field + " disables " + name); }
+                try { Require(value != IntPtr.Zero && Marshal.PtrToStringUTF8(value) == "no", (player == window.Test.PreviewBefore ? "_previewBefore" : "_previewAfter") + " disables " + name); }
                 finally { if (value != IntPtr.Zero) mpv_free(value); }
             }
         }

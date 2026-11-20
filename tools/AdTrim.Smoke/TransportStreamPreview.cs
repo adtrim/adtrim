@@ -23,15 +23,12 @@ internal static partial class Program
         window.Opacity = 0; window.ShowInTaskbar = false;
         await window.Ready;
         var vm = (MainViewModel)window.DataContext;
-        MpvPreviewViewModel Player(string name) => (MpvPreviewViewModel)typeof(MainWindow)
-            .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
-        var before = Player("_previewBefore"); var after = Player("_previewAfter");
+        var before = window.Test.PreviewBefore; var after = window.Test.PreviewAfter;
         async Task Settle()
         {
             await Task.Delay(300);
             for (int i = 0; i < 750 && (after.IsLoading || after.IsSeeking || (!vm.IsCollapsed &&
-                (before.IsLoading || before.IsSeeking || typeof(MainWindow).GetField("_frameRecovery",
-                    BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window) is not null))); i++) await Task.Delay(20);
+                (before.IsLoading || before.IsSeeking || window.Test.FrameRecoveryPending))); i++) await Task.Delay(20);
             Require(!after.IsLoading && !after.IsSeeking, "Long-GOP preview finishes seeking");
         }
         async Task<long[]> Frames(long time)
@@ -49,7 +46,7 @@ internal static partial class Program
         }
         foreach (long target in new long[] { 3_135_000, 6_735_000, 8_135_000 })
         {
-            Invoke(window, "SeekTo", vm, target, false); await Settle();
+            window.Test.SeekTo(vm, target, false); await Settle();
             var frames = await Frames(after.PositionUs);
             int index = Array.FindIndex(frames, t => Math.Abs(t - after.PositionUs) <= 2);
             Require(index > 0 && Math.Abs(before.PositionUs - frames[index - 1]) <= 2
@@ -62,13 +59,13 @@ internal static partial class Program
         var excluded = Enumerable.Range(0, all.Length - 1).Where(i => i % 2 == 0)
             .Select(i => $"segment-{all[i]}-{all[i + 1]}").ToArray();
         vm.CommandStack.Execute(new ReplaceMarkerSetCommand(vm, new(splits, excluded, "Opening", MarkerSetSource.Blank, null), "Preview regression"));
-        Invoke(window, "SetCollapsed", vm, true);
-        Invoke(window, "SeekTo", vm, 4_450_000L, true); await Settle();
+        window.Test.SetCollapsed(vm, true);
+        window.Test.SeekTo(vm, 4_450_000L, true); await Settle();
         Require(Math.Abs(after.PositionUs - vm.KeptTimeline.ToOutput(4_450_000)) < 40_000,
             "A seek issued during timeline loading replaces the original load position");
         foreach (long target in new long[] { 4_450_000, 8_450_000, 1_450_000, 4_450_000 })
         {
-            Invoke(window, "SeekTo", vm, target, true); await Settle();
+            window.Test.SeekTo(vm, target, true); await Settle();
             Require(Math.Abs(after.PositionUs - vm.KeptTimeline.ToOutput(target)) < 40_000
                 && Math.Abs(vm.PlayheadUs - vm.KeptTimeline.ToSource(after.PositionUs)) <= 2,
                 $"Mid-GOP kept scene seeks use the native player clock: source={vm.PlayheadUs}, output={after.PositionUs}, target={target}");
@@ -80,8 +77,8 @@ internal static partial class Program
         after.SeekUsExact(nativePosition); await Settle();
         Require(Math.Abs(vm.PlayheadUs - vm.KeptTimeline.ToSource(after.PositionUs)) <= 2,
             "A repeated seek reconciles the editor clock even without a new native frame");
-        Invoke(window, "SeekTo", vm, 2_150_000L, true); await Settle();
-        Invoke(window, "PlayPauseBoth"); await Task.Delay(500); Invoke(window, "PlayPauseBoth"); await Settle();
+        window.Test.SeekTo(vm, 2_150_000L, true); await Settle();
+        window.Test.PlayPauseBoth(); await Task.Delay(500); window.Test.PlayPauseBoth(); await Settle();
         Require(after.PositionUs > 1_000_000 && after.PositionUs < 1_700_000
             && vm.PlayheadUs >= bounds[2] && vm.PlayheadUs < bounds[3], "Long-GOP playback crosses a mid-GOP join");
         window.Close();

@@ -63,7 +63,7 @@ internal static partial class Program
                 window.Show();
                 await window.Ready.WaitAsync(TimeSpan.FromSeconds(20));
                 var vm = (MainViewModel)window.DataContext;
-                var media = (MediaInfo)typeof(MainWindow).GetField("_media", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                var media = window.Test.Media!;
                 var fingerprint = vm.SourceFingerprint;
                 vm.ZoomFactor = 2.25;
                 var selected = vm.Markers[1];
@@ -80,7 +80,7 @@ internal static partial class Program
 
                 void RequireOriginal(string reason)
                 {
-                    var restoredMedia = (MediaInfo)typeof(MainWindow).GetField("_media", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    var restoredMedia = window.Test.Media;
                     Require(ReferenceEquals(window.DataContext, vm) && vm.SourcePath == source
                         && vm.SourceFingerprint == fingerprint && vm.DurationUs == media.DurationUs && vm.FrameRate == media.FrameRate
                         && ReferenceEquals(restoredMedia, media) && ReplaceMarkerSetCommand.Capture(vm).ContentId() == baseline, reason);
@@ -90,16 +90,16 @@ internal static partial class Program
                     var timeline = (FrameworkElement)window.FindName("Timeline");
                     Require(Math.Abs(timeline.Width - scroll.ViewportWidth * vm.ZoomFactor) < 1,
                         "Recovered timeline layout agrees with the restored zoom");
-                    var preview = typeof(MainWindow).GetField("_previewAfter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    var preview = window.Test.PreviewAfter;
                     var previewPath = (string)typeof(MpvPreviewViewModel).GetField("_currentPath", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(preview)!;
                     Require(vm.IsCollapsed ? previewPath.StartsWith("edl://") && previewPath.Contains(source) : previewPath == source,
                         "Recovered preview belongs to the original recording and view mode");
                     Require(new ExportDialogViewModel(vm, restoredMedia).BuildPlan()?.SourcePath == source,
                         "Export after a failed open still targets the original recording");
                 }
-                var afterPane = (MpvPreviewViewModel)typeof(MainWindow).GetField("_previewAfter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
-                var beforePane = (MpvPreviewViewModel)typeof(MainWindow).GetField("_previewBefore", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
-                Invoke(window, "PlayPauseBoth");
+                var afterPane = window.Test.PreviewAfter;
+                var beforePane = window.Test.PreviewBefore;
+                window.Test.PlayPauseBoth();
                 for (int i = 0; i < 150 && !afterPane.IsPlaying; i++) await Task.Delay(20);
                 Require(afterPane.IsPlaying, "The original recording is playing before the failed open");
                 playingDuringDialog = () => afterPane.IsPlaying || beforePane.IsPlaying;
@@ -108,7 +108,7 @@ internal static partial class Program
                 Require(dialogSeen is not null && !sawPlayingDuringDialog, "Restored playback stays paused while the failed-open error is shown");
                 for (int i = 0; i < 150 && !(afterPane.IsPlaying && beforePane.IsPlaying); i++) await Task.Delay(20);
                 Require(afterPane.IsPlaying && beforePane.IsPlaying, "Playback resumes after the failed-open error is dismissed");
-                Invoke(window, "PlayPauseBoth");
+                window.Test.PlayPauseBoth();
                 for (int i = 0; i < 150 && (afterPane.IsPlaying || beforePane.IsPlaying); i++) await Task.Delay(20);
                 RequireOriginal("Probe failure leaves the original recording intact");
                 var otherMedia = await new MediaProbeService(runner).ProbeAsync(other);
@@ -120,8 +120,7 @@ internal static partial class Program
                     var acl = FileSystemAclExtensions.GetAccessControl(denied);
                     acl.AddAccessRule(rule);
                     FileSystemAclExtensions.SetAccessControl(denied, acl);
-                    typeof(MainWindow).GetField("_thumbnails", BindingFlags.Instance | BindingFlags.NonPublic)!
-                        .SetValue(window, new ThumbnailService(runner, cacheRoot));
+                    window.Test.Thumbnails = new ThumbnailService(runner, cacheRoot);
                     vm.ShowThumbnails = true;
                     await window.OpenFileAsync(other).WaitAsync(TimeSpan.FromSeconds(20));
                     RequireOriginal("Cache read failure cannot mix the next recording's identity with old cuts");
@@ -130,17 +129,16 @@ internal static partial class Program
                     {
                         empty.Show();
                         await empty.Ready;
-                        typeof(MainWindow).GetField("_thumbnails", BindingFlags.Instance | BindingFlags.NonPublic)!
-                            .SetValue(empty, new ThumbnailService(runner, cacheRoot));
+                        empty.Test.Thumbnails = new ThumbnailService(runner, cacheRoot);
                         ((MainViewModel)empty.DataContext).ShowThumbnails = true;
                         await empty.OpenFileAsync(other).WaitAsync(TimeSpan.FromSeconds(20));
                         Require(!((MainViewModel)empty.DataContext).IsFileLoaded
-                            && typeof(MainWindow).GetField("_media", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(empty) is null,
+                            && empty.Test.Media is null,
                             "A failed first open returns to an empty editor instead of leaving a partial recording");
                     }
                     finally
                     {
-                        typeof(MainWindow).GetField("_allowClose", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(empty, true);
+                        empty.Test.AllowClose();
                         empty.Close();
                     }
                 }
@@ -151,7 +149,7 @@ internal static partial class Program
                     FileSystemAclExtensions.SetAccessControl(denied, acl);
                 }
                 vm.ShowThumbnails = false;
-                Invoke(window, "OnToggleCollapsed", window, new RoutedEventArgs());
+                window.Test.ToggleCollapsed();
                 var collapsedBaseline = ReplaceMarkerSetCommand.Capture(vm).ContentId();
                 DependencyPropertyChangedEventHandler inject = (_, change) =>
                 {
@@ -172,12 +170,12 @@ internal static partial class Program
                 Require(ReferenceEquals(window.DataContext, vm) && vm.IsCollapsed && vm.SourcePath == source
                     && ReplaceMarkerSetCommand.Capture(vm).ContentId() == baseline && vm.CommandStack.CanUndo,
                     "Failure after marker hydration starts restores the original collapsed editor and undo history");
-                var collapsedPreview = typeof(MainWindow).GetField("_previewAfter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                var collapsedPreview = window.Test.PreviewAfter;
                 var collapsedPath = (string)typeof(MpvPreviewViewModel).GetField("_currentPath", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(collapsedPreview)!;
                 Require(collapsedPath.StartsWith("edl://") && collapsedPath.Contains(source)
                     && new ExportDialogViewModel(vm, media).BuildPlan()?.SourcePath == source,
                     "Recovered collapsed preview and export plan both belong to the original recording");
-                Invoke(window, "OnToggleCollapsed", window, new RoutedEventArgs());
+                window.Test.ToggleCollapsed();
                 vm.CommandStack.Undo();
                 Require(!selected.Confirmed, "Undo still acts on the original marker after recovery");
                 vm.CommandStack.Redo();
@@ -200,7 +198,7 @@ internal static partial class Program
                 dialogs.Stop();
                 if (window is not null)
                 {
-                    typeof(MainWindow).GetField("_allowClose", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, true);
+                    window.Test.AllowClose();
                     window.Close();
                 }
                 app.Shutdown();
@@ -213,10 +211,10 @@ internal static partial class Program
     // As an export does it: the choice is read when the export starts, and the step after it follows that choice.
     private static async Task<string?> CommentAsExportWould(MainWindow window, MainViewModel vm, ExportView export)
     {
-        var choice = await (Task<SourceCommentChoice>)Invoke(window, "ReadSourceCommentChoiceAsync", export.AcceptedPlan!)!;
+        var choice = await window.Test.ReadSourceCommentChoiceAsync(export.AcceptedPlan!);
         typeof(ExportView).GetProperty(nameof(ExportView.SourceComment))!.SetValue(export, choice);
         export.SourceCommentFailed = false;
-        return await (Task<string?>)Invoke(window, "AddSourceCommentAsync", vm, export, CancellationToken.None)!;
+        return await window.Test.AddSourceCommentAsync(vm, export, CancellationToken.None);
     }
 
     private static async Task CheckUnreadableSourcePreferences(MainWindow window, MainViewModel vm, MediaInfo media, string source, string directory)
@@ -266,7 +264,7 @@ internal static partial class Program
         // A damaged settings file is reset from the banner, keeping the damaged bytes and the window's choices.
         bool knownChoice = WindowPreferences(window).AddSourceExportComment;
         await File.WriteAllTextAsync(path, "{");
-        await (Task)Invoke(window, "SavePreferencesSnapshotAsync", vm, false)!;
+        await window.Test.SavePreferencesSnapshotAsync(vm, false);
         var reset = vm.Banner?.Actions.FirstOrDefault(a => a.Label == "Reset settings");
         Require(reset is not null && vm.StatusOverride?.Contains("could not be saved") == true, "A blocked save offers to reset damaged settings");
         reset!.Invoke();
@@ -276,7 +274,7 @@ internal static partial class Program
         Require((await UserPreferences.ReadAsync()).AddSourceExportComment == knownChoice && WindowPreferences(window).AddSourceExportComment == knownChoice
             && vm.Banner?.Kind == StatusKind.Success, "Reset saves the window's known choices without changing source comments");
         vm.StatusOverride = null;
-        await (Task)Invoke(window, "SavePreferencesSnapshotAsync", vm, false)!;
+        await window.Test.SavePreferencesSnapshotAsync(vm, false);
         Require(vm.StatusOverride is null, "Settings save normally after the reset");
     }
 
