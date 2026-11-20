@@ -114,14 +114,14 @@ public partial class MainWindow
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                     { failures.Add(name); }
                 }
-                Preserve("ad-break suggestions", () => _suggestionStore.PreserveAfterMetadataUpdate(plan.SourcePath, expected, updated));
+                Preserve("ad-break suggestions", () => _markers.Suggestions.PreserveAfterMetadataUpdate(plan.SourcePath, expected, updated));
                 Preserve("thumbnails", () => _thumbnails?.PreserveAfterMetadataUpdate(plan.SourcePath, expected));
                 if (_media is not null)
                     Preserve("audio levels", () => (_audioLevels ?? new AudioLevelService(_ffmpeg, AudioLevelService.DefaultCacheRoot))
                         .PreserveAfterMetadataUpdate(plan.SourcePath, _media.PrimaryAudioIndex, expected));
                 return failures;
             });
-            vm.HasAdTrimAnalysis = _suggestionStore.Load(_suggestionStore.Key(plan.SourcePath, updated), updated.DurationUs) is not null;
+            vm.HasAdTrimAnalysis = _markers.Suggestions.Load(_markers.Suggestions.Key(plan.SourcePath, updated), updated.DurationUs) is not null;
             view.SourceCommentFailed = false;
             return (updated == expected ? "Source export comment was already current." : "Source export comment added.") + (cacheFailures.Count == 0 ? ""
                 : " Cached " + string.Join(", ", cacheFailures) + " could not be retained and may need to be regenerated.");

@@ -65,7 +65,7 @@ public partial class MainWindow
         public void ApplyMarkerSet(MainViewModel vm, MarkerSetState state, string action, bool confirm) => window.ApplyMarkerSet(vm, state, action, confirm);
         public Task<MarkerSetState?> AnalyzeCommercialsAsync(MainViewModel vm, string key, CancellationToken cancellationToken)
             => window.AnalyzeCommercialsAsync(vm, key, cancellationToken);
-        public static string? TimeLeftText(TimeSpan elapsed, double done, double remaining) => MainWindow.TimeLeftText(elapsed, done, remaining);
+        public static string? TimeLeftText(TimeSpan elapsed, double done, double remaining) => MarkerSetController.TimeLeftText(elapsed, done, remaining);
 
         // Export and source comments
         public Task<string?> AddSourceCommentAsync(MainViewModel vm, ExportView view, CancellationToken ct) => window.AddSourceCommentAsync(vm, view, ct);

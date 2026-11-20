@@ -34,10 +34,7 @@ public partial class MainWindow : Window
     private ThumbnailService? _thumbnails;
     private ThumbnailLoader? _thumbnailLoader;
     private CancellationTokenSource? _refineCts;
-    private CancellationTokenSource? _commercialAnalysisCts;
-    private readonly MarkerSuggestionStore _suggestionStore = new();
-    private const long UncertainMarkerSpacingUs = 5_000_000;
-    private MarkerSetState? _importedMarkerSet;
+    private readonly MarkerSetController _markers = new(new MarkerSuggestionStore());
     private MediaInfo? _media;
     private SourceFingerprint? _sourceFingerprint;
     private bool _hydrating;
@@ -275,7 +272,7 @@ public partial class MainWindow : Window
         {
             _ffmpeg = new FfmpegRunner();
             _store = new ProjectStore();
-            _loader = new RecordingLoader(new MediaProbeService(_ffmpeg), new ChapterImportService(_ffmpeg), _store, _suggestionStore);
+            _loader = new RecordingLoader(new MediaProbeService(_ffmpeg), new ChapterImportService(_ffmpeg), _store, _markers.Suggestions);
             _thumbnails = new ThumbnailService(_ffmpeg);
         }
         catch (FileNotFoundException)
@@ -561,7 +558,7 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainViewModel vm) return;
         ResetShuttle();
-        if (vm.IsBusy && _commercialAnalysisCts is null) return;
+        if (vm.IsBusy && !_markers.IsAnalyzing) return;
         if (vm.IsCollapsed)
         {
             if (vm.KeptTimeline.DurationUs > 0 && !_previewAfter.IsLoading) _previewAfter.PlayPause();
@@ -679,7 +676,7 @@ public partial class MainWindow : Window
             {
                 _ffmpeg ??= new FfmpegRunner();
                 _store ??= new ProjectStore();
-                _loader ??= new RecordingLoader(new MediaProbeService(_ffmpeg), new ChapterImportService(_ffmpeg), _store, _suggestionStore);
+                _loader ??= new RecordingLoader(new MediaProbeService(_ffmpeg), new ChapterImportService(_ffmpeg), _store, _markers.Suggestions);
                 _thumbnails ??= new ThumbnailService(_ffmpeg);
             }
             catch (FileNotFoundException ex)
@@ -698,8 +695,8 @@ public partial class MainWindow : Window
         var previousThumbnailTiles = vm.ThumbnailTiles;
         var previousMedia = _media;
         var previousFingerprint = _sourceFingerprint;
-        var previousImportedMarkers = _importedMarkerSet;
-        var previousImportedAvailable = _importedMarkersAvailable;
+        var previousImportedMarkers = _markers.Imported;
+        var previousImportedAvailable = _markers.ImportedAvailable;
         var previousImportedTooltip = UseOriginalImportedMarkersMenuItem.ToolTip;
         var previousStatus = (vm.StatusKind, vm.StatusOverride, vm.ProgressPercent);
         var previousPath = vm.SourcePath;
@@ -741,11 +738,10 @@ public partial class MainWindow : Window
                 ShowRulerTicks = previousVm.ShowRulerTicks, IsBusy = true, BusyOperation = "Opening", Banner = importWarning,
             };
             WireViewModelEvents(vm);
-            _importedMarkerSet = loaded.ImportedMarkers;
+            _markers.SetImported(loaded.ImportedMarkers, loaded.ImportedMarkersAvailable);
             AnalyzeAdBreaksButton.Style = (Style)FindResource("Button.Primary");
             _playUntilUs = null;
             vm.HasAdTrimAnalysis = loaded.CachedSuggestions is not null;
-            _importedMarkersAvailable = loaded.ImportedMarkersAvailable;
             UseOriginalImportedMarkersMenuItem.ToolTip = loaded.ImportedMarkersUnavailableReason;
             RefreshImportedMarkersItem(vm);
             _media = probed;
@@ -778,7 +774,7 @@ public partial class MainWindow : Window
 
             if (loaded.Start == RecordingStart.SavedProject)
             {
-                HydrateFromSidecar(vm, loaded.Sidecar.Project!);
+                MarkerSetController.HydrateFromSidecar(vm, loaded.Sidecar.Project!);
                 if (loaded.Sidecar.Message is not null)
                 {
                     vm.StatusKind = StatusKind.Warning;
@@ -800,25 +796,25 @@ public partial class MainWindow : Window
                 vm.StatusOverride = "Importing chapters…";
                 if (loaded.Start == RecordingStart.AdTrimSuggestions)
                 {
-                    HydrateBlank(vm, MarkerSetSource.AdTrim);
+                    MarkerSetController.HydrateBlank(vm, MarkerSetSource.AdTrim);
                     vm.StatusOverride = "Analyzing ad breaks…";
                     if (loaded.CachedSuggestions is { } cached) ApplyMarkerSet(vm, cached, "Load AdTrim suggested markers", confirm: false);
                     else
                     {
-                        var initialKey = _suggestionStore.Key(path, fingerprint);
+                        var initialKey = _markers.Suggestions.Key(path, fingerprint);
                         var detected = await AnalyzeCommercialsAsync(vm, initialKey, cancellationToken: CancellationToken.None);
                         if (detected is not null) ApplyMarkerSet(vm, detected, "Load AdTrim suggested markers", confirm: false);
                         else
                         {
-                            HydrateBlank(vm, MarkerSetSource.Blank);
+                            MarkerSetController.HydrateBlank(vm, MarkerSetSource.Blank);
                             vm.StatusOverride = "Analysis did not finish. All video remains included.";
                         }
                     }
                 }
                 else if (loaded.Start == RecordingStart.Blank)
-                    HydrateBlank(vm, MarkerSetSource.Blank);
+                    MarkerSetController.HydrateBlank(vm, MarkerSetSource.Blank);
                 else
-                    HydrateFromChapters(vm, _media, loaded.Chapters);
+                    MarkerSetController.HydrateFromChapters(vm, _media, loaded.Chapters);
             }
 
             vm.CommandStack.Clear();
@@ -859,8 +855,7 @@ public partial class MainWindow : Window
             CancelThumbnailLoad(vm, clearThumbnails: false);
             _media = previousMedia;
             _sourceFingerprint = previousFingerprint;
-            _importedMarkerSet = previousImportedMarkers;
-            _importedMarkersAvailable = previousImportedAvailable;
+            _markers.SetImported(previousImportedMarkers, previousImportedAvailable);
             UseOriginalImportedMarkersMenuItem.ToolTip = previousImportedTooltip;
             vm = previousVm;
             DataContext = vm;
@@ -1043,92 +1038,12 @@ public partial class MainWindow : Window
         Timeline.RefreshThumbnails();
     }
 
-    private static void HydrateFromSidecar(MainViewModel vm, AdTrimProject proj)
-    {
-        vm.LastExport = proj.LastExport;
-        vm.ClearSelection();
-        vm.Markers.Clear();
-        vm.Segments.Clear();
-        vm.ExcludedSegmentIds.Clear();
-        vm.MarkerSetSource = proj.MarkerSetSource;
-        vm.MarkerBaselineId = proj.MarkerBaselineId?.StartsWith("v2:", StringComparison.Ordinal) == true
-            ? proj.MarkerBaselineId : null;
-
-        // Add bookends + persisted internal splits.
-        vm.Markers.Add(new Split { TimeUs = 0, Confidence = null, Confirmed = true, Label = "Start" });
-        vm.Markers[0].ChapterTitle = proj.StartChapterTitle;
-        foreach (var ps in proj.Splits.OrderBy(s => s.TimeUs))
-        {
-            vm.Markers.Add(new Split
-            {
-                Id = ps.Id,
-                TimeUs = ps.TimeUs,
-                Source = ps.Source,
-                OriginalTimeUs = ps.OriginalTimeUs,
-                Confidence = ps.Confidence,
-                Confirmed = ps.Confirmed,
-                ChapterTitle = ps.ChapterTitle,
-            });
-        }
-        vm.Markers.Add(new Split { TimeUs = vm.DurationUs, Confidence = null, Confirmed = true, Label = "End" });
-
-        foreach (var id in proj.ExcludedSegmentIds) vm.ExcludedSegmentIds.Add(id);
-        vm.RebuildSegmentsFromSplits();
-    }
-
-    private static void HydrateFromChapters(MainViewModel vm, MediaInfo media, IReadOnlyList<ChapterBoundary> chapters)
-    {
-        vm.ClearSelection();
-        vm.Markers.Clear();
-        vm.Segments.Clear();
-        vm.ExcludedSegmentIds.Clear();
-
-        vm.Markers.Add(new Split { TimeUs = 0, Confidence = null, Confirmed = true, Label = "Start" });
-        vm.Markers[0].ChapterTitle = chapters.FirstOrDefault(c => c.TimeUs == 0)?.Title;
-        foreach (var c in chapters.Where(c => c.TimeUs > 0))
-        {
-            vm.Markers.Add(new Split
-            {
-                TimeUs = c.TimeUs,
-                ChapterTitle = c.Title,
-                Source = SplitSource.Chapter,
-                Confidence = null,
-                Confirmed = false,
-            });
-        }
-        vm.Markers.Add(new Split { TimeUs = media.DurationUs, Confidence = null, Confirmed = true, Label = "End" });
-        vm.MarkerSetSource = MarkerSetSource.Imported;
-        var state = RecordingLoader.MarkersFromChapters(chapters, MarkerSetSource.Imported);
-        vm.MarkerBaselineId = StateId(state);
-        vm.RebuildSegmentsFromSplits();
-    }
-
-    private static string StateId(MarkerSetState state)
-    {
-        return state.ContentId();
-    }
-
-    private static void HydrateBlank(MainViewModel vm, MarkerSetSource source)
-    {
-        vm.Markers.Clear();
-        vm.Segments.Clear();
-        vm.ExcludedSegmentIds.Clear();
-        vm.Markers.Add(new Split { TimeUs = 0, Confirmed = true, Label = "Start" });
-        vm.Markers.Add(new Split { TimeUs = vm.DurationUs, Confirmed = true, Label = "End" });
-        vm.MarkerSetSource = source;
-        vm.RebuildSegmentsFromSplits();
-        vm.MarkerBaselineId = vm.CurrentMarkerSetId();
-    }
-
     private async Task<MarkerSetState?> AnalyzeCommercialsAsync(MainViewModel vm, string key,
         CancellationToken cancellationToken)
     {
         if (_ffmpeg is null || _media is null || vm.SourcePath is not { } source || vm.SourceFingerprint is not { } fingerprint) return null;
         var sourceAtStart = source;
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _commercialAnalysisCts?.Cancel();
-
-        _commercialAnalysisCts = linked;
+        using var linked = _markers.BeginAnalysis(cancellationToken);
         var wasBusy = vm.IsBusy;
         var previousOperation = vm.BusyOperation;
         var previousProgress = vm.ProgressPercent;
@@ -1149,7 +1064,7 @@ public partial class MainWindow : Window
         {
             var progress = new Progress<CommercialDetectionProgress>(p =>
             {
-                if (ReferenceEquals(_commercialAnalysisCts, linked) && !linked.IsCancellationRequested
+                if (_markers.IsCurrent(linked) && !linked.IsCancellationRequested
                     && vm.SourcePath == sourceAtStart && p.DurationUs > 0)
                 {
                     double fraction = Math.Clamp(p.TimeUs / (double)p.DurationUs, 0, 1);
@@ -1161,7 +1076,7 @@ public partial class MainWindow : Window
                     vm.AnalysisStage = p.Queued ? "Waiting for another recording to finish analysis…" : p.Stage ?? "Analyzing ad breaks…";
                     if (p.Queued) return;
                     if (working is null) { working = Stopwatch.StartNew(); workingFrom = fraction; }
-                    vm.AnalysisTimeLeft = TimeLeftText(working.Elapsed, fraction - workingFrom, 1 - fraction);
+                    vm.AnalysisTimeLeft = MarkerSetController.TimeLeftText(working.Elapsed, fraction - workingFrom, 1 - fraction);
                 }
             });
             var media = _media;
@@ -1170,44 +1085,10 @@ public partial class MainWindow : Window
                 (stage, ct) => Dispatcher.Invoke(() => EnsureAudioPass(vm, sourceAtStart, media)).JoinAsync(stage, ct),
                 WaitForFullReadTurnAsync);
             if (linked.IsCancellationRequested || vm.SourcePath != sourceAtStart || vm.SourceFingerprint != fingerprint) return null;
-            var splits = new List<PersistedSplit>();
-            var exclusions = new List<string>();
-            foreach (var proposal in result.Breaks.OrderBy(b => b.StartUs))
-            {
-                if (proposal.StartUs <= 0 || proposal.EndUs >= _media.DurationUs || proposal.EndUs <= proposal.StartUs
-                    || splits.Any(s => s.TimeUs >= proposal.StartUs && s.TimeUs < proposal.EndUs)) continue;
-                var startId = Guid.NewGuid().ToString("N")[..12];
-                var endId = Guid.NewGuid().ToString("N")[..12];
-                splits.Add(new PersistedSplit(startId, proposal.StartUs, SplitSource.Manual, null,
-                    proposal.EndpointConfidence, false, "Possible commercial break"));
-                splits.Add(new PersistedSplit(endId, proposal.EndUs, SplitSource.Manual, null,
-                    proposal.EndpointConfidence, false, null));
-                if (proposal.AutoExclude) exclusions.Add($"segment-{proposal.StartUs}-{proposal.EndUs}");
-            }
-            // Uncertain candidates appear as low-confidence (red) markers, unless they overlap a
-            // suggested break or a more confident marker is already within a few seconds.
-            var confident = splits.Select(s => s.TimeUs).ToList();
-            foreach (var candidate in result.UncertainBreaks.OrderBy(b => b.StartUs))
-            {
-                if (candidate.EndpointConfidence != Confidence.Low || candidate.EndUs <= candidate.StartUs
-                    || result.Breaks.Any(b => b.StartUs < candidate.EndUs && candidate.StartUs < b.EndUs)) continue;
-                foreach (var (time, isStart) in new[] { (candidate.StartUs, true), (candidate.EndUs, false) })
-                {
-                    if (time <= 0 || time >= _media.DurationUs || confident.Any(t => Math.Abs(t - time) <= UncertainMarkerSpacingUs)
-                        || splits.Any(s => s.TimeUs == time)) continue;
-                    splits.Add(new PersistedSplit(Guid.NewGuid().ToString("N")[..12], time, SplitSource.Manual, null,
-                        Confidence.Low, false, isStart ? "Possible commercial break (uncertain)" : null));
-                }
-            }
-            splits.Sort((a, b) => a.TimeUs.CompareTo(b.TimeUs));
-            var provisional = new MarkerSetState(splits, exclusions, null, MarkerSetSource.AdTrim, null);
-            var state = provisional with { BaselineId = StateId(provisional) };
+            var state = MarkerSetController.FromAnalysis(result, _media.DurationUs);
             vm.HasAdTrimAnalysis = true;
-            var (breaks, uncertain) = SuggestionCounts(state);
-            vm.Banner = new BannerInfo(StatusKind.Success, $"Ad-break analysis finished in {ElapsedText(total.Elapsed)}.",
-                $"Found {Plural(breaks, "ad break")} and {Plural(uncertain, "uncertain red marker")}. Nothing was excluded; "
-                + "review each break and exclude the ones you want removed.", Array.Empty<BannerAction>());
-            try { _suggestionStore.Save(key, state); }
+            vm.Banner = MarkerSetController.AnalysisFinished(state, total.Elapsed);
+            try { _markers.Suggestions.Save(key, state); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             { vm.Banner = new BannerInfo(StatusKind.Warning, "Suggestions could not be cached.", ex.Message, Array.Empty<BannerAction>()); }
             return state;
@@ -1224,7 +1105,7 @@ public partial class MainWindow : Window
             taskbar.ProgressState = TaskbarItemProgressState.None;
             vm.AnalysisTimeLeft = null;
             vm.IsAnalyzingCommercials = false;
-            if (ReferenceEquals(_commercialAnalysisCts, linked)) _commercialAnalysisCts = null;
+            _markers.EndAnalysis(linked);
             // Nothing else wants an unfinished pass once analysis stops with the graph hidden.
             if (!vm.ShowWaveform && _audioPass is { Completion.IsCompleted: false }) ReleaseAudioPass(vm);
             vm.IsBusy = wasBusy;
@@ -1236,8 +1117,7 @@ public partial class MainWindow : Window
     private void UseEarlierProject(MainViewModel vm, string path, AdTrimProject earlier)
     {
         if (vm.IsBusy || !string.Equals(vm.SourcePath, path, StringComparison.OrdinalIgnoreCase)) return;
-        var state = new MarkerSetState(earlier.Splits, earlier.ExcludedSegmentIds, earlier.StartChapterTitle, earlier.MarkerSetSource,
-            earlier.MarkerBaselineId?.StartsWith("v2:", StringComparison.Ordinal) == true ? earlier.MarkerBaselineId : null);
+        var state = MarkerSetController.FromEarlierProject(earlier);
         vm.Banner = null;
         ApplyMarkerSet(vm, state, "Use markers from the earlier project", confirm: false);
     }
@@ -1247,54 +1127,14 @@ public partial class MainWindow : Window
         if (confirm && !ConfirmDiscardEdits(vm, state.Source)) return;
         if (vm.IsCollapsed) SetCollapsed(vm, false);
         vm.CommandStack.Execute(new ReplaceMarkerSetCommand(vm, state, action));
-        var (breaks, uncertain) = SuggestionCounts(state);
-        vm.StatusOverride = state.Source == MarkerSetSource.AdTrim
-            ? $"{Plural(breaks, "possible ad break")}, {Plural(uncertain, "uncertain red marker")}. All video remains included; review before excluding."
-            : action;
+        vm.StatusOverride = MarkerSetController.AppliedStatus(state, action);
         vm.StatusKind = StatusKind.Info;
-    }
-
-    /// <summary>Suggested breaks (each starts with a labeled marker) and uncertain red markers in a set.</summary>
-    private static (int Breaks, int Uncertain) SuggestionCounts(MarkerSetState state) =>
-        (state.Splits.Count(s => s.Confidence != Confidence.Low && s.ChapterTitle is not null),
-         state.Splits.Count(s => s.Confidence == Confidence.Low));
-
-    private static string Plural(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
-
-    private static string ElapsedText(TimeSpan elapsed) => elapsed.TotalMinutes >= 1
-        ? $"{(int)elapsed.TotalMinutes} min {elapsed.Seconds} s"
-        : $"{Math.Max(1, (int)Math.Round(elapsed.TotalSeconds))} s";
-
-    /// <summary>Rough time left from the rate so far; null until there is enough progress to estimate.</summary>
-    internal static string? TimeLeftText(TimeSpan elapsed, double done, double remaining)
-    {
-        if (elapsed < TimeSpan.FromSeconds(5) || done < .03) return null;
-        double seconds = elapsed.TotalSeconds * remaining / done;
-        return seconds < 60 ? "Less than a minute left" : $"About {(int)Math.Ceiling(seconds / 60)} min left";
     }
 
     /// <summary>Asks before edits are replaced by <paramref name="destination"/> markers. True when there
     /// are no edits to lose or the user agrees. Ask before any analysis work, not after.</summary>
     private bool ConfirmDiscardEdits(MainViewModel vm, MarkerSetSource destination)
-    {
-        if (!vm.IsTimelineEdited) return true;
-        var sourceName = vm.MarkerSetSource switch
-        {
-            MarkerSetSource.Imported => "imported markers",
-            MarkerSetSource.AdTrim => "AdTrim suggested markers",
-            _ => "current markings",
-        };
-        var target = destination == MarkerSetSource.Imported ? "the original imported markers" : "the original AdTrim suggested markers";
-        var confirmationTitle = vm.MarkerSetSource switch
-        {
-            MarkerSetSource.Imported => "Discard edits to imported markers?",
-            MarkerSetSource.AdTrim => "Discard edits to AdTrim suggested markers?",
-            _ => "Discard current edits?",
-        };
-        return _askDiscardEdits(
-            $"This discards your edits to {sourceName}, including split positions, section names, and exclusions, then loads {target}.",
-            confirmationTitle);
-    }
+        => MarkerSetController.DiscardQuestion(vm, destination) is not { } question || _askDiscardEdits(question.Message, question.Title);
 
     // Replaceable so the smoke check can answer it and see when it was asked.
     private Func<string, string, bool> _askDiscardEdits;
@@ -1307,12 +1147,10 @@ public partial class MainWindow : Window
         else OnUseAdTrimSuggestions(sender, e);
     }
 
-    private bool _importedMarkersAvailable;
-
     // The Ad break detection menu stays enabled (for the starting-markers preference), so this
     // item needs both conditions itself: the recording has chapters, and markers can change now.
     private void RefreshImportedMarkersItem(MainViewModel vm)
-        => UseOriginalImportedMarkersMenuItem.IsEnabled = _importedMarkersAvailable && vm.CanReplaceMarkers;
+        => UseOriginalImportedMarkersMenuItem.IsEnabled = _markers.ImportedAvailable && vm.CanReplaceMarkers;
 
     private void OnOpenMarkersMenu(object sender, RoutedEventArgs e)
     {
@@ -1325,22 +1163,22 @@ public partial class MainWindow : Window
 
     private void OnCancelCommercialAnalysis(object sender, RoutedEventArgs e)
     {
-        _commercialAnalysisCts?.Cancel();
+        _markers.CancelAnalysis();
         if (DataContext is MainViewModel vm) vm.StatusOverride = "Cancelling commercial analysis...";
     }
 
     private void OnUseImportedMarkers(object sender, RoutedEventArgs e)
     {
-        if (DataContext is not MainViewModel vm || !vm.CanReplaceMarkers || _importedMarkerSet is null) return;
-        ApplyMarkerSet(vm, _importedMarkerSet, "Revert to original imported markers", confirm: true);
+        if (DataContext is not MainViewModel vm || !vm.CanReplaceMarkers || _markers.Imported is not { } imported) return;
+        ApplyMarkerSet(vm, imported, "Revert to original imported markers", confirm: true);
     }
 
     private async void OnUseAdTrimSuggestions(object sender, RoutedEventArgs e)
     {
         if (DataContext is not MainViewModel vm || !vm.CanReplaceMarkers || vm.SourcePath is null || vm.SourceFingerprint is null) return;
         var source = vm.SourcePath;
-        var key = _suggestionStore.Key(source, vm.SourceFingerprint);
-        var state = _suggestionStore.Load(key, vm.DurationUs);
+        var key = _markers.Suggestions.Key(source, vm.SourceFingerprint);
+        var state = _markers.Suggestions.Load(key, vm.DurationUs);
         bool confirmed = false;
         if (state is null)
         {
@@ -1355,7 +1193,7 @@ public partial class MainWindow : Window
             return;
         }
         if (vm.SourcePath != source || vm.SourceFingerprint is null
-            || !StringComparer.Ordinal.Equals(key, _suggestionStore.Key(vm.SourcePath, vm.SourceFingerprint))) return;
+            || !StringComparer.Ordinal.Equals(key, _markers.Suggestions.Key(vm.SourcePath, vm.SourceFingerprint))) return;
         ApplyMarkerSet(vm, state, "Revert to original AdTrim suggested markers", confirm: !confirmed);
     }
 
@@ -1363,7 +1201,7 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainViewModel vm || !vm.CanReplaceMarkers || vm.SourcePath is null || vm.SourceFingerprint is null) return;
         var source = vm.SourcePath;
-        var key = _suggestionStore.Key(source, vm.SourceFingerprint);
+        var key = _markers.Suggestions.Key(source, vm.SourceFingerprint);
         // Ask before the analysis work; markers are locked while it runs, so the answer stays valid.
         if (!ConfirmDiscardEdits(vm, MarkerSetSource.AdTrim)) return;
         var state = await AnalyzeCommercialsAsync(vm, key, CancellationToken.None);
@@ -1373,7 +1211,7 @@ public partial class MainWindow : Window
             return;
         }
         if (vm.SourcePath == source && vm.SourceFingerprint is not null
-            && StringComparer.Ordinal.Equals(key, _suggestionStore.Key(vm.SourcePath, vm.SourceFingerprint)))
+            && StringComparer.Ordinal.Equals(key, _markers.Suggestions.Key(vm.SourcePath, vm.SourceFingerprint)))
             ApplyMarkerSet(vm, state, "Analyze ad breaks again", confirm: false);
     }
 
@@ -1440,11 +1278,7 @@ public partial class MainWindow : Window
             return;
         }
         e.Cancel = true;
-        if (_commercialAnalysisCts is { } analysis)
-        {
-            analysis.Cancel();
-            while (ReferenceEquals(_commercialAnalysisCts, analysis)) await Task.Delay(50);
-        }
+        await _markers.WaitForAnalysisToStopAsync();
         if (_switching)
         {
             _saves.CloseAfterSwitch();
@@ -1546,7 +1380,7 @@ public partial class MainWindow : Window
             if (vm.IsBusy && vm.BusyOperation == "Refining") CancelRefine();
             else if (vm.IsBusy && vm.BusyOperation == "Analyzing commercial breaks")
             {
-                _commercialAnalysisCts?.Cancel();
+                _markers.CancelAnalysis();
                 vm.StatusOverride = "Cancelling commercial analysis…";
             }
             else if (!vm.IsBusy && vm.SelectionKind != SelectionKind.None) vm.ClearSelection();
@@ -1554,7 +1388,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_commercialAnalysisCts is not null && e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None)
+        if (_markers.IsAnalyzing && e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None)
         { PlayPauseBoth(); e.Handled = true; return; }
 
         if (vm.IsBusy)
@@ -2006,7 +1840,7 @@ public partial class MainWindow : Window
         _previewBefore.Stop();
         _media = null;
         _sourceFingerprint = null;
-        _importedMarkerSet = null;
+        _markers.SetImported(null, _markers.ImportedAvailable);
         vm.MarkerSetSource = MarkerSetSource.Unknown;
         vm.MarkerBaselineId = null;
         vm.SourceFingerprint = null;
@@ -2429,7 +2263,7 @@ public partial class MainWindow : Window
 
     private void Shuttle(MainViewModel vm, Key key)
     {
-        if (vm.IsBusy && _commercialAnalysisCts is null) return;
+        if (vm.IsBusy && !_markers.IsAnalyzing) return;
         if (key == Key.K)
         {
             ResetShuttle();
@@ -2467,7 +2301,7 @@ public partial class MainWindow : Window
     private void RewindTick()
     {
         if (_allowClose || _switching || DataContext is not MainViewModel { IsFileLoaded: true, IsExportScreen: false } vm
-            || (vm.IsBusy && _commercialAnalysisCts is null) || _shuttle >= 0)
+            || (vm.IsBusy && !_markers.IsAnalyzing) || _shuttle >= 0)
         { StopRewind(); return; }
         long step = RewindTickMs * 1_000L * -_shuttle;
         long position = vm.IsCollapsed ? vm.TimelinePositionUs : vm.PlayheadUs;
