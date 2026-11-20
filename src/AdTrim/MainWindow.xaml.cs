@@ -27,8 +27,7 @@ public partial class MainWindow : Window
     private readonly MpvPreviewViewModel _previewAfter = new();
     private readonly MpvPreviewViewModel _previewBefore = new();
     private FfmpegRunner? _ffmpeg;
-    private MediaProbeService? _probe;
-    private ChapterImportService? _chapters;
+    private RecordingLoader? _loader;
     private ProjectStore? _store;
     private AudioLevelService? _audioLevels;
     private AudioLevelPass? _audioPass;
@@ -275,9 +274,8 @@ public partial class MainWindow : Window
         try
         {
             _ffmpeg = new FfmpegRunner();
-            _probe = new MediaProbeService(_ffmpeg);
-            _chapters = new ChapterImportService(_ffmpeg);
             _store = new ProjectStore();
+            _loader = new RecordingLoader(new MediaProbeService(_ffmpeg), new ChapterImportService(_ffmpeg), _store, _suggestionStore);
             _thumbnails = new ThumbnailService(_ffmpeg);
         }
         catch (FileNotFoundException)
@@ -675,14 +673,13 @@ public partial class MainWindow : Window
         finally { _switching = false; }
         if (TakePendingClose(flushed) || !flushed) return;
 
-        if (_ffmpeg is null || _probe is null || _chapters is null || _store is null)
+        if (_ffmpeg is null || _loader is null || _store is null)
         {
             try
             {
                 _ffmpeg ??= new FfmpegRunner();
-                _probe ??= new MediaProbeService(_ffmpeg);
-                _chapters ??= new ChapterImportService(_ffmpeg);
                 _store ??= new ProjectStore();
+                _loader ??= new RecordingLoader(new MediaProbeService(_ffmpeg), new ChapterImportService(_ffmpeg), _store, _suggestionStore);
                 _thumbnails ??= new ThumbnailService(_ffmpeg);
             }
             catch (FileNotFoundException ex)
@@ -726,25 +723,17 @@ public partial class MainWindow : Window
         bool resumeAfterFailure = false, closeRequested = false;
         try
         {
-            await Task.Run(() => SourceCommentService.Recover(path, _store!));
-            vm.StatusKind = StatusKind.Info;
-            vm.StatusOverride = "Probing media…";
-            var probed = await _probe!.ProbeAsync(path);
-            var fingerprint = ProjectStore.FingerprintOf(path, probed.DurationUs);
-            var loadResult = await Task.Run(() => _store!.Load(path, probed));
-            IReadOnlyList<ChapterBoundary> imported = Array.Empty<ChapterBoundary>();
-            MarkerSetState? importedMarkerSet = null;
-            BannerInfo? importWarning = null;
-            try
+            var loadingVm = vm;
+            var loaded = await _loader!.LoadAsync(path, _preferences.NewFileMarkerSource, () =>
             {
-                imported = await _chapters!.ImportAsync(path, probed.DurationUs, includeStart: true);
-                importedMarkerSet = StateFromChapters(imported, MarkerSetSource.Imported);
-            }
-            catch (Exception ex)
-            {
-                importWarning = new BannerInfo(StatusKind.Warning, "Imported markers are unavailable.",
-                    ex.Message, Array.Empty<BannerAction>());
-            }
+                loadingVm.StatusKind = StatusKind.Info;
+                loadingVm.StatusOverride = "Probing media…";
+            });
+            var probed = loaded.Media;
+            var fingerprint = loaded.Fingerprint;
+            BannerInfo? importWarning = loaded.ImportError is { } importError
+                ? new BannerInfo(StatusKind.Warning, "Imported markers are unavailable.", importError, Array.Empty<BannerAction>())
+                : null;
             // Keep the previous model, including its undo history, untouched until opening succeeds.
             vm = new MainViewModel
             {
@@ -752,15 +741,12 @@ public partial class MainWindow : Window
                 ShowRulerTicks = previousVm.ShowRulerTicks, IsBusy = true, BusyOperation = "Opening", Banner = importWarning,
             };
             WireViewModelEvents(vm);
-            _importedMarkerSet = importedMarkerSet;
+            _importedMarkerSet = loaded.ImportedMarkers;
             AnalyzeAdBreaksButton.Style = (Style)FindResource("Button.Primary");
             _playUntilUs = null;
-            vm.HasAdTrimAnalysis = _suggestionStore.Load(_suggestionStore.Key(path, fingerprint), probed.DurationUs) is not null;
-            _importedMarkersAvailable = _importedMarkerSet is not null
-                && (_importedMarkerSet.Splits.Count > 0 || _importedMarkerSet.StartChapterTitle is not null);
-            UseOriginalImportedMarkersMenuItem.ToolTip = _importedMarkersAvailable
-                ? null : _importedMarkerSet is null ? "Imported markers could not be read from this recording."
-                    : "This recording has no imported chapter markers.";
+            vm.HasAdTrimAnalysis = loaded.CachedSuggestions is not null;
+            _importedMarkersAvailable = loaded.ImportedMarkersAvailable;
+            UseOriginalImportedMarkersMenuItem.ToolTip = loaded.ImportedMarkersUnavailableReason;
             RefreshImportedMarkersItem(vm);
             _media = probed;
             _sourceFingerprint = fingerprint;
@@ -790,40 +776,36 @@ public partial class MainWindow : Window
             // waveform's full read yields to it. Starting here keeps it ahead of any analysis.
             if (vm.ShowThumbnails) StartThumbnailLoad(vm, path, _media);
 
-            // Try sidecar hydration first.
-            if (loadResult.Project is { } proj && loadResult.Status is SidecarLoadStatus.Loaded or SidecarLoadStatus.LoadedWithMtimeWarning)
+            if (loaded.Start == RecordingStart.SavedProject)
             {
-                HydrateFromSidecar(vm, proj);
-                if (loadResult.Message is not null)
+                HydrateFromSidecar(vm, loaded.Sidecar.Project!);
+                if (loaded.Sidecar.Message is not null)
                 {
                     vm.StatusKind = StatusKind.Warning;
-                    vm.StatusOverride = loadResult.Message ?? "Source modified time changed; verify project state.";
+                    vm.StatusOverride = loaded.Sidecar.Message ?? "Source modified time changed; verify project state.";
                 }
             }
             else
             {
-                if (loadResult.Status is SidecarLoadStatus.Corrupt or SidecarLoadStatus.FingerprintMismatch or SidecarLoadStatus.UnsupportedVersion)
+                if (loaded.SidecarNotLoaded)
                 {
-                    // A retagged or restored recording fails the identity check although its markers may still fit.
-                    var earlier = loadResult.Status == SidecarLoadStatus.FingerprintMismatch
-                        ? _store.LoadForChangedRecording(path, probed.DurationUs) : null;
+                    var earlier = loaded.EarlierProject;
                     vm.Banner = new BannerInfo(StatusKind.Warning,
                         "Project sidecar was not loaded.",
-                        earlier is null ? loadResult.Message ?? "Falling back to embedded chapters."
+                        earlier is null ? loaded.Sidecar.Message ?? "Falling back to embedded chapters."
                             : "The recording's size or duration changed since this project was saved, so its markers were not loaded.",
                         earlier is null ? Array.Empty<BannerAction>()
                             : new[] { new BannerAction("Use these markers anyway", () => UseEarlierProject(vm, path, earlier)) });
                 }
                 vm.StatusOverride = "Importing chapters…";
-                if (_preferences.NewFileMarkerSource == NewFileMarkerSource.AdTrim)
+                if (loaded.Start == RecordingStart.AdTrimSuggestions)
                 {
                     HydrateBlank(vm, MarkerSetSource.AdTrim);
                     vm.StatusOverride = "Analyzing ad breaks…";
-                    var initialKey = _suggestionStore.Key(path, fingerprint);
-                    var cached = _suggestionStore.Load(initialKey, probed.DurationUs);
-                    if (cached is not null) ApplyMarkerSet(vm, cached, "Load AdTrim suggested markers", confirm: false);
+                    if (loaded.CachedSuggestions is { } cached) ApplyMarkerSet(vm, cached, "Load AdTrim suggested markers", confirm: false);
                     else
                     {
+                        var initialKey = _suggestionStore.Key(path, fingerprint);
                         var detected = await AnalyzeCommercialsAsync(vm, initialKey, cancellationToken: CancellationToken.None);
                         if (detected is not null) ApplyMarkerSet(vm, detected, "Load AdTrim suggested markers", confirm: false);
                         else
@@ -833,15 +815,15 @@ public partial class MainWindow : Window
                         }
                     }
                 }
-                else if (_preferences.NewFileMarkerSource == NewFileMarkerSource.None)
+                else if (loaded.Start == RecordingStart.Blank)
                     HydrateBlank(vm, MarkerSetSource.Blank);
                 else
-                    HydrateFromChapters(vm, _media, imported);
+                    HydrateFromChapters(vm, _media, loaded.Chapters);
             }
 
             vm.CommandStack.Clear();
             vm.IsDirty = false;
-            vm.SaveStatus = loadResult.Project is not null ? "Saved" : "No saved edits";
+            vm.SaveStatus = loaded.HasSavedProject ? "Saved" : "No saved edits";
             if (_preferences.Positions?.TryGetValue(path, out var position) == true)
             {
                 position = Math.Clamp(position, 0, vm.DurationUs);
@@ -1121,18 +1103,9 @@ public partial class MainWindow : Window
         }
         vm.Markers.Add(new Split { TimeUs = media.DurationUs, Confidence = null, Confirmed = true, Label = "End" });
         vm.MarkerSetSource = MarkerSetSource.Imported;
-        var state = StateFromChapters(chapters, MarkerSetSource.Imported);
+        var state = RecordingLoader.MarkersFromChapters(chapters, MarkerSetSource.Imported);
         vm.MarkerBaselineId = StateId(state);
         vm.RebuildSegmentsFromSplits();
-    }
-
-    private static MarkerSetState StateFromChapters(IReadOnlyList<ChapterBoundary> chapters, MarkerSetSource source)
-    {
-        var start = chapters.FirstOrDefault(c => c.TimeUs == 0)?.Title;
-        var splits = chapters.Where(c => c.TimeUs > 0).Select(c => new PersistedSplit(
-            Guid.NewGuid().ToString("N")[..12], c.TimeUs, SplitSource.Chapter, null, null, false, c.Title)).ToArray();
-        var preliminary = new MarkerSetState(splits, Array.Empty<string>(), start, source, null);
-        return preliminary with { BaselineId = StateId(preliminary) };
     }
 
     private static string StateId(MarkerSetState state)
