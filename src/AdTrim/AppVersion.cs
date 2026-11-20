@@ -8,6 +8,6 @@ namespace AdTrim;
 /// </summary>
 public static class AppVersion
 {
-    public const string Numeric = "2.1.38";
+    public const string Numeric = "2.1.39";
     public const string Display = "v" + Numeric;
 }
