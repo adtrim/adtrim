@@ -429,7 +429,7 @@ internal static partial class Program
                 Press(System.Windows.Input.Key.K);
                 long afterRewind = vm.PlayheadUs;
                 await Task.Delay(300);
-                Require(afterRewind < beforeRewind && vm.PlayheadUs == afterRewind, "J rewinds the playhead and K stops it");
+                Require(afterRewind < beforeRewind && vm.PlayheadUs == afterRewind, $"J rewinds the playhead and K stops it (before {beforeRewind}, at K {afterRewind}, after {vm.PlayheadUs})");
                 // F1 shortcut list (modal: closed as soon as it appears).
                 // Poll until the dialog is visible; one idle callback can run before it is shown.
                 bool listShown = false;

@@ -589,13 +589,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnToggleFrameAccurateSeek(object sender, RoutedEventArgs e)
-    {
-        if (sender is not System.Windows.Controls.MenuItem item) return;
-        _previewAfter.SetFastSeek(!item.IsChecked);
-        _previewBefore.SetFastSeek(!item.IsChecked);
-    }
-
     private bool _mpvAttachedAfter;
     private bool _mpvAttachedBefore;
     private void AttachMpvHwnd()

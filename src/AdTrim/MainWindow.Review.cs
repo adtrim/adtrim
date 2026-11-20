@@ -18,7 +18,6 @@ public partial class MainWindow
         _preferences = await UserPreferences.LoadAsync();
         _savedPreferences = _preferences;
         if (await UserPreferences.IsDamagedAsync()) ShowDamagedPreferencesBanner();
-        ApplyPlaybackSettings(_preferences);
         // Start muted applies when the window opens; the mute button then switches it for the session.
         _previewBefore.SetMuted(_preferences.StartMuted);
         ShowMuteState(_preferences.StartMuted);
@@ -64,7 +63,7 @@ public partial class MainWindow
         while (positions.Count > 20) positions.Remove(positions.Keys.First());
         var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
         _preferences = _preferences with { ShowWaveform = vm.ShowWaveform, ShowThumbnails = vm.ShowThumbnails,
-            ShowRulerTicks = vm.ShowRulerTicks, FrameAccurateSeek = FrameAccurateSeekMenuItem.IsChecked,
+            ShowRulerTicks = vm.ShowRulerTicks,
             Left = bounds.Left, Top = bounds.Top, Width = bounds.Width, Height = bounds.Height,
             IsMaximized = _lastNonMinimizedState == WindowState.Maximized, Positions = positions };
         try
@@ -163,19 +162,11 @@ public partial class MainWindow
     {
         _preferences = _preferences.WithSettingsFrom(saved);
         _savedPreferences = _savedPreferences.WithSettingsFrom(saved);
-        ApplyPlaybackSettings(saved);
         if (DataContext is not MainViewModel vm) return;
         vm.ShowWaveform = saved.ShowWaveform;
         vm.ShowThumbnails = saved.ShowThumbnails;
         vm.ShowRulerTicks = saved.ShowRulerTicks;
         vm.SectionNameTemplate = saved.SectionNameTemplate;
-    }
-
-    private void ApplyPlaybackSettings(UserPreferences settings)
-    {
-        FrameAccurateSeekMenuItem.IsChecked = settings.FrameAccurateSeek;
-        _previewAfter.SetFastSeek(!settings.FrameAccurateSeek);
-        _previewBefore.SetFastSeek(!settings.FrameAccurateSeek);
     }
 
     private void OnToggleCollapsed(object sender, RoutedEventArgs e)

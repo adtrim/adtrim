@@ -249,10 +249,6 @@
               </Border>
               <Border Style="{StaticResource Group}">
                 <StackPanel>
-                  <Border Style="{StaticResource Row}"><DockPanel>
-                    <CheckBox x:Name="FrameAccurateSwitch" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="OnTimelineSwitch" AutomationProperties.Name="Frame-accurate seeking"/>
-                    <StackPanel><TextBlock Text="Frame-accurate seeking" Style="{StaticResource Name}"/><TextBlock Text="Timeline clicks show exactly the frame you click. When off, a click shows the nearest earlier keyframe, which can be a few seconds earlier." Style="{StaticResource Desc}"/></StackPanel>
-                  </DockPanel></Border>
                   <Border Style="{StaticResource Row}" BorderThickness="0"><DockPanel>
                     <CheckBox x:Name="StartMutedSwitch" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="OnTimelineSwitch" AutomationProperties.Name="Start muted"/>
                     <StackPanel><TextBlock Text="Start muted" Style="{StaticResource Name}"/><TextBlock Text="Open AdTrim with the sound off. The mute button still switches it for the session." Style="{StaticResource Desc}"/></StackPanel>

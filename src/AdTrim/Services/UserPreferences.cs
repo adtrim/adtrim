@@ -23,7 +23,6 @@ public sealed record UserPreferences
     /// <summary>Name of segments the user has not named, with {n} for the number.</summary>
     public string SectionNameTemplate { get; init; } = SectionNames.DefaultTemplate;
     public bool ShowRulerTicks { get; init; } = true;
-    public bool FrameAccurateSeek { get; init; } = true;
     public bool StartMuted { get; init; }
     /// <summary>Where exports are saved; null means beside the recording.</summary>
     public string? ExportFolder { get; init; }
@@ -126,7 +125,6 @@ public sealed record UserPreferences
                 NewFileMarkerSource = saveMarkerSource || NewFileMarkerSource != previous.NewFileMarkerSource ? NewFileMarkerSource : latest.NewFileMarkerSource,
                 SectionNameTemplate = SectionNameTemplate != previous.SectionNameTemplate ? SectionNameTemplate : latest.SectionNameTemplate,
                 ShowRulerTicks = ShowRulerTicks != previous.ShowRulerTicks ? ShowRulerTicks : latest.ShowRulerTicks,
-                FrameAccurateSeek = FrameAccurateSeek != previous.FrameAccurateSeek ? FrameAccurateSeek : latest.FrameAccurateSeek,
                 StartMuted = StartMuted != previous.StartMuted ? StartMuted : latest.StartMuted,
                 ExportFolder = ExportFolder != previous.ExportFolder ? ExportFolder : latest.ExportFolder,
                 ExportFilenameTemplate = ExportFilenameTemplate != previous.ExportFilenameTemplate ? ExportFilenameTemplate : latest.ExportFilenameTemplate,
@@ -152,7 +150,7 @@ public sealed record UserPreferences
     public UserPreferences WithSettingsFrom(UserPreferences source) => this with
     {
         ShowWaveform = source.ShowWaveform, ShowThumbnails = source.ShowThumbnails, ShowRulerTicks = source.ShowRulerTicks,
-        FrameAccurateSeek = source.FrameAccurateSeek, StartMuted = source.StartMuted,
+        StartMuted = source.StartMuted,
         ExportFormat = source.ExportFormat, DeleteSidecarAfterExport = source.DeleteSidecarAfterExport,
         ExportAcceleration = source.ExportAcceleration, AddSourceExportComment = source.AddSourceExportComment,
         NewFileMarkerSource = source.NewFileMarkerSource, SectionNameTemplate = source.SectionNameTemplate,

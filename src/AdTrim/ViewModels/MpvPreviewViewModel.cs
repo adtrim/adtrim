@@ -125,21 +125,6 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
         private set => Set(ref _videoAspect, value);
     }
 
-    private bool _fastSeek;
-    public bool FastSeek => _fastSeek;
-
-    public void SetFastSeek(bool enabled)
-    {
-        if (_fastSeek == enabled) return;
-        _fastSeek = enabled;
-        if (_ctx != IntPtr.Zero)
-        {
-            // mpv exposes a `hr-seek` property: "yes" / "no" / "always".
-            // "no" = keyframe-aligned (fast), "always" = exact (slower).
-            mpv_set_property_string(_ctx, "hr-seek", _fastSeek ? "no" : "yes");
-        }
-    }
-
     private bool _muted;
     public bool IsMuted => _muted;
 
@@ -194,8 +179,9 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
         mpv_set_option_string(_ctx, "secondary-sub-visibility", "no");
         // No log spam in stderr (libmpv would otherwise write a lot).
         mpv_set_option_string(_ctx, "msg-level", "all=no");
-        // Default to fast seek. Toggle via SetFastSeek for frame-precise work.
-        mpv_set_option_string(_ctx, "hr-seek", _fastSeek ? "no" : "yes");
+        // Every seek shows the exact frame asked for. A keyframe seek would show an earlier
+        // frame, up to a few seconds away, in an editor whose job is placing cuts exactly.
+        mpv_set_option_string(_ctx, "hr-seek", "yes");
         // MP4 keyframe indexes can seek past reordered frames just before a
         // keyframe. Decode from earlier without changing the requested timestamp.
         mpv_set_option_string(_ctx, "hr-seek-demuxer-offset", "1");
@@ -423,7 +409,6 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
     /// they actually advance - fast-seek (`hr-seek=no`) aligns to the nearest
     /// preceding keyframe and a +1s forward seek often lands on the same
     /// keyframe you started on, making `]` appear to do nothing.
-    /// Timeline clicks still use the faster <see cref="SeekUs"/>.
     /// </summary>
     public void SeekUsExact(long timeUs)
     {

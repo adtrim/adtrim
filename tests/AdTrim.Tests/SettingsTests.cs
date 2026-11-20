@@ -22,10 +22,12 @@ public sealed class SettingsTests : IDisposable
     {
         var old = JsonSerializer.Deserialize<UserPreferences>("{}")!;
         Assert.True(old.ShowRulerTicks);
-        Assert.True(old.FrameAccurateSeek);
         Assert.False(old.StartMuted);
         Assert.Null(old.ExportFolder);
         Assert.Equal("{title} [AdTrim]", old.ExportFilenameTemplate);
+        // 2.1.35 and 2.1.36 saved a frame-accurate seek switch. Seeking is always exact now; the old value is ignored.
+        var withSwitch = JsonSerializer.Deserialize<UserPreferences>("{\"FrameAccurateSeek\":false,\"StartMuted\":true}")!;
+        Assert.True(withSwitch.StartMuted);
     }
 
     [Fact]
@@ -53,12 +55,12 @@ public sealed class SettingsTests : IDisposable
     {
         await File.WriteAllTextAsync(PreferencesPath, "{}");
         var windowLoaded = await UserPreferences.ReadAsync(_directory);
-        var changed = await UserPreferences.UpdateAsync(p => p with { FrameAccurateSeek = false, ExportFilenameTemplate = "{title} [AdTrim {version}]" }, _directory);
+        var changed = await UserPreferences.UpdateAsync(p => p with { StartMuted = true, ExportFilenameTemplate = "{title} [AdTrim {version}]" }, _directory);
         // The window that did not change them saves only what it changed itself.
         var windowSave = windowLoaded with { Width = 1400 };
         await windowSave.SaveChangesAsync(windowLoaded, null, dataDirectory: _directory);
         var read = await UserPreferences.ReadAsync(_directory);
-        Assert.False(read.FrameAccurateSeek);
+        Assert.True(read.StartMuted);
         Assert.Equal(changed.ExportFilenameTemplate, read.ExportFilenameTemplate);
         Assert.Equal(1400, read.Width);
     }

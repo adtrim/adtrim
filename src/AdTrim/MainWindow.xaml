@@ -184,12 +184,6 @@
             <MenuItem Header="Show waveform"   IsCheckable="True" IsChecked="{Binding ShowWaveform, Mode=TwoWay}" Style="{StaticResource DropdownMenuItem}"/>
             <MenuItem Header="Show ruler ticks" IsCheckable="True" IsChecked="{Binding ShowRulerTicks, Mode=TwoWay}" Style="{StaticResource DropdownMenuItem}"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
-            <MenuItem x:Name="FrameAccurateSeekMenuItem"
-                      Header="Frame-accurate seek"
-                      IsCheckable="True"
-                      Style="{StaticResource DropdownMenuItem}"
-                      Click="OnToggleFrameAccurateSeek"/>
-            <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem Header="Jump to next unconfirmed split" InputGestureText="N" IsEnabled="{Binding CanEdit}" Style="{StaticResource DropdownMenuItem}" Click="OnJumpNextUnconfirmed"/>
             <MenuItem Header="Jump to previous unconfirmed split" InputGestureText="Shift+N" IsEnabled="{Binding CanEdit}" Style="{StaticResource DropdownMenuItem}" Click="OnJumpPreviousUnconfirmed"/>
             <MenuItem Header="Previous marker" InputGestureText="Alt+←" IsEnabled="{Binding CanEdit}" Style="{StaticResource DropdownMenuItem}" Click="OnPreviousMarker"/>

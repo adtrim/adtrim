@@ -58,7 +58,6 @@ public partial class SettingsWindow : Window
             ThumbnailsSwitch.IsChecked = p.ShowThumbnails;
             WaveformSwitch.IsChecked = p.ShowWaveform;
             RulerSwitch.IsChecked = p.ShowRulerTicks;
-            FrameAccurateSwitch.IsChecked = p.FrameAccurateSeek;
             StartMutedSwitch.IsChecked = p.StartMuted;
             FolderBeside.IsChecked = p.ExportFolder is null;
             FolderFixed.IsChecked = p.ExportFolder is not null;
@@ -85,7 +84,6 @@ public partial class SettingsWindow : Window
         ShowThumbnails = ThumbnailsSwitch.IsChecked == true,
         ShowWaveform = WaveformSwitch.IsChecked == true,
         ShowRulerTicks = RulerSwitch.IsChecked == true,
-        FrameAccurateSeek = FrameAccurateSwitch.IsChecked == true,
         StartMuted = StartMutedSwitch.IsChecked == true,
         ExportFolder = FolderFixed.IsChecked == true ? ExportFolderBox.Text.Trim() : null,
         ExportFilenameTemplate = FilenameBox.Text.Trim(),
@@ -109,7 +107,6 @@ public partial class SettingsWindow : Window
             ShowThumbnails = Pick(edited.ShowThumbnails, opened.ShowThumbnails, latest.ShowThumbnails),
             ShowWaveform = Pick(edited.ShowWaveform, opened.ShowWaveform, latest.ShowWaveform),
             ShowRulerTicks = Pick(edited.ShowRulerTicks, opened.ShowRulerTicks, latest.ShowRulerTicks),
-            FrameAccurateSeek = Pick(edited.FrameAccurateSeek, opened.FrameAccurateSeek, latest.FrameAccurateSeek),
             StartMuted = Pick(edited.StartMuted, opened.StartMuted, latest.StartMuted),
             ExportFolder = Pick(edited.ExportFolder, opened.ExportFolder, latest.ExportFolder),
             ExportFilenameTemplate = Pick(edited.ExportFilenameTemplate, opened.ExportFilenameTemplate, latest.ExportFilenameTemplate),

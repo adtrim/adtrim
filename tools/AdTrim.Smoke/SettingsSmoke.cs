@@ -132,7 +132,7 @@ internal static partial class Program
             for (int i = 0; i < 100 && settings.IsVisible; i++) await Task.Delay(20);
             var reset = await UserPreferences.ReadAsync();
             Require(!settings.IsVisible && reset.SectionNameTemplate == SectionNames.DefaultTemplate && reset.ShowRulerTicks && !reset.StartMuted
-                && reset.ExportFilenameTemplate == ExportNaming.DefaultTemplate && reset.FrameAccurateSeek && vm.ShowRulerTicks,
+                && reset.ExportFilenameTemplate == ExportNaming.DefaultTemplate && vm.ShowRulerTicks,
                 "Restore defaults and Save returns every setting to its default");
         }
         finally { if (settings.IsVisible) settings.Close(); }
