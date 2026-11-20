@@ -27,7 +27,8 @@ Console.WriteLine(JsonSerializer.Serialize(new { move_undo_median_ms=samples[500
 for version in ["baseline", "current"]:
     directory=ROOT/"src/AdTrim/obj/edit-benchmark"/version
     directory.mkdir(parents=True,exist_ok=True)
-    files=list((ROOT/"src/AdTrim/Models").glob("*.cs"))+list((ROOT/"src/AdTrim/Commands").glob("*.cs"))+[ROOT/"src/AdTrim/ViewModels/MainViewModel.cs"]
+    files=list((ROOT/"src/AdTrim/Models").glob("*.cs"))+list((ROOT/"src/AdTrim/Commands").glob("*.cs"))+[ROOT/"src/AdTrim/ViewModels/MainViewModel.cs",
+        ROOT/"src/AdTrim/Services/NativePath.cs",ROOT/"src/AdTrim/Services/SectionNames.cs"]
     for file in files:
         relative=file.relative_to(ROOT).as_posix()
         if version=="baseline":
