@@ -543,8 +543,13 @@ public partial class MainWindow : Window
         var active = DataContext is MainViewModel { IsCollapsed: true } ? _previewAfter : _previewBefore;
         var newMuted = !active.IsMuted;
         active.SetMuted(newMuted);
-        SpeakerOnGlyph.Visibility  = newMuted ? Visibility.Collapsed : Visibility.Visible;
-        SpeakerOffGlyph.Visibility = newMuted ? Visibility.Visible   : Visibility.Collapsed;
+        ShowMuteState(newMuted);
+    }
+
+    private void ShowMuteState(bool muted)
+    {
+        SpeakerOnGlyph.Visibility  = muted ? Visibility.Collapsed : Visibility.Visible;
+        SpeakerOffGlyph.Visibility = muted ? Visibility.Visible   : Visibility.Collapsed;
     }
 
     /// <summary>
@@ -698,7 +703,6 @@ public partial class MainWindow : Window
         var latestPreferences = await UserPreferences.LoadAsync(_preferences);
         _preferences = _preferences with { NewFileMarkerSource = latestPreferences.NewFileMarkerSource };
         _savedPreferences = _savedPreferences with { NewFileMarkerSource = latestPreferences.NewFileMarkerSource };
-        RefreshDefaultMarkerSourceMenu();
         var previousVm = vm;
         var previousAudioLoudness = vm.AudioLoudness;
         var previousThumbnailTiles = vm.ThumbnailTiles;
@@ -1639,6 +1643,9 @@ public partial class MainWindow : Window
         var shift = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
         if (e.Key == Key.F1 && Keyboard.Modifiers == ModifierKeys.None)
         { OnShowShortcuts(this, new RoutedEventArgs()); e.Handled = true; return; }
+        // Before the comma's frame step below.
+        if (e.Key == Key.OemComma && Keyboard.Modifiers == ModifierKeys.Control)
+        { _ = OpenSettingsAsync(); e.Handled = true; return; }
 
         if (e.Key == Key.Escape)
         {
@@ -2310,7 +2317,8 @@ public partial class MainWindow : Window
         var exportPreferences = await UserPreferences.LoadAsync();
         dlg.Bind(vm, _media, _preferences.ExportAcceleration, exportPreferences.ExportFormat, exportPreferences.DeleteSidecarAfterExport,
             vm.SourcePath is { } source && CanCommentSource(source) && exportPreferences.AddSourceExportComment
-                ? AfterExportStep.SourceComment : AfterExportStep.RecordExport);
+                ? AfterExportStep.SourceComment : AfterExportStep.RecordExport,
+            exportPreferences.ExportFolder, exportPreferences.ExportFilenameTemplate);
         dlg.Closed += async (_, _) =>
         {
             if (dlg.DataContext is ExportDialogViewModel completed)
@@ -2485,30 +2493,6 @@ public partial class MainWindow : Window
         vm.CommandStack.Execute(command);
         vm.StatusOverride = command.Count == 1 ? "1 segment name reset to automatic numbering. Undo restores it."
             : $"{command.Count} segment names reset to automatic numbering. Undo restores them.";
-    }
-
-    private async void OnSegmentNames(object sender, RoutedEventArgs e)
-    {
-        if (DataContext is not MainViewModel vm) return;
-        var dialog = new SegmentNamesDialog(vm.SectionNameTemplate) { Owner = this };
-        if (dialog.ShowDialog() != true || dialog.NameTemplate == vm.SectionNameTemplate) return;
-        string template = SectionNames.Normalize(dialog.NameTemplate);
-        // One setting for every recording: each open window shows it at once.
-        foreach (var window in Application.Current.Windows.OfType<MainWindow>()) window.ApplySectionNameTemplate(template);
-        try { await UserPreferences.SaveSectionNameTemplateAsync(template); }
-        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
-        {
-            vm.StatusOverride = "The segment name setting could not be saved. It applies until AdTrim closes.";
-            if (ex is DamagedPreferencesException) ShowDamagedPreferencesBanner();
-        }
-    }
-
-    private void ApplySectionNameTemplate(string template)
-    {
-        // Already saved by the window that changed it; this window's later saves must not undo it.
-        _preferences = _preferences with { SectionNameTemplate = template };
-        _savedPreferences = _savedPreferences with { SectionNameTemplate = template };
-        if (DataContext is MainViewModel vm) vm.SectionNameTemplate = template;
     }
 
     private void OnShowShortcuts(object sender, RoutedEventArgs e) => new ShortcutsDialog { Owner = this }.ShowDialog();

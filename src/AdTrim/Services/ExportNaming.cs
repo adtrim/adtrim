@@ -30,17 +30,49 @@ public static class ExportNaming
     private static readonly Regex InvalidCharsRx = new(
         @"[<>:""/\\|?*\x00-\x1F]", RegexOptions.Compiled);
 
+    /// <summary>The export filename pattern AdTrim has always used: the recording's name with [AdTrim].</summary>
+    public const string DefaultTemplate = "{title} [AdTrim]";
+    private static readonly string[] TemplateTokens = ["{title}", "{version}", "{date}"];
+
+    /// <summary>Why a filename pattern cannot be used, or null when it can.</summary>
+    public static string? TemplateError(string? template)
+    {
+        if (string.IsNullOrWhiteSpace(template)) return "Enter a filename pattern.";
+        var text = template.Trim();
+        if (text.Length > 120) return "Keep the pattern under 120 characters.";
+        if (!text.Contains("{title}", StringComparison.Ordinal)) return "Include {title}, so each recording gets its own name.";
+        var literal = TemplateTokens.Aggregate(text, (s, token) => s.Replace(token, "", StringComparison.Ordinal));
+        if (literal.Contains('{') || literal.Contains('}')) return "Use only {title}, {version} and {date}.";
+        if (InvalidCharsRx.IsMatch(literal)) return "Remove characters Windows does not allow in filenames: < > : \" / \\ | ? *";
+        if (text.EndsWith('.')) return "A filename cannot end with a period.";
+        return null;
+    }
+
+    public static string NormalizeTemplate(string? template) => TemplateError(template) is null ? template!.Trim() : DefaultTemplate;
+
+    /// <summary>The pattern filled in, without an extension.</summary>
+    public static string ApplyTemplate(string? template, string title, DateOnly date)
+        => NormalizeTemplate(template).Replace("{title}", title, StringComparison.Ordinal)
+            .Replace("{version}", AppVersion.Numeric, StringComparison.Ordinal)
+            .Replace("{date}", date.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+
     /// <summary>Choose an unused export name without changing the source file.</summary>
-    public static string DeriveDefaultFilename(string? sourcePath, string? outputFolder = null, ExportFormat format = ExportFormat.Mp4)
+    public static string DeriveDefaultFilename(string? sourcePath, string? outputFolder = null, ExportFormat format = ExportFormat.Mp4,
+        string? template = null)
     {
         var name = string.IsNullOrEmpty(sourcePath) ? "export" : Path.GetFileNameWithoutExtension(sourcePath);
         name = S00E00Rx.Replace(name, m => m.Value.ToLowerInvariant());
-        name = Regex.Replace(name, @" \[AdTrim(?: \d+)?\]$", "", RegexOptions.IgnoreCase);
+        // Exporting an export again does not stack AdTrim markers, including one with a version number.
+        name = Regex.Replace(name, @" \[AdTrim(?: [0-9.]+)?\]$", "", RegexOptions.IgnoreCase);
+        var filled = ApplyTemplate(template, name, DateOnly.FromDateTime(DateTime.Now));
+        // [AdTrim] takes the number inside its brackets, as always; any other pattern gets (2), (3).
+        bool bracketed = filled.Contains("[AdTrim]", StringComparison.Ordinal);
         var folder = outputFolder ?? Path.GetDirectoryName(sourcePath);
         for (int number = 1; ; number++)
         {
-            var suffix = number == 1 ? "AdTrim" : $"AdTrim {number}";
-            var candidate = $"{name} [{suffix}]{format.Extension()}";
+            var stem = number == 1 ? filled
+                : bracketed ? filled.Replace("[AdTrim]", $"[AdTrim {number}]", StringComparison.Ordinal) : $"{filled} ({number})";
+            var candidate = stem + format.Extension();
             if (string.IsNullOrEmpty(folder)) return candidate;
             var path = Path.Combine(folder, candidate);
             if (!File.Exists(path) && !Directory.Exists(path)

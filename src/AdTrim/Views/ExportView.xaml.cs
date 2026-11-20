@@ -73,10 +73,11 @@ public partial class ExportView : System.Windows.Controls.UserControl, IDisposab
     }
 
     public void Bind(MainViewModel project, MediaInfo? media, string? preferredAcceleration = null, ExportFormat format = ExportFormat.Mp4,
-        bool deleteSidecarAfterExport = false, AfterExportStep plannedAfterExport = AfterExportStep.RecordExport)
+        bool deleteSidecarAfterExport = false, AfterExportStep plannedAfterExport = AfterExportStep.RecordExport,
+        string? exportFolder = null, string? filenameTemplate = null)
     {
         _preferredAcceleration = preferredAcceleration;
-        _vm = new ExportDialogViewModel(project, media)
+        _vm = new ExportDialogViewModel(project, media, exportFolder, filenameTemplate)
         {
             SelectedFormat = ExportFormats.Normalize(format),
             DeleteSidecarAfterExport = deleteSidecarAfterExport,

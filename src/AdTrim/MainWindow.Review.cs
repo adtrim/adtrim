@@ -4,6 +4,7 @@ using AdTrim.Commands;
 using AdTrim.Models;
 using AdTrim.ViewModels;
 using AdTrim.Services;
+using AdTrim.Views;
 using System.IO;
 
 namespace AdTrim;
@@ -17,11 +18,14 @@ public partial class MainWindow
         _preferences = await UserPreferences.LoadAsync();
         _savedPreferences = _preferences;
         if (await UserPreferences.IsDamagedAsync()) ShowDamagedPreferencesBanner();
-        RefreshSourceCommentMenu();
+        ApplyPlaybackSettings(_preferences);
+        // Start muted applies when the window opens; the mute button then switches it for the session.
+        _previewBefore.SetMuted(_preferences.StartMuted);
+        ShowMuteState(_preferences.StartMuted);
         vm.ShowWaveform = _preferences.ShowWaveform;
         vm.ShowThumbnails = _preferences.ShowThumbnails;
+        vm.ShowRulerTicks = _preferences.ShowRulerTicks;
         vm.SectionNameTemplate = _preferences.SectionNameTemplate;
-        RefreshDefaultMarkerSourceMenu();
         var desired = new Rect(double.IsFinite(_preferences.Left) ? _preferences.Left : 0,
             double.IsFinite(_preferences.Top) ? _preferences.Top : 0,
             Math.Max(1, double.IsFinite(_preferences.Width) ? _preferences.Width : 1280),
@@ -60,6 +64,7 @@ public partial class MainWindow
         while (positions.Count > 20) positions.Remove(positions.Keys.First());
         var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
         _preferences = _preferences with { ShowWaveform = vm.ShowWaveform, ShowThumbnails = vm.ShowThumbnails,
+            ShowRulerTicks = vm.ShowRulerTicks, FrameAccurateSeek = FrameAccurateSeekMenuItem.IsChecked,
             Left = bounds.Left, Top = bounds.Top, Width = bounds.Width, Height = bounds.Height,
             IsMaximized = _lastNonMinimizedState == WindowState.Maximized, Positions = positions };
         try
@@ -94,8 +99,6 @@ public partial class MainWindow
             var snapshot = _preferences;
             var kept = await UserPreferences.ResetDamagedAsync(snapshot);
             _savedPreferences = snapshot;
-            RefreshSourceCommentMenu();
-            RefreshDefaultMarkerSourceMenu();
             if (DataContext is MainViewModel vm)
                 vm.Banner = kept is null ? null : new BannerInfo(StatusKind.Success, "Settings were reset.",
                     $"The damaged file was kept as {Path.GetFileName(kept)}.", Array.Empty<BannerAction>());
@@ -106,21 +109,73 @@ public partial class MainWindow
         }
     }
 
-    private void RefreshDefaultMarkerSourceMenu()
+    // ---- Settings window ----
+    private void OnSettings(object sender, RoutedEventArgs e) => _ = OpenSettingsAsync();
+
+    internal async Task OpenSettingsAsync()
     {
-        if (DefaultImportedMarkers is null || DefaultAdTrimMarkers is null || DefaultNoMarkers is null) return;
-        DefaultImportedMarkers.IsChecked = _preferences.NewFileMarkerSource == NewFileMarkerSource.Imported;
-        DefaultAdTrimMarkers.IsChecked = _preferences.NewFileMarkerSource == NewFileMarkerSource.AdTrim;
-        DefaultNoMarkers.IsChecked = _preferences.NewFileMarkerSource == NewFileMarkerSource.None;
+        if (OwnedWindows.OfType<SettingsWindow>().FirstOrDefault() is { } open) { open.Activate(); return; }
+        // Another window may have changed a setting since this one loaded them.
+        var latest = await UserPreferences.LoadAsync(_preferences);
+        var settings = new SettingsWindow(_preferences.WithSettingsFrom(latest), ChangeSettingsAsync, ResetSettingsAsync) { Owner = this };
+        settings.ShowDialog();
     }
 
-    private async void OnDefaultMarkerSource(object sender, RoutedEventArgs e)
+    /// <summary>Saves one settings change and shows it in every recording window. Null when it could not be saved.</summary>
+    internal async Task<UserPreferences?> ChangeSettingsAsync(Func<UserPreferences, UserPreferences> change)
     {
-        if (sender is not MenuItem { Tag: string tag } || DataContext is not MainViewModel vm
-            || !Enum.TryParse<NewFileMarkerSource>(tag, out var source)) return;
-        _preferences = _preferences with { NewFileMarkerSource = source };
-        RefreshDefaultMarkerSourceMenu();
-        await SavePreferencesSnapshotAsync(vm, saveMarkerSource: true);
+        try
+        {
+            var saved = await UserPreferences.UpdateAsync(change);
+            foreach (var window in Application.Current.Windows.OfType<MainWindow>()) window.ApplySharedSettings(saved);
+            return saved;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            if (ex is DamagedPreferencesException) ShowDamagedPreferencesBanner();
+            MessageBox.Show(OwnedWindows.OfType<SettingsWindow>().FirstOrDefault() ?? (Window)this,
+                ex is DamagedPreferencesException
+                    ? "The settings file is damaged, so changes cannot be saved. Close Settings and choose Reset settings in the banner, or use Reset all settings under Storage."
+                    : "The setting could not be saved. " + ex.Message, "Settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return null;
+        }
+    }
+
+    private async Task<(UserPreferences Saved, string? Kept)?> ResetSettingsAsync()
+    {
+        try
+        {
+            var reset = await UserPreferences.ResetAllAsync();
+            foreach (var window in Application.Current.Windows.OfType<MainWindow>()) window.ApplySharedSettings(reset.Saved);
+            if (DataContext is MainViewModel { Banner.Title: "Saved settings are damaged." } vm) vm.Banner = null;
+            return reset;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(OwnedWindows.OfType<SettingsWindow>().FirstOrDefault() ?? (Window)this,
+                "Settings could not be reset. " + ex.Message, "Settings", MessageBoxButton.OK, MessageBoxImage.Error);
+            return null;
+        }
+    }
+
+    /// <summary>Shows settings another window saved. They are saved already, so this window's later saves must not undo them.</summary>
+    private void ApplySharedSettings(UserPreferences saved)
+    {
+        _preferences = _preferences.WithSettingsFrom(saved);
+        _savedPreferences = _savedPreferences.WithSettingsFrom(saved);
+        ApplyPlaybackSettings(saved);
+        if (DataContext is not MainViewModel vm) return;
+        vm.ShowWaveform = saved.ShowWaveform;
+        vm.ShowThumbnails = saved.ShowThumbnails;
+        vm.ShowRulerTicks = saved.ShowRulerTicks;
+        vm.SectionNameTemplate = saved.SectionNameTemplate;
+    }
+
+    private void ApplyPlaybackSettings(UserPreferences settings)
+    {
+        FrameAccurateSeekMenuItem.IsChecked = settings.FrameAccurateSeek;
+        _previewAfter.SetFastSeek(!settings.FrameAccurateSeek);
+        _previewBefore.SetFastSeek(!settings.FrameAccurateSeek);
     }
 
     private void OnToggleCollapsed(object sender, RoutedEventArgs e)

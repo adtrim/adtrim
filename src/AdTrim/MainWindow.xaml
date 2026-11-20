@@ -141,7 +141,7 @@
         </Grid.ColumnDefinitions>
 
         <Menu x:Name="MainMenu" Grid.Column="0" VerticalAlignment="Stretch" Padding="4,0">
-          <MenuItem Header="_File" Style="{StaticResource MenuBarItem}" SubmenuOpened="OnFileMenuOpened">
+          <MenuItem Header="_File" Style="{StaticResource MenuBarItem}">
             <MenuItem Header="New window" InputGestureText="Ctrl+N" Style="{StaticResource DropdownMenuItem}" Click="OnNewWindow"/>
             <MenuItem Header="Open…"             InputGestureText="Ctrl+O"        Style="{StaticResource DropdownMenuItem}" Click="OnOpenFile" IsEnabled="{Binding CanInteract}"/>
             <MenuItem Header="View Unexported Files…" InputGestureText="Ctrl+Shift+O" Style="{StaticResource DropdownMenuItem}" Click="OnViewUnexportedFiles" IsEnabled="{Binding CanInteract}"/>
@@ -149,10 +149,9 @@
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem Header="Save project"      InputGestureText="Ctrl+S"        Style="{StaticResource DropdownMenuItem}" Click="OnSaveProject" IsEnabled="{Binding CanInteract}"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
-            <MenuItem x:Name="SourceCommentMenu" Header="Add Comment to Source File on Export" IsCheckable="True"
-                      Style="{StaticResource DropdownMenuItem}" Click="OnSourceCommentToggle"
-                      ToolTip="For MP4 sources, after a successful export, add the AdTrim version and export date to the source's Windows Comments. Existing comment text, video and audio are preserved."/>
             <MenuItem x:Name="ExportMenuItem" IsEnabled="{Binding IsFileLoaded}" Header="Export merged video…" InputGestureText="E"            Style="{StaticResource DropdownMenuItem}" Click="OnExport"/>
+            <Separator Background="{StaticResource Border.Subtle}"/>
+            <MenuItem x:Name="SettingsMenuItem" Header="Settings…" InputGestureText="Ctrl+," Style="{StaticResource DropdownMenuItem}" Click="OnSettings"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem Header="Close project"     InputGestureText="Ctrl+W"        Style="{StaticResource DropdownMenuItem}" Click="OnCloseProject" IsEnabled="{Binding CanInteract}"/>
             <MenuItem Header="Exit"              InputGestureText="Alt+F4"        Style="{StaticResource DropdownMenuItem}" Click="OnClose"/>
@@ -196,15 +195,12 @@
             <MenuItem Header="Previous marker" InputGestureText="Alt+←" IsEnabled="{Binding CanEdit}" Style="{StaticResource DropdownMenuItem}" Click="OnPreviousMarker"/>
             <MenuItem Header="Next marker" InputGestureText="Alt+→" IsEnabled="{Binding CanEdit}" Style="{StaticResource DropdownMenuItem}" Click="OnNextMarker"/>
           </MenuItem>
-          <!-- Tools stays enabled so "Starting markers for new files" is reachable with no file
-               open; each action below carries its own enabled state. -->
+          <!-- Each action below carries its own enabled state. -->
           <MenuItem Header="_Tools" Style="{StaticResource MenuBarItem}">
             <MenuItem Header="Refine all splits"          InputGestureText="Ctrl+R" Style="{StaticResource DropdownMenuItem}" Click="OnRefineAll" IsEnabled="{Binding CanEdit}"/>
             <MenuItem Header="Refine selected splits"     InputGestureText="R"      Style="{StaticResource DropdownMenuItem}" Click="OnRefineSelected" IsEnabled="{Binding CanEdit}"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem Header="Auto-confirm high-confidence" Style="{StaticResource DropdownMenuItem}" Click="OnAutoConfirmHighConfidence" IsEnabled="{Binding CanEdit}"/>
-            <Separator Background="{StaticResource Border.Subtle}"/>
-            <MenuItem x:Name="SegmentNamesMenuItem" Header="Segment names…" Style="{StaticResource DropdownMenuItem}" Click="OnSegmentNames"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem x:Name="AdBreakDetectionMenu" Header="Ad break detection" InputGestureText="▸" Style="{StaticResource DropdownMenuItem}">
               <MenuItem x:Name="UseOriginalImportedMarkersMenuItem" Header="Revert to original imported markers" Style="{StaticResource DropdownMenuItem}" Click="OnUseImportedMarkers"/>
@@ -225,14 +221,6 @@
                   </MenuItem.Style>
                 </MenuItem>
               </MenuItem>
-              <MenuItem x:Name="StartingMarkersMenu" Header="Starting markers for new files" InputGestureText="▸" Style="{StaticResource DropdownMenuItem}">
-                <MenuItem x:Name="DefaultImportedMarkers" Header="Imported markers" IsCheckable="True"
-                          Style="{StaticResource DropdownMenuItem}" Click="OnDefaultMarkerSource" Tag="Imported"/>
-                <MenuItem x:Name="DefaultAdTrimMarkers" Header="AdTrim suggested markers" IsCheckable="True"
-                          Style="{StaticResource DropdownMenuItem}" Click="OnDefaultMarkerSource" Tag="AdTrim"/>
-                <MenuItem x:Name="DefaultNoMarkers" Header="None" IsCheckable="True"
-                          Style="{StaticResource DropdownMenuItem}" Click="OnDefaultMarkerSource" Tag="None"/>
-              </MenuItem>
               <Separator Background="{StaticResource Border.Subtle}"/>
               <MenuItem Header="Delete all markings" InputGestureText="Ctrl+Del" Style="{StaticResource DropdownMenuItem}" Click="OnClearAllMarkings" IsEnabled="{Binding CanReplaceMarkers}"/>
             </MenuItem>
@@ -248,9 +236,6 @@
             <MenuItem Header="Keyboard shortcuts" InputGestureText="F1" Style="{StaticResource DropdownMenuItem}" Click="OnShowShortcuts"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem x:Name="CheckUpdatesMenu" Header="Check for updates…" Style="{StaticResource DropdownMenuItem}" Click="OnCheckUpdates"/>
-            <MenuItem x:Name="AutomaticUpdatesMenu" Header="Automatically check for updates" IsCheckable="True"
-                      Style="{StaticResource DropdownMenuItem}" Click="OnAutomaticUpdates"
-                      ToolTip="Checks GitHub Pages for releases, including security updates. Turn off to check manually instead."/>
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem Header="About AdTrim" Style="{StaticResource DropdownMenuItem}" Click="OnAbout"/>
           </MenuItem>

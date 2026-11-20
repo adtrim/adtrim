@@ -167,7 +167,7 @@ internal static partial class Program
                 var vm = (MainViewModel)window.DataContext;
                 for (int i = 0; i < 250 && (!vm.IsFileLoaded || vm.IsBusy); i++) await Task.Delay(20);
                 Require(window.Ready.IsCompletedSuccessfully && vm.IsFileLoaded && !vm.IsBusy, "Launch-file startup completes");
-                Require(((MenuItem)window.FindName("DefaultImportedMarkers")).IsChecked,
+                Require(WindowPreferences(window).NewFileMarkerSource == NewFileMarkerSource.Imported,
                     "New recordings default to imported markers");
                 Require(!((MenuItem)window.FindName("UseOriginalImportedMarkersMenuItem")).IsEnabled,
                     "Imported marker action is disabled when a recording has no chapters");
@@ -188,16 +188,16 @@ internal static partial class Program
                 var markersPopup = (Popup)markersMenu.Template.FindName("PART_Popup", markersMenu);
                 var suggestionsMenu = markersMenu.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "AdTrim suggested markers");
                 Require(markersPopup.IsOpen && markersMenu.Items.OfType<MenuItem>().Select(item => item.Header?.ToString()).SequenceEqual(
-                        ["Revert to original imported markers", "AdTrim suggested markers", "Starting markers for new files", "Delete all markings"])
+                        ["Revert to original imported markers", "AdTrim suggested markers", "Delete all markings"])
                     && suggestionsMenu.Items.Count == 2,
                     $"Tools > Ad break detection opens its marker-source actions (submenu={markersMenu.IsSubmenuOpen}, popup={markersPopup.IsOpen}, items={markersMenu.Items.Count})");
                 var analyzeItem = (MenuItem)window.FindName("AnalyzeAdBreaksMenuItem");
                 Require(analyzeItem.Header?.ToString() == (vm.HasAdTrimAnalysis ? "Analyze ad breaks again" : "Analyze ad breaks"),
                     "The Analyze menu item names what it will do: " + analyzeItem.Header);
-                // While busy, marker actions wait, but the starting-markers preference stays reachable.
+                // While busy, marker actions wait, but Settings (with the starting-markers preference) stays reachable.
                 vm.IsBusy = true;
                 window.UpdateLayout();
-                Require(toolsMenu.IsEnabled && markersMenu.IsEnabled && ((MenuItem)window.FindName("StartingMarkersMenu")).IsEnabled
+                Require(toolsMenu.IsEnabled && markersMenu.IsEnabled && ((MenuItem)window.FindName("SettingsMenuItem")).IsEnabled
                     && !suggestionsMenu.IsEnabled && !((MenuItem)window.FindName("UseOriginalImportedMarkersMenuItem")).IsEnabled
                     && !markersMenu.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "Delete all markings").IsEnabled,
                     "Busy disables marker actions but keeps the starting-markers preference reachable");
@@ -214,20 +214,7 @@ internal static partial class Program
                 markersButtonMenu.IsOpen = false;
                 Require(((Button)window.FindName("ClearAllMarkingsButton")).IsEnabled,
                     "Delete all markings has its own toolbar button");
-                toolsMenu.IsSubmenuOpen = true;
-                markersMenu.IsSubmenuOpen = true;
-                window.UpdateLayout();
-                var defaults = (MenuItem)window.FindName("StartingMarkersMenu");
-                defaults.ApplyTemplate();
-                defaults.IsSubmenuOpen = true;
-                window.UpdateLayout();
-                var importedDefault = (MenuItem)window.FindName("DefaultImportedMarkers");
-                importedDefault.ApplyTemplate();
-                Require(((TextBlock)importedDefault.Template.FindName("Checkmark", importedDefault)).Visibility == Visibility.Visible,
-                    "Starting marker preference has a visible checkmark");
-                defaults.IsSubmenuOpen = false;
-                markersMenu.IsSubmenuOpen = false;
-                toolsMenu.IsSubmenuOpen = false;
+                await CheckSettingsWindow(window, vm, directory);
                 var beforeAnalysis = ReplaceMarkerSetCommand.Capture(vm);
                 var analysisKey = new MarkerSuggestionStore().Key(vm.SourcePath!, vm.SourceFingerprint!);
                 var cancelledAnalysis = (Task<MarkerSetState?>)Invoke(window, "AnalyzeCommercialsAsync", vm, analysisKey, CancellationToken.None)!;
@@ -970,9 +957,7 @@ internal static partial class Program
         Require(((MainViewModel)second.DataContext).SourcePath == secondSource, "Open inside a window cannot create a second editor for an owned file");
         var secondVm = (MainViewModel)second.DataContext;
         app.SetAutomaticUpdates(false);
-        Require(!((MenuItem)original.FindName("AutomaticUpdatesMenu")).IsChecked
-            && !((MenuItem)second.FindName("AutomaticUpdatesMenu")).IsChecked,
-            "Update preference stays synchronized across recording windows");
+        Require(!app.AutomaticUpdatesEnabled, "The update preference is one app-wide choice for every recording window");
         app.SetAutomaticUpdates(true);
         secondVm.CommandStack.Execute(new AddSplitCommand(secondVm, 2_000_000, SplitSource.Manual));
         Require(((MainViewModel)original.DataContext).Markers.Count == 4, "Editing the second recording leaves the first timeline unchanged");

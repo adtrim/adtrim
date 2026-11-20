@@ -323,20 +323,25 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
     // gives a smoothly-updating clock without observable CPU cost.
     private DispatcherTimer? _tickTimer;
 
-    public ExportDialogViewModel(MainViewModel project, MediaInfo? media)
+    public ExportDialogViewModel(MainViewModel project, MediaInfo? media, string? exportFolder = null, string? filenameTemplate = null)
     {
         _project = project;
         _media = media;
-        OutputFolder = DeriveDefaultFolder(project.SourcePath);
+        _filenameTemplate = filenameTemplate;
+        OutputFolder = DeriveDefaultFolder(project.SourcePath, exportFolder);
         RefreshDefaultOutputFilename();
     }
+
+    private readonly string? _filenameTemplate;
+    /// <summary>The export folder from Settings when it could not be found and the recording's folder is used instead.</summary>
+    private string? _unavailableExportFolder;
 
     private string _defaultOutputFilename = "";
 
     public void RefreshDefaultOutputFilename()
     {
         if (OutputFilename != _defaultOutputFilename) return;
-        _defaultOutputFilename = ExportNaming.DeriveDefaultFilename(_project.SourcePath, OutputFolder, SelectedFormat);
+        _defaultOutputFilename = ExportNaming.DeriveDefaultFilename(_project.SourcePath, OutputFolder, SelectedFormat, _filenameTemplate);
         OutputFilename = _defaultOutputFilename;
     }
 
@@ -753,6 +758,9 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
         // ---- Output destination ----
         if (string.IsNullOrWhiteSpace(OutputFolder) || !Directory.Exists(OutputFolder))
             v.Add(new(ExportValidationKind.Blocking, "Output folder does not exist."));
+        else if (_unavailableExportFolder is { } missing && string.Equals(OutputFolder, Path.GetDirectoryName(_project.SourcePath), StringComparison.OrdinalIgnoreCase))
+            v.Add(new(ExportValidationKind.Warning,
+                $"Your export folder {missing} is not available, so this export is set to save beside the recording."));
 
         if (string.IsNullOrWhiteSpace(OutputFilename))
             v.Add(new(ExportValidationKind.Blocking, "Output filename is required."));
@@ -822,8 +830,16 @@ public sealed partial class ExportDialogViewModel : INotifyPropertyChanged
     }
 
     // ---- Defaults ----
-    private static string DeriveDefaultFolder(string? sourcePath)
-        => string.IsNullOrEmpty(sourcePath) ? "" : Path.GetDirectoryName(sourcePath) ?? "";
+    private string DeriveDefaultFolder(string? sourcePath, string? exportFolder)
+    {
+        if (!string.IsNullOrWhiteSpace(exportFolder))
+        {
+            if (Directory.Exists(exportFolder)) return exportFolder;
+            // An unplugged drive or a server that is off: say so now, not when the export fails.
+            _unavailableExportFolder = exportFolder;
+        }
+        return string.IsNullOrEmpty(sourcePath) ? "" : Path.GetDirectoryName(sourcePath) ?? "";
+    }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 

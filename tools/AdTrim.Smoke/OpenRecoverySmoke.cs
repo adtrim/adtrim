@@ -221,16 +221,13 @@ internal static partial class Program
 
     private static async Task CheckUnreadableSourcePreferences(MainWindow window, MainViewModel vm, MediaInfo media, string source, string directory)
     {
-        var menu = (MenuItem)window.FindName("SourceCommentMenu");
         string path = Path.Combine(directory, "preferences.json");
         var hash = SHA256.HashData(await File.ReadAllBytesAsync(source));
         var export = new ExportView();
         typeof(ExportView).GetProperty("AcceptedPlan")!.SetValue(export, new ExportDialogViewModel(vm, media).BuildPlan());
         foreach (bool enabled in new[] { false, true })
         {
-            menu.IsChecked = enabled;
-            Invoke(window, "OnSourceCommentToggle", menu, new RoutedEventArgs());
-            for (int i = 0; i < 100 && !menu.IsEnabled; i++) await Task.Delay(20);
+            await ChangeSettings(window, p => p with { AddSourceExportComment = enabled });
             Require((await UserPreferences.ReadAsync()).AddSourceExportComment == enabled, "A valid source-comment choice can be saved");
             foreach (string contents in new[] { "{", "null" })
             {
@@ -239,22 +236,17 @@ internal static partial class Program
                 var actualHash = SHA256.HashData(await File.ReadAllBytesAsync(source));
                 Require(hash.SequenceEqual(actualHash) && export.SourceCommentFailed
                     && note?.Contains("preferences could not be read") == true, "Unreadable preferences block source writes and report why");
-                var fileMenu = (MenuItem)menu.Parent;
-                fileMenu.RaiseEvent(new RoutedEventArgs(MenuItem.SubmenuOpenedEvent, fileMenu));
-                await Task.Delay(50);
-                Require(menu.IsChecked == enabled, "An unreadable settings file cannot silently change the known menu choice");
+                Require(WindowPreferences(window).AddSourceExportComment == enabled, "An unreadable settings file cannot silently change the known choice");
                 try { await UserPreferences.SaveExportFormatAsync(ExportFormat.Ts); throw new InvalidOperationException("Expected a settings read failure."); }
                 catch (IOException) { }
                 Require(await File.ReadAllTextAsync(path) == contents, "Saving another preference does not overwrite a damaged settings file");
             }
             await new UserPreferences { ShowThumbnails = false, ShowWaveform = false, AddSourceExportComment = enabled }.SaveAsync();
         }
-        // A missing settings file (first launch) follows the File menu's known choice.
+        // A missing settings file (first launch) follows the window's known choice.
         foreach (bool enabled in new[] { false, true })
         {
-            menu.IsChecked = enabled;
-            Invoke(window, "OnSourceCommentToggle", menu, new RoutedEventArgs());
-            for (int i = 0; i < 100 && !menu.IsEnabled; i++) await Task.Delay(20);
+            await ChangeSettings(window, p => p with { AddSourceExportComment = enabled });
             Require((await UserPreferences.ReadAsync()).AddSourceExportComment == enabled, "The known source-comment choice is saved before its file is removed");
             File.Delete(path);
             var note = await CommentAsExportWould(window, vm, export);
@@ -272,7 +264,7 @@ internal static partial class Program
             "Repairing settings restores the explicitly enabled source-comment feature");
 
         // A damaged settings file is reset from the banner, keeping the damaged bytes and the window's choices.
-        bool knownChoice = menu.IsChecked;
+        bool knownChoice = WindowPreferences(window).AddSourceExportComment;
         await File.WriteAllTextAsync(path, "{");
         await (Task)Invoke(window, "SavePreferencesSnapshotAsync", vm, false)!;
         var reset = vm.Banner?.Actions.FirstOrDefault(a => a.Label == "Reset settings");
@@ -281,7 +273,7 @@ internal static partial class Program
         for (int i = 0; i < 100 && await UserPreferences.IsDamagedAsync(); i++) await Task.Delay(20);
         var kept = Directory.GetFiles(directory, "preferences.damaged-*.json");
         Require(kept.Length == 1 && await File.ReadAllTextAsync(kept[0]) == "{", "Reset keeps the damaged settings file");
-        Require((await UserPreferences.ReadAsync()).AddSourceExportComment == knownChoice && menu.IsChecked == knownChoice
+        Require((await UserPreferences.ReadAsync()).AddSourceExportComment == knownChoice && WindowPreferences(window).AddSourceExportComment == knownChoice
             && vm.Banner?.Kind == StatusKind.Success, "Reset saves the window's known choices without changing source comments");
         vm.StatusOverride = null;
         await (Task)Invoke(window, "SavePreferencesSnapshotAsync", vm, false)!;

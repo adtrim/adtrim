@@ -63,20 +63,18 @@ internal static partial class Program
             var proposal = AdTrim.Commands.ReplaceMarkerSetCommand.Capture(vm) with { Source = AdTrim.Models.MarkerSetSource.AdTrim, BaselineId = null };
             proposal = proposal with { BaselineId = proposal.ContentId() };
             suggestions.Save(suggestions.Key(source, vm.SourceFingerprint!), proposal);
-            var toggle = (MenuItem)window.FindName("SourceCommentMenu");
-            Require(!toggle.IsChecked, "Source-comment opt-out loads from the isolated preferences");
-            var fileMenu = (MenuItem)toggle.Parent;
-            int exportIndex = fileMenu.Items.IndexOf(window.FindName("ExportMenuItem"));
-            Require(fileMenu.Items[exportIndex - 1] == toggle, "Source-comment toggle is immediately above Export");
+            Require(!WindowPreferences(window).AddSourceExportComment, "Source-comment opt-out loads from the isolated preferences");
+            var fileMenu = (MenuItem)((Menu)window.FindName("MainMenu")).Items[0];
+            Require(fileMenu.Items.Contains(window.FindName("SettingsMenuItem")) && window.FindName("SourceCommentMenu") is null,
+                "The source-comment choice is in Settings, not a File menu toggle");
             var items = fileMenu.Items.OfType<MenuItem>().ToArray();
             int openIndex = Array.FindIndex(items, i => i.Header?.ToString() == "Open…");
             Require(items[openIndex + 1].Header?.ToString() == "View Unexported Files…", "Unexported-file entry is immediately below Open");
             Require(items[openIndex + 1].InputGestureText == "Ctrl+Shift+O" && items[openIndex].InputGestureText == "Ctrl+O",
                 "File menu shows distinct shortcuts for opening a recording and viewing unexported files");
-            toggle.IsChecked = true;
-            Invoke(window, "OnSourceCommentToggle", toggle, new RoutedEventArgs());
-            for (int i = 0; i < 100 && !(await UserPreferences.LoadAsync()).AddSourceExportComment; i++) await Task.Delay(20);
-            Require((await UserPreferences.LoadAsync()).AddSourceExportComment, "Source-comment toggle persists between windows and sessions");
+            await ChangeSettings(window, p => p with { AddSourceExportComment = true });
+            Require((await UserPreferences.LoadAsync()).AddSourceExportComment && WindowPreferences(window).AddSourceExportComment,
+                "The source-comment setting persists between windows and sessions");
             string hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(source)));
             Invoke(window, "OnExport", window, new RoutedEventArgs());
             await WaitForExportSetupAsync(window);

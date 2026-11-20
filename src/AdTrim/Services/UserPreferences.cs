@@ -22,6 +22,12 @@ public sealed record UserPreferences
     public NewFileMarkerSource NewFileMarkerSource { get; init; } = NewFileMarkerSource.Imported;
     /// <summary>Name of segments the user has not named, with {n} for the number.</summary>
     public string SectionNameTemplate { get; init; } = SectionNames.DefaultTemplate;
+    public bool ShowRulerTicks { get; init; } = true;
+    public bool FrameAccurateSeek { get; init; }
+    public bool StartMuted { get; init; }
+    /// <summary>Where exports are saved; null means beside the recording.</summary>
+    public string? ExportFolder { get; init; }
+    public string ExportFilenameTemplate { get; init; } = ExportNaming.DefaultTemplate;
     public bool? IsMaximized { get; init; }
     public double Left { get; init; }
     public double Top { get; init; }
@@ -101,12 +107,12 @@ public sealed record UserPreferences
         return result;
     }
 
-    public async Task SaveChangesAsync(UserPreferences previous, string? source, bool saveMarkerSource = false)
+    public async Task SaveChangesAsync(UserPreferences previous, string? source, bool saveMarkerSource = false, string? dataDirectory = null)
     {
         await SaveGate.WaitAsync();
         try
         {
-            var latest = await ReadOrDefaultAsync(previous);
+            var latest = await ReadOrDefaultAsync(previous, dataDirectory);
             var positions = MergePositions(latest.Positions,
                 source is not null && Positions.TryGetValue(source, out var position) ? new(source, position) : null);
             await (this with
@@ -119,8 +125,13 @@ public sealed record UserPreferences
                 AddSourceExportComment = AddSourceExportComment != previous.AddSourceExportComment ? AddSourceExportComment : latest.AddSourceExportComment,
                 NewFileMarkerSource = saveMarkerSource || NewFileMarkerSource != previous.NewFileMarkerSource ? NewFileMarkerSource : latest.NewFileMarkerSource,
                 SectionNameTemplate = SectionNameTemplate != previous.SectionNameTemplate ? SectionNameTemplate : latest.SectionNameTemplate,
+                ShowRulerTicks = ShowRulerTicks != previous.ShowRulerTicks ? ShowRulerTicks : latest.ShowRulerTicks,
+                FrameAccurateSeek = FrameAccurateSeek != previous.FrameAccurateSeek ? FrameAccurateSeek : latest.FrameAccurateSeek,
+                StartMuted = StartMuted != previous.StartMuted ? StartMuted : latest.StartMuted,
+                ExportFolder = ExportFolder != previous.ExportFolder ? ExportFolder : latest.ExportFolder,
+                ExportFilenameTemplate = ExportFilenameTemplate != previous.ExportFilenameTemplate ? ExportFilenameTemplate : latest.ExportFilenameTemplate,
                 Positions = positions,
-            }).WriteAsync();
+            }).WriteAsync(dataDirectory);
         }
         finally { SaveGate.Release(); }
     }
@@ -136,13 +147,66 @@ public sealed record UserPreferences
         finally { SaveGate.Release(); }
     }
 
-    public static async Task SaveSectionNameTemplateAsync(string template)
+    /// <summary>The settings shown in the Settings window, taken from <paramref name="source"/>.
+    /// Window position and playback positions stay this window's own.</summary>
+    public UserPreferences WithSettingsFrom(UserPreferences source) => this with
+    {
+        ShowWaveform = source.ShowWaveform, ShowThumbnails = source.ShowThumbnails, ShowRulerTicks = source.ShowRulerTicks,
+        FrameAccurateSeek = source.FrameAccurateSeek, StartMuted = source.StartMuted,
+        ExportFormat = source.ExportFormat, DeleteSidecarAfterExport = source.DeleteSidecarAfterExport,
+        ExportAcceleration = source.ExportAcceleration, AddSourceExportComment = source.AddSourceExportComment,
+        NewFileMarkerSource = source.NewFileMarkerSource, SectionNameTemplate = source.SectionNameTemplate,
+        ExportFolder = source.ExportFolder, ExportFilenameTemplate = source.ExportFilenameTemplate,
+    };
+
+    /// <summary>Applies one change to the latest saved settings and saves them, serialized with every other save.
+    /// A damaged settings file is not overwritten.</summary>
+    public static async Task<UserPreferences> UpdateAsync(Func<UserPreferences, UserPreferences> change, string? dataDirectory = null)
     {
         await SaveGate.WaitAsync();
         try
         {
-            var latest = await ReadOrDefaultAsync();
-            await (latest with { SectionNameTemplate = SectionNames.Normalize(template) }).WriteAsync();
+            var latest = await ReadOrDefaultAsync(null, dataDirectory);
+            var next = change(latest);
+            next = next with
+            {
+                ExportFormat = ExportFormats.Normalize(next.ExportFormat),
+                SectionNameTemplate = SectionNames.Normalize(next.SectionNameTemplate),
+                ExportFilenameTemplate = ExportNaming.NormalizeTemplate(next.ExportFilenameTemplate),
+                ExportFolder = string.IsNullOrWhiteSpace(next.ExportFolder) ? null : next.ExportFolder.Trim(),
+            };
+            await next.WriteAsync(dataDirectory);
+            return next;
+        }
+        finally { SaveGate.Release(); }
+    }
+
+    /// <summary>Returns every setting to its default and keeps a copy of the file it replaces. Window
+    /// positions and playback positions are kept; they are not settings. Returns the saved settings
+    /// and the kept copy's path, or null when there was no file.</summary>
+    public static async Task<(UserPreferences Saved, string? Kept)> ResetAllAsync(string? dataDirectory = null)
+    {
+        await SaveGate.WaitAsync();
+        try
+        {
+            string directory = dataDirectory ?? DataDirectory, path = Path.Combine(directory, "preferences.json");
+            UserPreferences latest;
+            try { latest = await ReadOrDefaultAsync(null, dataDirectory); }
+            catch (DamagedPreferencesException) { latest = new(); }
+            var next = new UserPreferences
+            {
+                IsMaximized = latest.IsMaximized, Left = latest.Left, Top = latest.Top, Width = latest.Width, Height = latest.Height,
+                Positions = latest.Positions,
+            };
+            string? kept = null;
+            if (File.Exists(path))
+            {
+                string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+                kept = Path.Combine(directory, $"preferences.before-reset-{stamp}.json");
+                if (File.Exists(kept)) kept = Path.Combine(directory, $"preferences.before-reset-{stamp}-{Guid.NewGuid():N}.json");
+            }
+            await next.WriteAsync(directory, kept);
+            return (next, kept);
         }
         finally { SaveGate.Release(); }
     }

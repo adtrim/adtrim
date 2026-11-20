@@ -51,6 +51,7 @@ public static class KeyboardShortcuts
             ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
             ("Ctrl+= / Ctrl+−", "Zoom in / out"),
             ("Ctrl+0", "Fit the timeline"),
+            ("Ctrl+,", "Settings"),
             ("F1", "Show these shortcuts"),
         ]),
     ];

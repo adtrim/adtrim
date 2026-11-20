@@ -9,46 +9,6 @@ namespace AdTrim;
 
 public partial class MainWindow
 {
-    private void RefreshSourceCommentMenu()
-    {
-        SourceCommentMenu.IsChecked = _preferences.AddSourceExportComment;
-        SourceCommentMenu.Icon = SourceCommentMenu.IsChecked ? "\u2713" : null;
-    }
-
-    private async void OnFileMenuOpened(object sender, RoutedEventArgs e)
-    {
-        if (!ReferenceEquals(sender, e.OriginalSource)) return;
-        var latest = await UserPreferences.LoadAsync(_preferences);
-        _preferences = _preferences with { AddSourceExportComment = latest.AddSourceExportComment };
-        _savedPreferences = _savedPreferences with { AddSourceExportComment = latest.AddSourceExportComment };
-        RefreshSourceCommentMenu();
-    }
-
-    private async void OnSourceCommentToggle(object sender, RoutedEventArgs e)
-    {
-        bool enabled = SourceCommentMenu.IsChecked;
-        SourceCommentMenu.IsEnabled = false;
-        try
-        {
-            var latest = await UserPreferences.LoadAsync(_preferences);
-            await (latest with { AddSourceExportComment = enabled }).SaveChangesAsync(latest, null);
-            _preferences = _preferences with { AddSourceExportComment = enabled };
-            _savedPreferences = _savedPreferences with { AddSourceExportComment = enabled };
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            MessageBox.Show(this, "The source comment setting could not be saved. " + ex.Message, "Export comments", MessageBoxButton.OK, MessageBoxImage.Error);
-            if (ex is DamagedPreferencesException) ShowDamagedPreferencesBanner();
-        }
-        finally
-        {
-            var latest = await UserPreferences.LoadAsync(_preferences);
-            _preferences = _preferences with { AddSourceExportComment = latest.AddSourceExportComment };
-            RefreshSourceCommentMenu();
-            SourceCommentMenu.IsEnabled = true;
-        }
-    }
-
     private void OnViewUnexportedFiles(object sender, RoutedEventArgs e)
     {
         if (DataContext is not MainViewModel vm || BlockProjectSwitchForExport(vm) || vm.IsBusy) return;

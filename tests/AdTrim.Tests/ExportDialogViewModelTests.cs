@@ -314,4 +314,27 @@ public sealed class ExportDialogViewModelTests : IDisposable
         Assert.Equal(planned, vm.Parts.Select(p => p.Label));
         Assert.Equal("What is being exported", vm.JobTitle);
     }
+
+    // A fixed export folder on a server or a removable drive can be missing. Export setup must say so and
+    // fall back to the recording's folder, not fail when the export starts.
+    [Fact]
+    public void TheExportFolderSettingIsUsedWhenPresentAndReportedWhenMissing()
+    {
+        var project = EditingRegressionTests.Project();
+        project.SourcePath = _source;
+        project.CommandStack.Execute(new AdTrim.Commands.ToggleExcludedCommand(project, project.Segments[1]));
+        string exports = Path.Combine(_folder, "exports");
+        Directory.CreateDirectory(exports);
+        var present = new AdTrim.ViewModels.ExportDialogViewModel(project, Media, exports, "{title} - cut");
+        Assert.Equal(exports, present.OutputFolder);
+        Assert.Equal("Show - cut.mp4", present.OutputFilename);
+        Assert.DoesNotContain(present.Validate(), v => v.Message.Contains("not available"));
+
+        string missing = Path.Combine(_folder, "unplugged");
+        var fallback = new AdTrim.ViewModels.ExportDialogViewModel(project, Media, missing);
+        Assert.Equal(_folder, fallback.OutputFolder);
+        var warning = Assert.Single(fallback.Validate(), v => v.Message.Contains("not available"));
+        Assert.Equal(AdTrim.ViewModels.ExportValidationKind.Warning, warning.Kind);
+        Assert.Contains(missing, warning.Message);
+    }
 }
