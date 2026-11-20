@@ -136,22 +136,44 @@ public partial class MainWindow
             vm.IsBusy = busy;
             if (stopped && !SourceCommentService.HasPendingUpdate(plan.SourcePath))
             {
-                if (vm.IsCollapsed)
-                {
-                    if (vm.KeptTimeline.DurationUs > 0)
-                        _previewAfter.Open(vm.KeptTimeline.ToMpvEdl(plan.SourcePath, _media?.TimelineStartTimeUs ?? 0), vm.KeptTimeline.ToOutput(position), buffered: true);
-                }
-                else
-                {
-                    _previewAfter.Open(plan.SourcePath, position);
-                    _previewBefore.Open(plan.SourcePath, Math.Max(0, position - FrameDurationUs(vm)));
-                }
-                if (_media is not null)
-                {
-                    _previewAfter.SelectAudioStream(_media.PrimaryAudioIndex);
-                    _previewBefore.SelectAudioStream(_media.PrimaryAudioIndex);
-                }
+                // Reopening creates each player's Direct3D video output again. An AMD driver crashed doing
+                // that for both players at once behind the export screen, so wait for the editor and
+                // open them one at a time.
+                string path = plan.SourcePath;
+                if (vm.IsExportScreen) _reopenPreviewsOnReturn = () => ReopenPreviewsAsync(vm, path, position);
+                else _ = ReopenPreviewsAsync(vm, path, position);
             }
+        }
+    }
+
+    private Func<Task>? _reopenPreviewsOnReturn;
+
+    private async Task ReopenPreviewsAsync(MainViewModel vm, string path, long position)
+    {
+        if (vm.SourcePath != path) return;
+        try
+        {
+            if (vm.IsCollapsed)
+            {
+                if (vm.KeptTimeline.DurationUs > 0)
+                    _previewAfter.Open(vm.KeptTimeline.ToMpvEdl(path, _media?.TimelineStartTimeUs ?? 0), vm.KeptTimeline.ToOutput(position), buffered: true);
+            }
+            else
+            {
+                _previewAfter.Open(path, position);
+                for (int i = 0; i < 200 && _previewAfter.IsLoading; i++) await Task.Delay(25);
+                if (vm.SourcePath != path) return;
+                _previewBefore.Open(path, Math.Max(0, position - FrameDurationUs(vm)));
+            }
+            if (_media is not null)
+            {
+                _previewAfter.SelectAudioStream(_media.PrimaryAudioIndex);
+                _previewBefore.SelectAudioStream(_media.PrimaryAudioIndex);
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            vm.Banner = new BannerInfo(StatusKind.Warning, "The preview could not reopen the recording.", ex.Message, Array.Empty<BannerAction>());
         }
     }
 }

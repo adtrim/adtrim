@@ -2337,6 +2337,7 @@ public partial class MainWindow : Window
                 ExportHost.Visibility = Visibility.Collapsed;
                 EditorWorkspace.Visibility = Visibility.Visible;
                 vm.IsExportScreen = false;
+                if (_reopenPreviewsOnReturn is { } reopen) { _reopenPreviewsOnReturn = null; _ = reopen(); }
                 if (vm.ShowWaveform && vm.SourcePath is { } waveformPath && _media is not null) EnsureAudioPass(vm, waveformPath, _media);
                 if (vm.ShowThumbnails && vm.SourcePath is { } thumbnailPath && _media is not null) StartThumbnailLoad(vm, thumbnailPath, _media);
             }
