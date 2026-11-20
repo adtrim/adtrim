@@ -51,7 +51,7 @@ public partial class MainWindow
 
     public void CloseForUpdate()
     {
-        _refineCts?.Cancel();
+        _refines.Cancel();
         _frameRecovery?.Cancel();
         if (DataContext is MainViewModel vm)
         {
