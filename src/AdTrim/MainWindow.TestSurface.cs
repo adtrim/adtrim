@@ -39,7 +39,7 @@ public partial class MainWindow
         public void AllowClose() => window._allowClose = true;
 
         // Saving and preferences
-        public Task<bool> SaveProjectAsync(MainViewModel vm) => window.SaveProjectAsync(vm);
+        public Task<bool> SaveProjectAsync(MainViewModel vm) => window._saves.SaveAsync(vm);
         public Task<bool> SavePreferencesAsync(MainViewModel vm) => window.SavePreferencesAsync(vm);
         public Task<bool> SavePreferencesSnapshotAsync(MainViewModel vm, bool saveMarkerSource) => window.SavePreferencesSnapshotAsync(vm, saveMarkerSource);
         public Task<UserPreferences?> ChangeSettingsAsync(Func<UserPreferences, UserPreferences> change) => window.ChangeSettingsAsync(change);

@@ -40,13 +40,9 @@ public partial class MainWindow : Window
     private MarkerSetState? _importedMarkerSet;
     private MediaInfo? _media;
     private SourceFingerprint? _sourceFingerprint;
-    private readonly ProjectSession _session = new();
     private bool _hydrating;
     private bool _allowClose;
     private bool _switching;
-    private bool _closeWhenSwitchCompletes;
-    private bool _saveInProgress;
-    private string? _fallbackSaveNoticeFor;
     private long? _playUntilUs;
 
     private ExportView? _activeExportDialog;
@@ -54,6 +50,7 @@ public partial class MainWindow : Window
 
 
     private readonly DispatcherTimer _autosaveTimer;
+    private readonly ProjectSaveCoordinator _saves;
 
     private readonly TaskCompletionSource _ready = new();
     public Task Ready => _ready.Task;
@@ -84,6 +81,10 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromSeconds(1),
         };
         _autosaveTimer.Tick += OnAutosaveTick;
+        _saves = new ProjectSaveCoordinator(new ProjectSession(),
+            () => _store is not null && _media is not null && _sourceFingerprint is not null ? new SaveTarget(_store, _media, _sourceFingerprint) : null,
+            new TimerAutosave(_autosaveTimer), App.WriteCrashLog, () => _ = Dispatcher.BeginInvoke(new Action(Close)),
+            () => OnAutosaveTick(null, EventArgs.Empty));
 
         WireViewModelEvents((MainViewModel)DataContext);
 
@@ -119,8 +120,7 @@ public partial class MainWindow : Window
         {
             if (_hydrating) return;
             // Debounced autosave: reset timer on every dirty event.
-            _autosaveTimer.Stop();
-            _autosaveTimer.Start();
+            _saves.RestartAutosave();
         };
         vm.PropertyChanged += (_, e) =>
         {
@@ -671,7 +671,7 @@ public partial class MainWindow : Window
         bool flushed;
         try { flushed = await FlushBeforeLeavingAsync(vm); }
         finally { _switching = false; }
-        if (TakePendingClose(flushed) || !flushed) return;
+        if (_saves.TakePendingClose(flushed) || !flushed) return;
 
         if (_ffmpeg is null || _loader is null || _store is null)
         {
@@ -719,7 +719,7 @@ public partial class MainWindow : Window
         CancelThumbnailLoad(vm, clearThumbnails: false);
         _frameRecovery?.Cancel();
         _refineCts?.Cancel();
-        _autosaveTimer.Stop();
+        _saves.StopAutosave();
         bool resumeAfterFailure = false, closeRequested = false;
         try
         {
@@ -931,12 +931,7 @@ public partial class MainWindow : Window
             _switching = false;
             vm.IsBusy = false;
             vm.BusyOperation = null;
-            if (_closeWhenSwitchCompletes)
-            {
-                closeRequested = true;
-                _closeWhenSwitchCompletes = false;
-                _ = Dispatcher.BeginInvoke(new Action(Close));
-            }
+            closeRequested = _saves.TakePendingClose(true);
         }
         if (resumeAfterFailure && !closeRequested && !_allowClose && !_switching && ReferenceEquals(DataContext, previousVm)
             && previousVm.SourcePath == previousPath && !_previewAfter.IsPlaying)
@@ -1398,54 +1393,10 @@ public partial class MainWindow : Window
 
     private async void OnAutosaveTick(object? sender, EventArgs e)
     {
-        _autosaveTimer.Stop();
-        if (_hydrating || _saveInProgress || DataContext is not MainViewModel vm) return;
-        await SaveProjectAsync(vm);
+        _saves.StopAutosave();
+        if (_hydrating || _saves.InProgress || DataContext is not MainViewModel vm) return;
+        await _saves.SaveAsync(vm);
     }
-
-    private async Task<bool> SaveProjectAsync(MainViewModel vm)
-    {
-        if (!vm.IsDirty) return true;
-        if (_store is null || _media is null || vm.SourcePath is null || _sourceFingerprint is null) return false;
-        var revision = vm.Revision;
-        var source = vm.SourcePath;
-        var snapshot = Snapshot(vm, source, _sourceFingerprint, _media);
-        _saveInProgress = true;
-        vm.SaveStatus = "Saving";
-        try
-        {
-            var savedTo = await _session.SaveAsync(_store, snapshot);
-            // Said once per recording: the edits are safe, but they are not where the user expects.
-            if (vm.SourcePath == source && _fallbackSaveNoticeFor != source && vm.Banner is null
-                && !string.Equals(savedTo, _store.SidecarPathFor(source), StringComparison.OrdinalIgnoreCase))
-            {
-                _fallbackSaveNoticeFor = source;
-                vm.Banner = new BannerInfo(StatusKind.Info, "Edits are saved on this computer only.",
-                    "AdTrim cannot write beside this recording, so the project is kept in AdTrim's data folder and will not move with the recording.",
-                    Array.Empty<BannerAction>());
-            }
-            if (vm.SourcePath == source && vm.Revision == revision)
-            { vm.IsDirty = false; vm.SaveStatus = "Saved"; }
-            else if (vm.SourcePath == source)
-            { vm.SaveStatus = "Unsaved changes"; _autosaveTimer.Start(); }
-            return true;
-        }
-        catch (Exception ex)
-        {
-            vm.SaveStatus = "Save failed";
-            vm.Banner = new BannerInfo(StatusKind.Danger, "Could not save edits.", ex.Message,
-                new[] { new BannerAction("Retry", () => OnAutosaveTick(null, EventArgs.Empty)) });
-            return false;
-        }
-        finally { _saveInProgress = false; }
-    }
-
-    private static AdTrimProject Snapshot(MainViewModel vm, string source, SourceFingerprint fingerprint, MediaInfo media)
-        => new(AdTrimProject.CurrentSchemaVersion, source, fingerprint, media,
-            vm.Markers.Where(m => !m.IsBookend).Select(m => new PersistedSplit(m.Id, m.TimeUs,
-                m.Source, m.OriginalTimeUs, m.Confidence, m.Confirmed, m.ChapterTitle)).ToList(),
-            vm.ExcludedSegmentIds.ToList(), SidecarLocation.NextToSource, vm.Markers.FirstOrDefault()?.ChapterTitle,
-            vm.MarkerSetSource, vm.MarkerBaselineId, vm.LastExport);
 
     /// <summary>
     /// Windows is logging off or shutting down and does not wait for the usual close, which saves in
@@ -1453,37 +1404,25 @@ public partial class MainWindow : Window
     /// </summary>
     internal void SaveForSessionEnd()
     {
-        _autosaveTimer.Stop();
-        if (_hydrating || _saveInProgress || DataContext is not MainViewModel { IsDirty: true } vm) return;
-        if (_store is null || _media is null || vm.SourcePath is null || _sourceFingerprint is null) return;
-        try
-        {
-            _store.Save(Snapshot(vm, vm.SourcePath, _sourceFingerprint, _media));
-            vm.IsDirty = false;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
-        { App.WriteCrashLog("Save at Windows shutdown", ex); }
+        _saves.StopAutosave();
+        if (_hydrating || DataContext is not MainViewModel vm) return;
+        _saves.SaveNow(vm);
     }
 
-    private async Task<bool> FlushBeforeLeavingAsync(MainViewModel vm)
-    {
-        _autosaveTimer.Stop();
-        bool busy = vm.IsBusy;
-        vm.IsBusy = true;
-        await SavePreferencesAsync(vm);
-        try
+    private Task<bool> FlushBeforeLeavingAsync(MainViewModel vm) => _saves.FlushAsync(vm, () =>
+        MessageBox.Show(this, "Edits could not be saved. Retry?\nChoose No to discard unsaved edits, or Cancel to stay here.",
+            "Save failed", MessageBoxButton.YesNoCancel, MessageBoxImage.Warning) switch
         {
-            while (vm.IsDirty)
-            {
-                if (await SaveProjectAsync(vm)) continue;
-                var choice = MessageBox.Show(this, "Edits could not be saved. Retry?\nChoose No to discard unsaved edits, or Cancel to stay here.",
-                    "Save failed", MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
-                if (choice == MessageBoxResult.Cancel) return false;
-                if (choice == MessageBoxResult.No) { vm.IsDirty = false; return true; }
-            }
-            return true;
-        }
-        finally { vm.IsBusy = busy; }
+            MessageBoxResult.Cancel => SaveFailureChoice.Stay,
+            MessageBoxResult.No => SaveFailureChoice.Discard,
+            _ => SaveFailureChoice.Retry,
+        }, () => SavePreferencesAsync(vm));
+
+    private sealed class TimerAutosave(DispatcherTimer timer) : IAutosave
+    {
+        public void Start() => timer.Start();
+        public void Restart() { timer.Stop(); timer.Start(); }
+        public void Stop() => timer.Stop();
     }
 
     private async void OnWindowClosing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -1491,7 +1430,7 @@ public partial class MainWindow : Window
         ResetShuttle();
         if (_allowClose)
         {
-            _autosaveTimer.Stop();
+            _saves.StopAutosave();
             _autosaveTimer.Tick -= OnAutosaveTick;
             // mpv must release its video output before WPF destroys the host HWNDs.
             _previewAfter.PropertyChanged -= OnPreviewPropertyChanged;
@@ -1508,7 +1447,7 @@ public partial class MainWindow : Window
         }
         if (_switching)
         {
-            _closeWhenSwitchCompletes = true;
+            _saves.CloseAfterSwitch();
             return;
         }
         if (_closingExport || DataContext is not MainViewModel vm) return;
@@ -1535,18 +1474,7 @@ public partial class MainWindow : Window
             Close();
         }
         _switching = false;
-        _closeWhenSwitchCompletes = false;
-    }
-
-    // A close asked for while this window was saving waited for the save. It goes ahead once the
-    // edits are saved and is dropped when the user chose to stay. Left set, it would close the
-    // window after the next recording opened.
-    private bool TakePendingClose(bool proceed)
-    {
-        if (!_closeWhenSwitchCompletes) return false;
-        _closeWhenSwitchCompletes = false;
-        if (proceed) _ = Dispatcher.BeginInvoke(new Action(Close));
-        return true;
+        _saves.DropPendingClose();
     }
 
     // -------------------------------------------------------------------
@@ -2052,12 +1980,12 @@ public partial class MainWindow : Window
         bool flushed;
         try { flushed = await FlushBeforeLeavingAsync(vm); }
         finally { _switching = false; }
-        if (TakePendingClose(flushed) || !flushed) return;
+        if (_saves.TakePendingClose(flushed) || !flushed) return;
         SetCollapsed(vm, false);
         ReleaseAudioPass(vm);
         CancelThumbnailLoad(vm, clearThumbnails: true);
         _refineCts?.Cancel();
-        _autosaveTimer.Stop();
+        _saves.StopAutosave();
         _previewAfter.Pause();
         _previewBefore.Pause();
         vm.ClearSelection();

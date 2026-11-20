@@ -23,7 +23,7 @@ public partial class MainWindow
         string? commentNote = await AddSourceCommentAsync(vm, view, ct);
         bool commentFailed = view.SourceCommentFailed;
         bool busy = vm.IsBusy;
-        _autosaveTimer.Stop();
+        _saves.StopAutosave();
         vm.IsBusy = true;
         view.SourceCommentFailed = true;
         try
@@ -33,11 +33,11 @@ public partial class MainWindow
             if (SourceCommentService.HasPendingUpdate(plan.SourcePath))
                 throw new IOException("Source comment recovery must finish before the project can be updated.");
             // The video is already published. Cancelling the comment step must not lose its record.
-            while (_saveInProgress) await Task.Delay(25);
+            await _saves.WaitForIdleAsync();
             if (ProjectStore.FingerprintOf(plan.SourcePath, _sourceFingerprint.DurationUs) != _sourceFingerprint)
                 throw new IOException("The source changed before its export could be recorded.");
             vm.LastExport = new("AdTrim", AppVersion.Numeric, DateTimeOffset.UtcNow, _sourceFingerprint);
-            if (!await SaveProjectAsync(vm)) throw new IOException("The project sidecar could not be saved.");
+            if (!await _saves.SaveAsync(vm)) throw new IOException("The project sidecar could not be saved.");
             view.SourceCommentFailed = commentFailed;
             return (commentNote is null ? "" : commentNote + " ") + "Export record saved to project sidecar.";
         }
@@ -81,13 +81,13 @@ public partial class MainWindow
         if (_sourceFingerprint is null || _store is null) return "Source comment was not added: the project is unavailable.";
         bool busy = vm.IsBusy;
         long position = vm.PlayheadUs;
-        _autosaveTimer.Stop();
+        _saves.StopAutosave();
         vm.IsBusy = true;
         bool stopped = false;
         try
         {
-            while (_saveInProgress) await Task.Delay(25, ct);
-            if (!await SaveProjectAsync(vm)) return "Source comment was not added because project edits could not be saved.";
+            await _saves.WaitForIdleAsync(ct);
+            if (!await _saves.SaveAsync(vm)) return "Source comment was not added because project edits could not be saved.";
             if (_audioPass is { Completion.IsCompleted: false } pass)
             {
                 pass.Cancel();

@@ -27,24 +27,24 @@ public partial class MainWindow
         ResetShuttle();
         _previewAfter.Pause();
         _previewBefore.Pause();
-        _autosaveTimer.Stop();
+        _saves.StopAutosave();
         _switching = true;
         vm.IsBusy = true;
         vm.BusyOperation = "Preparing update";
-        while (_saveInProgress) await Task.Delay(25);
+        await _saves.WaitForIdleAsync();
         if (!await SavePreferencesAsync(vm)) return false;
-        return await SaveProjectAsync(vm) && !vm.IsDirty;
+        return await _saves.SaveAsync(vm) && !vm.IsDirty;
     }
 
     public void CancelUpdatePreparation()
     {
         _switching = false;
-        _closeWhenSwitchCompletes = false;
+        _saves.DropPendingClose();
         if (DataContext is MainViewModel vm)
         {
             vm.IsBusy = false;
             vm.BusyOperation = null;
-            if (vm.IsDirty) _autosaveTimer.Start();
+            if (vm.IsDirty) _saves.StartAutosave();
         }
         IsEnabled = true;
     }
