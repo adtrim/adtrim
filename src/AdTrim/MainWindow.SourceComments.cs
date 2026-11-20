@@ -88,13 +88,8 @@ public partial class MainWindow
         {
             await _saves.WaitForIdleAsync(ct);
             if (!await _saves.SaveAsync(vm)) return "Source comment was not added because project edits could not be saved.";
-            if (_audioPass is { Completion.IsCompleted: false } pass)
-            {
-                pass.Cancel();
-                try { await pass.Completion; } catch (OperationCanceledException) { }
-                _audioPass = null;
-            }
-            CancelThumbnailLoad(vm, false);
+            await _timelineMedia.StopUnfinishedAudioPassAsync();
+            _timelineMedia.CancelThumbnailLoad(vm, false);
             _previewAfter.Stop();
             _previewBefore.Stop();
             stopped = true;
@@ -115,9 +110,9 @@ public partial class MainWindow
                     { failures.Add(name); }
                 }
                 Preserve("ad-break suggestions", () => _markers.Suggestions.PreserveAfterMetadataUpdate(plan.SourcePath, expected, updated));
-                Preserve("thumbnails", () => _thumbnails?.PreserveAfterMetadataUpdate(plan.SourcePath, expected));
+                Preserve("thumbnails", () => _timelineMedia.Thumbnails?.PreserveAfterMetadataUpdate(plan.SourcePath, expected));
                 if (_media is not null)
-                    Preserve("audio levels", () => (_audioLevels ?? new AudioLevelService(_ffmpeg, AudioLevelService.DefaultCacheRoot))
+                    Preserve("audio levels", () => (_timelineMedia.AudioLevels ?? new AudioLevelService(_ffmpeg, AudioLevelService.DefaultCacheRoot))
                         .PreserveAfterMetadataUpdate(plan.SourcePath, _media.PrimaryAudioIndex, expected));
                 return failures;
             });

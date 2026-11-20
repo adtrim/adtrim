@@ -29,11 +29,8 @@ public partial class MainWindow : Window
     private FfmpegRunner? _ffmpeg;
     private RecordingLoader? _loader;
     private ProjectStore? _store;
-    private AudioLevelService? _audioLevels;
-    private AudioLevelPass? _audioPass;
-    private ThumbnailService? _thumbnails;
-    private ThumbnailLoader? _thumbnailLoader;
     private readonly RefineCoordinator _refines;
+    private readonly TimelineMediaLoader _timelineMedia;
     private readonly MarkerSetController _markers = new(new MarkerSuggestionStore());
     private MediaInfo? _media;
     private SourceFingerprint? _sourceFingerprint;
@@ -71,7 +68,6 @@ public partial class MainWindow : Window
         // Runtime starts empty - the WPF designer uses the design-time
         // `<vm:MainViewModel/>` in XAML for live-preview only.
         DataContext = new MainViewModel();
-        Timeline.ThumbnailsNeeded += times => _thumbnailLoader?.Request(times);
 
         _autosaveTimer = new DispatcherTimer
         {
@@ -84,6 +80,10 @@ public partial class MainWindow : Window
             () => OnAutosaveTick(null, EventArgs.Empty));
         _refines = new RefineCoordinator(() => _ffmpeg is null ? null : (_refine ??= new RefineService(_ffmpeg)).RefineOneAsync,
             () => _media?.PrimaryAudioIndex);
+        _timelineMedia = new TimelineMediaLoader(() => _ffmpeg,
+            () => _previewAfter.IsSeeking || _previewAfter.IsLoading || _previewBefore.IsSeeking || _previewBefore.IsLoading,
+            update => Dispatcher.InvokeAsync(update), () => Timeline.RefreshThumbnails());
+        Timeline.ThumbnailsNeeded += times => _timelineMedia.RequestThumbnails(times);
 
         WireViewModelEvents((MainViewModel)DataContext);
 
@@ -139,12 +139,12 @@ public partial class MainWindow : Window
                 if (vm.ShowWaveform)
                 {
                     if (vm.SourcePath is { } path && _media is not null)
-                        EnsureAudioPass(vm, path, _media);
+                        _timelineMedia.EnsureAudioPass(vm, path, _media);
                 }
                 else if (!vm.IsAnalyzingCommercials)
                 {
                     // Analysis still needs a running pass; the hidden graph just stops drawing.
-                    ReleaseAudioPass(vm);
+                    _timelineMedia.ReleaseAudioPass(vm);
                 }
             }
             else if (e.PropertyName == nameof(MainViewModel.ShowThumbnails))
@@ -152,11 +152,11 @@ public partial class MainWindow : Window
                 if (vm.ShowThumbnails)
                 {
                     if (vm.SourcePath is { } path && _media is not null)
-                        StartThumbnailLoad(vm, path, _media);
+                        _timelineMedia.StartThumbnailLoad(vm, path, _media);
                 }
                 else
                 {
-                    CancelThumbnailLoad(vm, clearThumbnails: true);
+                    _timelineMedia.CancelThumbnailLoad(vm, clearThumbnails: true);
                 }
             }
             else if (e.PropertyName == nameof(MainViewModel.PlayheadUs))
@@ -275,7 +275,7 @@ public partial class MainWindow : Window
             _ffmpeg = new FfmpegRunner();
             _store = new ProjectStore();
             _loader = new RecordingLoader(new MediaProbeService(_ffmpeg), new ChapterImportService(_ffmpeg), _store, _markers.Suggestions);
-            _thumbnails = new ThumbnailService(_ffmpeg);
+            _timelineMedia.Thumbnails = new ThumbnailService(_ffmpeg);
         }
         catch (FileNotFoundException)
         {
@@ -679,7 +679,7 @@ public partial class MainWindow : Window
                 _ffmpeg ??= new FfmpegRunner();
                 _store ??= new ProjectStore();
                 _loader ??= new RecordingLoader(new MediaProbeService(_ffmpeg), new ChapterImportService(_ffmpeg), _store, _markers.Suggestions);
-                _thumbnails ??= new ThumbnailService(_ffmpeg);
+                _timelineMedia.Thumbnails ??= new ThumbnailService(_ffmpeg);
             }
             catch (FileNotFoundException ex)
             {
@@ -713,9 +713,8 @@ public partial class MainWindow : Window
         vm.BusyOperation = "Opening";
         _previewAfter.Pause();
         _previewBefore.Pause();
-        _audioPass?.Cancel();
-        _audioPass = null;
-        CancelThumbnailLoad(vm, clearThumbnails: false);
+        _timelineMedia.DropAudioPass();
+        _timelineMedia.CancelThumbnailLoad(vm, clearThumbnails: false);
         _frameRecovery?.Cancel();
         _refines.Cancel();
         _saves.StopAutosave();
@@ -772,7 +771,7 @@ public partial class MainWindow : Window
             MpvViewBefore.Visibility = Visibility.Visible;
             // The filmstrip goes first: it is the most visible and costs a few seeks, and the
             // waveform's full read yields to it. Starting here keeps it ahead of any analysis.
-            if (vm.ShowThumbnails) StartThumbnailLoad(vm, path, _media);
+            if (vm.ShowThumbnails) _timelineMedia.StartThumbnailLoad(vm, path, _media);
 
             if (loaded.Start == RecordingStart.SavedProject)
             {
@@ -835,12 +834,12 @@ public partial class MainWindow : Window
             UpdateNoFrameOverlay(vm);
 
             if (vm.ShowWaveform)
-                EnsureAudioPass(vm, path, _media);
+                _timelineMedia.EnsureAudioPass(vm, path, _media);
             else if (!vm.IsAnalyzingCommercials)
-                ReleaseAudioPass(vm);
+                _timelineMedia.ReleaseAudioPass(vm);
 
             if (!vm.ShowThumbnails)
-                CancelThumbnailLoad(vm, clearThumbnails: true);
+                _timelineMedia.CancelThumbnailLoad(vm, clearThumbnails: true);
 
             // Opening replaces the editor's banner; keep offering the settings reset while it is needed.
             if (vm.Banner is null && await UserPreferences.IsDamagedAsync()) ShowDamagedPreferencesBanner();
@@ -853,8 +852,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            ReleaseAudioPass(vm);
-            CancelThumbnailLoad(vm, clearThumbnails: false);
+            _timelineMedia.ReleaseAudioPass(vm);
+            _timelineMedia.CancelThumbnailLoad(vm, clearThumbnails: false);
             _media = previousMedia;
             _sourceFingerprint = previousFingerprint;
             _markers.SetImported(previousImportedMarkers, previousImportedAvailable);
@@ -899,8 +898,8 @@ public partial class MainWindow : Window
                     MpvViewAfter.Visibility = Visibility.Visible;
                     MpvViewBefore.Visibility = Visibility.Visible;
                     UpdateNoFrameOverlay(vm);
-                    if (vm.ShowWaveform) EnsureAudioPass(vm, previousPath, previousMedia);
-                    if (vm.ShowThumbnails) StartThumbnailLoad(vm, previousPath, previousMedia);
+                    if (vm.ShowWaveform) _timelineMedia.EnsureAudioPass(vm, previousPath, previousMedia);
+                    if (vm.ShowThumbnails) _timelineMedia.StartThumbnailLoad(vm, previousPath, previousMedia);
                     // The restored preview stays paused behind the error; playback resumes once it is dismissed.
                     resumeAfterFailure = previousPlaying;
                 }
@@ -936,108 +935,6 @@ public partial class MainWindow : Window
             if (previousVm.IsCollapsed) { if (previousVm.KeptTimeline.DurationUs > 0) _previewAfter.Play(); }
             else { _previewAfter.Play(); _previewBefore.Play(); }
         }
-    }
-
-    /// <summary>Stops the recording's audio pass, if running, and clears the timeline graph.</summary>
-    private void ReleaseAudioPass(MainViewModel vm)
-    {
-        _audioPass?.Cancel();
-        _audioPass = null;
-        vm.AudioLoudness = null;
-    }
-
-    /// <summary>
-    /// The recording's shared audio pass. The timeline graph fills from it and ad-break analysis
-    /// joins it, so the audio is read once. Reuses a running or finished pass for the same file.
-    /// </summary>
-    private AudioLevelPass EnsureAudioPass(MainViewModel vm, string path, MediaInfo media)
-    {
-        if (_audioPass is { } current && current.SourcePath == path
-            && !current.Completion.IsCanceled && !current.Completion.IsFaulted) return current;
-        ReleaseAudioPass(vm);
-        _audioLevels ??= new AudioLevelService(_ffmpeg!, AudioLevelService.DefaultCacheRoot);
-        AudioLevelPass? pass = null;
-        pass = _audioLevels.Start(path, media, WaitForFullReadTurnAsync, partial => Dispatcher.InvokeAsync(() =>
-        {
-            if (ReferenceEquals(_audioPass, pass)) vm.AudioLoudness = partial;
-        }));
-        _audioPass = pass;
-        _ = ShowAudioLevelsAsync(vm, pass);
-        return pass;
-    }
-
-    private async Task ShowAudioLevelsAsync(MainViewModel vm, AudioLevelPass pass)
-    {
-        try
-        {
-            var levels = await pass.Completion;
-            if (ReferenceEquals(_audioPass, pass)) vm.AudioLoudness = levels.Loudness;
-        }
-        catch (OperationCanceledException) { /* superseded, closed or paused for export */ }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"[audio levels] measurement failed: {ex.Message}");
-            if (ReferenceEquals(_audioPass, pass) && vm.ShowWaveform)
-            {
-                vm.StatusKind = StatusKind.Warning;
-                vm.StatusOverride = "Waveform failed to load.";
-            }
-        }
-    }
-
-    // Recordings usually sit on a spinning disk, where audio pass reads would
-    // otherwise compete with every scrub seek.
-    private async ValueTask WaitForPreviewIdleAsync(CancellationToken ct)
-    {
-        while (true)
-        {
-            bool inFlight = _previewAfter.IsSeeking || _previewAfter.IsLoading
-                || _previewBefore.IsSeeking || _previewBefore.IsLoading;
-            var sinceSeek = Environment.TickCount64 - MpvPreviewViewModel.LastSeekActivityMs;
-            if (!AudioLevelService.ShouldYieldToSeeks(sinceSeek, inFlight)) return;
-            await Task.Delay(50, ct).ConfigureAwait(false);
-        }
-    }
-
-    // Full-file reads (the waveform pass, analysis picture passes) wait for scrubbing and for
-    // filmstrip tiles: tiles are a few seeks and far more visible, so they go first.
-    private async ValueTask WaitForFullReadTurnAsync(CancellationToken ct)
-    {
-        while (true)
-        {
-            await WaitForPreviewIdleAsync(ct).ConfigureAwait(false);
-            if (_thumbnailLoader is not { IsBusy: true }) return;
-            await Task.Delay(50, ct).ConfigureAwait(false);
-        }
-    }
-
-    private void CancelThumbnailLoad(MainViewModel vm, bool clearThumbnails)
-    {
-        _thumbnailLoader?.Cancel();
-        _thumbnailLoader = null;
-        if (clearThumbnails) vm.ThumbnailTiles = ThumbnailStrip.Empty;
-    }
-
-    /// <summary>Shows the recording's cached tiles at once; the timeline then asks for the
-    /// on-screen tiles it lacks (<see cref="Controls.TimelineView.ThumbnailsNeeded"/>).</summary>
-    private void StartThumbnailLoad(MainViewModel vm, string path, MediaInfo media)
-    {
-        CancelThumbnailLoad(vm, clearThumbnails: true);
-        if (_ffmpeg is null) return;
-        _thumbnails ??= new ThumbnailService(_ffmpeg);
-        var svc = _thumbnails;
-        var duration = media.DurationUs;
-        var cached = svc.LoadCached(path, duration);
-        ThumbnailLoader? loader = null;
-        loader = new ThumbnailLoader(cached.Times, time => ThumbnailService.Snap(time, duration),
-            (times, ct) => svc.ExtractAsync(path, duration, times, ct), WaitForPreviewIdleAsync,
-            tiles => Dispatcher.InvokeAsync(() =>
-            {
-                if (ReferenceEquals(_thumbnailLoader, loader)) vm.ThumbnailTiles = vm.ThumbnailTiles.With(tiles);
-            }));
-        _thumbnailLoader = loader;
-        vm.ThumbnailTiles = cached;
-        Timeline.RefreshThumbnails();
     }
 
     private async Task<MarkerSetState?> AnalyzeCommercialsAsync(MainViewModel vm, string key,
@@ -1084,8 +981,8 @@ public partial class MainWindow : Window
             var media = _media;
             // Join the recording's audio pass (the timeline graph's) rather than reading the audio again.
             var result = await new SuggestionEngine(_ffmpeg).AnalyzeAsync(source, media, progress, linked.Token,
-                (stage, ct) => Dispatcher.Invoke(() => EnsureAudioPass(vm, sourceAtStart, media)).JoinAsync(stage, ct),
-                WaitForFullReadTurnAsync);
+                (stage, ct) => Dispatcher.Invoke(() => _timelineMedia.EnsureAudioPass(vm, sourceAtStart, media)).JoinAsync(stage, ct),
+                _timelineMedia.WaitForFullReadTurnAsync);
             if (linked.IsCancellationRequested || vm.SourcePath != sourceAtStart || vm.SourceFingerprint != fingerprint) return null;
             var state = MarkerSetController.FromAnalysis(result, _media.DurationUs);
             vm.HasAdTrimAnalysis = true;
@@ -1109,7 +1006,7 @@ public partial class MainWindow : Window
             vm.IsAnalyzingCommercials = false;
             _markers.EndAnalysis(linked);
             // Nothing else wants an unfinished pass once analysis stops with the graph hidden.
-            if (!vm.ShowWaveform && _audioPass is { Completion.IsCompleted: false }) ReleaseAudioPass(vm);
+            if (!vm.ShowWaveform && _timelineMedia.AudioPass is { Completion.IsCompleted: false }) _timelineMedia.ReleaseAudioPass(vm);
             vm.IsBusy = wasBusy;
             vm.BusyOperation = previousOperation;
             vm.ProgressPercent = previousProgress;
@@ -1304,8 +1201,8 @@ public partial class MainWindow : Window
         if (await FlushBeforeLeavingAsync(vm))
         {
             _refines.Cancel();
-            ReleaseAudioPass(vm);
-            CancelThumbnailLoad(vm, false);
+            _timelineMedia.ReleaseAudioPass(vm);
+            _timelineMedia.CancelThumbnailLoad(vm, false);
             _allowClose = true;
             Close();
         }
@@ -1818,8 +1715,8 @@ public partial class MainWindow : Window
         finally { _switching = false; }
         if (_saves.TakePendingClose(flushed) || !flushed) return;
         SetCollapsed(vm, false);
-        ReleaseAudioPass(vm);
-        CancelThumbnailLoad(vm, clearThumbnails: true);
+        _timelineMedia.ReleaseAudioPass(vm);
+        _timelineMedia.CancelThumbnailLoad(vm, clearThumbnails: true);
         _refines.Cancel();
         _saves.StopAutosave();
         _previewAfter.Pause();
@@ -2040,8 +1937,8 @@ public partial class MainWindow : Window
         _previewBefore.Pause();
         // Export needs the disk. A finished audio pass costs nothing and stays; the graph keeps
         // what a running one measured, and the pass starts over when the editor returns.
-        if (_audioPass is { Completion.IsCompleted: false } running) { running.Cancel(); _audioPass = null; }
-        CancelThumbnailLoad(vm, false);
+        _timelineMedia.DropUnfinishedAudioPass();
+        _timelineMedia.CancelThumbnailLoad(vm, false);
         var dlg = new ExportView();
         _activeExportDialog = dlg;
         var exportPreferences = await UserPreferences.LoadAsync();
@@ -2068,8 +1965,8 @@ public partial class MainWindow : Window
                 EditorWorkspace.Visibility = Visibility.Visible;
                 vm.IsExportScreen = false;
                 if (_reopenPreviewsOnReturn is { } reopen) { _reopenPreviewsOnReturn = null; _ = reopen(); }
-                if (vm.ShowWaveform && vm.SourcePath is { } waveformPath && _media is not null) EnsureAudioPass(vm, waveformPath, _media);
-                if (vm.ShowThumbnails && vm.SourcePath is { } thumbnailPath && _media is not null) StartThumbnailLoad(vm, thumbnailPath, _media);
+                if (vm.ShowWaveform && vm.SourcePath is { } waveformPath && _media is not null) _timelineMedia.EnsureAudioPass(vm, waveformPath, _media);
+                if (vm.ShowThumbnails && vm.SourcePath is { } thumbnailPath && _media is not null) _timelineMedia.StartThumbnailLoad(vm, thumbnailPath, _media);
             }
         };
         EditorWorkspace.Visibility = Visibility.Collapsed;

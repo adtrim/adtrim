@@ -29,11 +29,11 @@ public partial class MainWindow
         public UserPreferences Preferences => window._preferences;
         public ExportView? ActiveExport => window._activeExportDialog;
         public DispatcherTimer? RewindTimer => window._rewindTimer;
-        public AudioLevelPass? AudioPass => window._audioPass;
-        public ThumbnailLoader? ThumbnailLoader => window._thumbnailLoader;
+        public AudioLevelPass? AudioPass => window._timelineMedia.AudioPass;
+        public ThumbnailLoader? ThumbnailLoader => window._timelineMedia.ThumbnailLoader;
         public bool FrameRecoveryPending => window._frameRecovery is not null;
-        public ThumbnailService? Thumbnails { set => window._thumbnails = value; }
-        public AudioLevelService? AudioLevels { set => window._audioLevels = value; }
+        public ThumbnailService? Thumbnails { set => window._timelineMedia.Thumbnails = value; }
+        public AudioLevelService? AudioLevels { set => window._timelineMedia.AudioLevels = value; }
         public Func<string, string, bool> AskDiscardEdits { get => window._askDiscardEdits; set => window._askDiscardEdits = value; }
         /// <summary>Lets the window close without asking, as at the end of a check.</summary>
         public void AllowClose() => window._allowClose = true;
@@ -56,8 +56,8 @@ public partial class MainWindow
         public (long From, long To) VisibleTimelineRange(MainViewModel vm) => window.VisibleTimelineRange(vm);
 
         // Timeline media
-        public void CancelThumbnailLoad(MainViewModel vm, bool clearThumbnails) => window.CancelThumbnailLoad(vm, clearThumbnails);
-        public void ReleaseAudioPass(MainViewModel vm) => window.ReleaseAudioPass(vm);
+        public void CancelThumbnailLoad(MainViewModel vm, bool clearThumbnails) => window._timelineMedia.CancelThumbnailLoad(vm, clearThumbnails);
+        public void ReleaseAudioPass(MainViewModel vm) => window._timelineMedia.ReleaseAudioPass(vm);
 
         // Markers
         public void JumpToMarker(MainViewModel vm, int direction) => window.JumpToMarker(vm, direction);

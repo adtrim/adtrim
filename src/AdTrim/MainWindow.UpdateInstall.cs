@@ -55,8 +55,8 @@ public partial class MainWindow
         _frameRecovery?.Cancel();
         if (DataContext is MainViewModel vm)
         {
-            ReleaseAudioPass(vm);
-            CancelThumbnailLoad(vm, false);
+            _timelineMedia.ReleaseAudioPass(vm);
+            _timelineMedia.CancelThumbnailLoad(vm, false);
         }
         _allowClose = true;
         Close();
