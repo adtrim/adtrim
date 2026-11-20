@@ -128,6 +128,49 @@
           </TextBox>
         </DockPanel>
       </Border>
+      <!-- What an export started now would contain. Beside the settings, where the evaluation
+           results also go, so the settings column and its TS notice stay where they are. -->
+      <Border x:Name="PlannedPartsPanel" Grid.Column="1" Width="380" Margin="24,0,0,0" Padding="18"
+              Background="{StaticResource Bg.Surface2}" CornerRadius="6">
+        <Border.Style>
+          <Style TargetType="Border">
+            <Style.Triggers>
+              <DataTrigger Binding="{Binding IsConfiguring}" Value="False"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+              <DataTrigger Binding="{Binding ShowEvaluation}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+            </Style.Triggers>
+          </Style>
+        </Border.Style>
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Text="Parts in this export" FontSize="18" FontWeight="SemiBold"
+                     Foreground="{StaticResource Text.Primary}" Margin="0,0,0,4"/>
+          <TextBlock x:Name="PlannedPartsSummary" DockPanel.Dock="Top" Text="{Binding PartsSummary}"
+                     Foreground="{StaticResource Text.Secondary}" FontSize="12" Margin="0,0,0,14"/>
+          <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl x:Name="PlannedPartsList" ItemsSource="{Binding PlannedParts}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Grid Margin="0,5">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="26"/>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding Number}" FontFamily="{StaticResource Font.Mono}" FontSize="12"
+                               Foreground="{StaticResource Text.Tertiary}" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="1" Text="{Binding Name}" ToolTip="{Binding Name}" TextTrimming="CharacterEllipsis"
+                               Foreground="{StaticResource Text.Primary}" FontWeight="Medium" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                    <TextBlock Grid.Column="2" Text="{Binding Length}" ToolTip="Length of this part" FontFamily="{StaticResource Font.Mono}"
+                               FontSize="12" Foreground="{StaticResource Text.Primary}" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding TimeRange}" FontFamily="{StaticResource Font.Mono}"
+                               FontSize="12" Foreground="{StaticResource Text.Secondary}" Margin="0,3,0,0"/>
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
       <!-- ====================================================== -->
       <!-- CONFIGURING VIEW                                        -->
       <!-- ====================================================== -->

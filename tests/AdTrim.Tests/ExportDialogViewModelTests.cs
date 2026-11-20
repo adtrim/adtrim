@@ -183,4 +183,17 @@ public sealed class ExportDialogViewModelTests : IDisposable
         vm.OutputFilename = "My cut.mkv";
         Assert.Contains(Blocking(vm), m => m.Contains("must end with '.mp4'"));
     }
+
+    // The setup screen lists what will be exported before the user commits to an hour of encoding;
+    // it must be the same parts, names and order the export then uses.
+    [Fact]
+    public void TheSetupScreenListsExactlyThePartsThePlanExports()
+    {
+        var vm = Setup();
+        var plan = vm.BuildPlan()!;
+        Assert.Equal(new[] { "Part 1", "Part 2" }, plan.KeptSegments.Select(s => s.PartTitle));
+        Assert.Equal(plan.KeptSegments.Select(s => (s.Index, s.PartTitle)), vm.PlannedParts.Select(p => (p.Number, p.Name)));
+        Assert.Equal("00:00.00 → 00:10.00", vm.PlannedParts[0].TimeRange);
+        Assert.Equal("00:10.00", vm.PlannedParts[1].Length);
+    }
 }
