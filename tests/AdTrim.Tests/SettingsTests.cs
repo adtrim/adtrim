@@ -22,7 +22,7 @@ public sealed class SettingsTests : IDisposable
     {
         var old = JsonSerializer.Deserialize<UserPreferences>("{}")!;
         Assert.True(old.ShowRulerTicks);
-        Assert.False(old.FrameAccurateSeek);
+        Assert.True(old.FrameAccurateSeek);
         Assert.False(old.StartMuted);
         Assert.Null(old.ExportFolder);
         Assert.Equal("{title} [AdTrim]", old.ExportFilenameTemplate);
@@ -53,12 +53,12 @@ public sealed class SettingsTests : IDisposable
     {
         await File.WriteAllTextAsync(PreferencesPath, "{}");
         var windowLoaded = await UserPreferences.ReadAsync(_directory);
-        var changed = await UserPreferences.UpdateAsync(p => p with { FrameAccurateSeek = true, ExportFilenameTemplate = "{title} [AdTrim {version}]" }, _directory);
+        var changed = await UserPreferences.UpdateAsync(p => p with { FrameAccurateSeek = false, ExportFilenameTemplate = "{title} [AdTrim {version}]" }, _directory);
         // The window that did not change them saves only what it changed itself.
         var windowSave = windowLoaded with { Width = 1400 };
         await windowSave.SaveChangesAsync(windowLoaded, null, dataDirectory: _directory);
         var read = await UserPreferences.ReadAsync(_directory);
-        Assert.True(read.FrameAccurateSeek);
+        Assert.False(read.FrameAccurateSeek);
         Assert.Equal(changed.ExportFilenameTemplate, read.ExportFilenameTemplate);
         Assert.Equal(1400, read.Width);
     }
@@ -147,5 +147,21 @@ public sealed class SettingsTests : IDisposable
         File.WriteAllText(Path.Combine(folder, "Show [AdTrim].mp4"), "earlier export");
         Assert.Equal("Show [AdTrim 2].mp4", ExportNaming.DeriveDefaultFilename(Path.Combine(_directory, "Show.mp4"), folder));
         Assert.Equal("Show [AdTrim 2].mp4", ExportNaming.DeriveDefaultFilename(Path.Combine(_directory, "Show.mp4"), folder, ExportFormat.Mp4, "broken {pattern"));
+    }
+
+    // Settings saves its whole draft at once. Only what was changed in the window may reach the file,
+    // or a setting another window saved while Settings was open would be undone.
+    [Fact]
+    public void SaveAppliesOnlyWhatTheSettingsWindowChanged()
+    {
+        var opened = new UserPreferences { StartMuted = false, ExportFolder = "D:\\Exports" };
+        var edited = opened with { ShowRulerTicks = false, ExportFolder = null };
+        var latest = opened with { StartMuted = true, Width = 1400 };
+        var merged = AdTrim.Views.SettingsWindow.Merge(latest, opened, edited);
+        Assert.False(merged.ShowRulerTicks);
+        Assert.Null(merged.ExportFolder);
+        Assert.True(merged.StartMuted);
+        Assert.Equal(1400, merged.Width);
+        Assert.Equal(Comparable(latest), Comparable(AdTrim.Views.SettingsWindow.Merge(latest, opened, opened)));
     }
 }

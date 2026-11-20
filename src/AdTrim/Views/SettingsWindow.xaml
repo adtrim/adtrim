@@ -159,16 +159,19 @@
       <Grid DockPanel.Dock="Top" Height="38" Background="Transparent" MouseLeftButtonDown="OnTitleBarMouseDown">
         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <TextBlock Text="Settings" Margin="16,0,0,0" VerticalAlignment="Center" Foreground="{StaticResource Text.Secondary}" FontSize="12"/>
-        <Button Grid.Column="1" Style="{StaticResource DialogCloseButton}" Click="OnDone" ToolTip="Close" AutomationProperties.Name="Close settings">
+        <Button Grid.Column="1" Style="{StaticResource DialogCloseButton}" Click="OnCancel" ToolTip="Cancel" AutomationProperties.Name="Close settings without saving">
           <Path Stroke="{StaticResource Text.Secondary}" StrokeThickness="1" Data="M0.5,0.5 L9.5,9.5 M9.5,0.5 L0.5,9.5"/>
         </Button>
       </Grid>
       <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource Border.Subtle}" BorderThickness="0,1,0,0" Padding="16,12">
         <Grid>
-          <TextBlock x:Name="FooterNote" Text="Changes apply right away and are shared by every AdTrim window."
-                     Foreground="{StaticResource Text.Tertiary}" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,120,0"/>
-          <Button x:Name="DoneButton" Content="Done" Style="{StaticResource Button.Primary}" HorizontalAlignment="Right" Padding="22,8"
-                  IsDefault="True" IsCancel="True" Click="OnDone"/>
+          <TextBlock x:Name="FooterNote" Text="Changes take effect when you save, in every AdTrim window."
+                     Foreground="{StaticResource Text.Tertiary}" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,200,0"/>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="CancelButton" Content="Cancel" Style="{StaticResource Button.Ghost}" Padding="18,8" Margin="0,0,8,0"
+                    IsCancel="True" Click="OnCancel"/>
+            <Button x:Name="SaveButton" Content="Save" Style="{StaticResource Button.Primary}" Padding="22,8" Click="OnSave"/>
+          </StackPanel>
         </Grid>
       </Border>
       <Grid>
@@ -248,7 +251,7 @@
                 <StackPanel>
                   <Border Style="{StaticResource Row}"><DockPanel>
                     <CheckBox x:Name="FrameAccurateSwitch" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="OnTimelineSwitch" AutomationProperties.Name="Frame-accurate seeking"/>
-                    <StackPanel><TextBlock Text="Frame-accurate seeking" Style="{StaticResource Name}"/><TextBlock Text="Lands exactly on the frame you click. Slower on recordings with long gaps between keyframes." Style="{StaticResource Desc}"/></StackPanel>
+                    <StackPanel><TextBlock Text="Frame-accurate seeking" Style="{StaticResource Name}"/><TextBlock Text="Timeline clicks show exactly the frame you click. When off, a click shows the nearest earlier keyframe, which can be a few seconds earlier." Style="{StaticResource Desc}"/></StackPanel>
                   </DockPanel></Border>
                   <Border Style="{StaticResource Row}" BorderThickness="0"><DockPanel>
                     <CheckBox x:Name="StartMutedSwitch" DockPanel.Dock="Right" Style="{StaticResource Switch}" Click="OnTimelineSwitch" AutomationProperties.Name="Start muted"/>
@@ -366,9 +369,9 @@
                       <TextBlock Text="Settings, caches, the crash log, and projects saved here when a recording's folder is read-only." Style="{StaticResource Desc}"/></StackPanel>
                   </DockPanel></Border>
                   <Border Style="{StaticResource Row}" BorderThickness="0"><DockPanel>
-                    <Button DockPanel.Dock="Right" Content="Reset…" Margin="16,0,0,0" VerticalAlignment="Center" Click="OnResetAll"/>
-                    <StackPanel><TextBlock Text="Reset all settings" Style="{StaticResource Name}"/>
-                      <TextBlock Text="Returns every setting in this window to its default and keeps a copy of the old settings file. Projects, recordings and window positions are not changed." Style="{StaticResource Desc}"/></StackPanel>
+                    <Button x:Name="RestoreDefaultsButton" DockPanel.Dock="Right" Content="Restore defaults" Margin="16,0,0,0" VerticalAlignment="Center" Click="OnResetAll"/>
+                    <StackPanel><TextBlock Text="Restore default settings" Style="{StaticResource Name}"/>
+                      <TextBlock Text="Shows every setting in this window at its default. Save to use them; a copy of the old settings file is kept. Projects, recordings and window positions are not changed." Style="{StaticResource Desc}"/></StackPanel>
                   </DockPanel></Border>
                 </StackPanel>
               </Border>

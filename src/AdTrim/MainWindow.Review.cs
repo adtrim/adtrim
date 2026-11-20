@@ -135,7 +135,7 @@ public partial class MainWindow
             if (ex is DamagedPreferencesException) ShowDamagedPreferencesBanner();
             MessageBox.Show(OwnedWindows.OfType<SettingsWindow>().FirstOrDefault() ?? (Window)this,
                 ex is DamagedPreferencesException
-                    ? "The settings file is damaged, so changes cannot be saved. Close Settings and choose Reset settings in the banner, or use Reset all settings under Storage."
+                    ? "The settings file is damaged, so changes cannot be saved. Choose Restore defaults under Storage and save, or close Settings and choose Reset settings in the banner."
                     : "The setting could not be saved. " + ex.Message, "Settings", MessageBoxButton.OK, MessageBoxImage.Warning);
             return null;
         }

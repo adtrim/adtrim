@@ -185,7 +185,7 @@
             <MenuItem Header="Show ruler ticks" IsCheckable="True" IsChecked="{Binding ShowRulerTicks, Mode=TwoWay}" Style="{StaticResource DropdownMenuItem}"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem x:Name="FrameAccurateSeekMenuItem"
-                      Header="Frame-accurate seek (slower)"
+                      Header="Frame-accurate seek"
                       IsCheckable="True"
                       Style="{StaticResource DropdownMenuItem}"
                       Click="OnToggleFrameAccurateSeek"/>

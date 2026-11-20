@@ -32,6 +32,8 @@ internal static partial class Program
 
     private static async Task CheckSettingsWindow(MainWindow window, MainViewModel vm, string directory)
     {
+        // Later checks rely on the smoke settings (source comments off); put them back afterwards.
+        var original = await UserPreferences.ReadAsync();
         var mainMenu = (Menu)window.FindName("MainMenu");
         var fileMenu = (MenuItem)mainMenu.Items[0];
         var settingsItem = (MenuItem)window.FindName("SettingsMenuItem");
@@ -49,7 +51,7 @@ internal static partial class Program
             Require(navigation.Length == panes.Length && navigation[0].IsChecked == true
                 && ((FrameworkElement)settings.FindName("EditingPane")).Visibility == Visibility.Visible,
                 "Settings opens on Editing with five categories");
-            var done = (Button)settings.FindName("DoneButton");
+            var save = (Button)settings.FindName("SaveButton");
             for (int i = 0; i < panes.Length; i++)
             {
                 navigation[i].IsChecked = true;
@@ -61,52 +63,90 @@ internal static partial class Program
                 foreach (var block in Descendants<TextBlock>(pane).Where(b => b.IsVisible && b.Text.Length > 0))
                     Require(block.Foreground is SolidColorBrush { Color: var c } && Brightness(c) > 0.3,
                         $"Settings text is readable on the dark background: \"{block.Text[..Math.Min(40, block.Text.Length)]}\"");
-                var bounds = done.TransformToAncestor(settings).TransformBounds(new Rect(done.RenderSize));
-                Require(bounds.Bottom <= settings.ActualHeight && bounds.Right <= settings.ActualWidth, $"Done stays visible on {panes[i]}");
+                var bounds = save.TransformToAncestor(settings).TransformBounds(new Rect(save.RenderSize));
+                Require(bounds.Bottom <= settings.ActualHeight && bounds.Right <= settings.ActualWidth, $"Save stays visible on {panes[i]}");
                 Capture(settings, Path.Combine(directory, $"settings-{panes[i]}.png"));
             }
 
             navigation[0].IsChecked = true;
             Require(((RadioButton)settings.FindName("StartImported")).IsChecked == true, "Settings shows imported markers as the starting choice");
-            var partName = (TextBox)settings.FindName("PartNameBox");
-            partName.Text = "Chapter";
+            Require(((Button)settings.FindName("CancelButton")).IsCancel && !save.IsDefault, "Esc cancels Settings; Enter in a text box does not save it");
+
+            // Nothing is saved until Save, and Cancel discards the draft.
+            var before = await UserPreferences.ReadAsync();
+            ((TextBox)settings.FindName("PartNameBox")).Text = "Chapter {n}";
+            SetSwitch(settings, "RulerSwitch", false);
             await Task.Delay(100);
-            Require(((TextBlock)settings.FindName("PartNameError")).IsVisible && WindowPreferences(window).SectionNameTemplate == SectionNames.DefaultTemplate,
-                "An unusable part name is explained and not saved");
-            partName.Text = "Chapter {n}";
-            for (int i = 0; i < 100 && vm.SectionNameTemplate != "Chapter {n}"; i++) await Task.Delay(20);
-            Require(vm.SectionNameTemplate == "Chapter {n}" && (await UserPreferences.ReadAsync()).SectionNameTemplate == "Chapter {n}",
-                "A part name change is saved and shown in the open window at once");
-            partName.Text = SectionNames.DefaultTemplate;
-
-            navigation[1].IsChecked = true;
-            var ruler = (CheckBox)settings.FindName("RulerSwitch");
-            ruler.IsChecked = false;
-            ruler.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
-            for (int i = 0; i < 100 && vm.ShowRulerTicks; i++) await Task.Delay(20);
-            Require(!vm.ShowRulerTicks && !(await UserPreferences.ReadAsync()).ShowRulerTicks, "Ruler ticks are saved, not forgotten at the next start");
-            ruler.IsChecked = true;
-            ruler.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
-            for (int i = 0; i < 100 && !vm.ShowRulerTicks; i++) await Task.Delay(20);
-
-            navigation[2].IsChecked = true;
-            var filename = (TextBox)settings.FindName("FilenameBox");
-            filename.Text = "no title";
-            await Task.Delay(100);
-            Require(((TextBlock)settings.FindName("FilenameError")).IsVisible
-                && (await UserPreferences.ReadAsync()).ExportFilenameTemplate == ExportNaming.DefaultTemplate,
-                "An export filename pattern without {title} is explained and not saved");
-            filename.Text = "{title} [AdTrim {version}]";
-            for (int i = 0; i < 100 && (await UserPreferences.ReadAsync()).ExportFilenameTemplate != "{title} [AdTrim {version}]"; i++) await Task.Delay(20);
-            Require(((TextBlock)settings.FindName("FilenamePreview")).Text.EndsWith($"[AdTrim {AppVersion.Numeric}].mp4"),
-                "The filename preview shows the AdTrim version");
-            filename.Text = ExportNaming.DefaultTemplate;
-            for (int i = 0; i < 100 && (await UserPreferences.ReadAsync()).ExportFilenameTemplate != ExportNaming.DefaultTemplate; i++) await Task.Delay(20);
-
-            done.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
-            Require(!settings.IsVisible, "Done closes Settings");
+            Require(vm.SectionNameTemplate == before.SectionNameTemplate && vm.ShowRulerTicks
+                && (await UserPreferences.ReadAsync()).SectionNameTemplate == before.SectionNameTemplate,
+                "Settings changes wait for Save");
+            Click(settings, "CancelButton");
+            var cancelled = await UserPreferences.ReadAsync();
+            Require(!settings.IsVisible && !settings.Saved
+                && cancelled.SectionNameTemplate == before.SectionNameTemplate && cancelled.ShowRulerTicks && vm.ShowRulerTicks,
+                "Cancel discards every pane's changes");
         }
         finally { if (settings.IsVisible) settings.Close(); }
+
+        settings = OpenSettingsForCheck(window);
+        try
+        {
+            var partName = (TextBox)settings.FindName("PartNameBox");
+            partName.Text = "Chapter";
+            Click(settings, "SaveButton");
+            Require(settings.IsVisible && ((TextBlock)settings.FindName("PartNameError")).IsVisible
+                && ((FrameworkElement)settings.FindName("EditingPane")).IsVisible
+                && (await UserPreferences.ReadAsync()).SectionNameTemplate == SectionNames.DefaultTemplate,
+                "An unusable part name keeps Settings open on its pane and saves nothing");
+            partName.Text = "Chapter {n}";
+            SetSwitch(settings, "RulerSwitch", false);
+            var filename = (TextBox)settings.FindName("FilenameBox");
+            filename.Text = "no title";
+            Click(settings, "SaveButton");
+            Require(settings.IsVisible && ((TextBlock)settings.FindName("FilenameError")).IsVisible
+                && ((FrameworkElement)settings.FindName("ExportPane")).IsVisible
+                && (await UserPreferences.ReadAsync()).ExportFilenameTemplate == ExportNaming.DefaultTemplate,
+                "An export filename pattern without {title} keeps Settings open on its pane and saves nothing");
+            filename.Text = "{title} [AdTrim {version}]";
+            Require(((TextBlock)settings.FindName("FilenamePreview")).Text.EndsWith($"[AdTrim {AppVersion.Numeric}].mp4"),
+                "The filename preview shows the AdTrim version");
+
+            // Another window saves a setting this one did not touch; Save must not undo it.
+            await ChangeSettings(window, p => p with { StartMuted = true });
+            Click(settings, "SaveButton");
+            for (int i = 0; i < 100 && settings.IsVisible; i++) await Task.Delay(20);
+            var saved = await UserPreferences.ReadAsync();
+            Require(!settings.IsVisible && settings.Saved && saved.SectionNameTemplate == "Chapter {n}" && !saved.ShowRulerTicks
+                && saved.ExportFilenameTemplate == "{title} [AdTrim {version}]" && saved.StartMuted,
+                "Save writes the changes from every pane together and keeps another window's change");
+            Require(vm.SectionNameTemplate == "Chapter {n}" && !vm.ShowRulerTicks, "Saved settings show in the open window at once");
+        }
+        finally { if (settings.IsVisible) settings.Close(); }
+
+        settings = OpenSettingsForCheck(window);
+        try
+        {
+            Click(settings, "RestoreDefaultsButton");
+            Require((await UserPreferences.ReadAsync()).SectionNameTemplate == "Chapter {n}", "Restore defaults waits for Save");
+            Click(settings, "SaveButton");
+            for (int i = 0; i < 100 && settings.IsVisible; i++) await Task.Delay(20);
+            var reset = await UserPreferences.ReadAsync();
+            Require(!settings.IsVisible && reset.SectionNameTemplate == SectionNames.DefaultTemplate && reset.ShowRulerTicks && !reset.StartMuted
+                && reset.ExportFilenameTemplate == ExportNaming.DefaultTemplate && reset.FrameAccurateSeek && vm.ShowRulerTicks,
+                "Restore defaults and Save returns every setting to its default");
+        }
+        finally { if (settings.IsVisible) settings.Close(); }
+        await ChangeSettings(window, p => p.WithSettingsFrom(original));
+    }
+
+    private static void Click(Window window, string name)
+        => ((Button)window.FindName(name)).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+
+    private static void SetSwitch(Window window, string name, bool on)
+    {
+        var toggle = (CheckBox)window.FindName(name);
+        toggle.IsChecked = on;
+        toggle.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
     }
 
     private static double Brightness(Color c) => (0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B) / 255;

@@ -125,7 +125,7 @@ public sealed class MpvPreviewViewModel : INotifyPropertyChanged, IDisposable
         private set => Set(ref _videoAspect, value);
     }
 
-    private bool _fastSeek = true;
+    private bool _fastSeek;
     public bool FastSeek => _fastSeek;
 
     public void SetFastSeek(bool enabled)

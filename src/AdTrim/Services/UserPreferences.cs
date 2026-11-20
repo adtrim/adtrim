@@ -23,7 +23,7 @@ public sealed record UserPreferences
     /// <summary>Name of segments the user has not named, with {n} for the number.</summary>
     public string SectionNameTemplate { get; init; } = SectionNames.DefaultTemplate;
     public bool ShowRulerTicks { get; init; } = true;
-    public bool FrameAccurateSeek { get; init; }
+    public bool FrameAccurateSeek { get; init; } = true;
     public bool StartMuted { get; init; }
     /// <summary>Where exports are saved; null means beside the recording.</summary>
     public string? ExportFolder { get; init; }

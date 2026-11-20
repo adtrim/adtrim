@@ -10,28 +10,29 @@ using AdTrim.ViewModels;
 namespace AdTrim.Views;
 
 /// <summary>
-/// Every lasting choice in one place. Each change is saved at once through
-/// <see cref="ChangeAsync"/>, which also updates every open recording window, so the
-/// window has nothing to apply or cancel.
+/// Every lasting choice in one place. The window edits a draft; Save writes only the settings
+/// that were changed here, on top of the latest file, and shares them with every recording
+/// window. Cancel, Esc and the close button discard the draft.
 /// </summary>
 public partial class SettingsWindow : Window
 {
     private readonly Func<Func<UserPreferences, UserPreferences>, Task<UserPreferences?>> _change;
     private readonly Func<Task<(UserPreferences Saved, string? Kept)?>> _resetAll;
-    private UserPreferences _current;
+    private readonly UserPreferences _opened;
     private bool _loading;
+    private bool _restoreDefaults;
 
     /// <param name="current">The settings as the opening window knows them.</param>
-    /// <param name="change">Saves one change and shares it with every window; null when it could not be saved.</param>
-    /// <param name="resetAll">Resets every setting; null when it could not be done.</param>
+    /// <param name="change">Saves a change and shares it with every window; null when it could not be saved.</param>
+    /// <param name="resetAll">Resets every setting, keeping a copy of the old file; null when it could not be done.</param>
     public SettingsWindow(UserPreferences current, Func<Func<UserPreferences, UserPreferences>, Task<UserPreferences?>> change,
         Func<Task<(UserPreferences Saved, string? Kept)?>> resetAll)
     {
         InitializeComponent();
-        _current = current;
+        _opened = current;
         _change = change;
         _resetAll = resetAll;
-        Show(current);
+        Show(current, Application.Current is App app && app.AutomaticUpdatesEnabled);
         Loaded += async (_, _) =>
         {
             Navigation.Children.OfType<RadioButton>().First().Focus();
@@ -41,10 +42,10 @@ public partial class SettingsWindow : Window
         };
     }
 
-    /// <summary>The settings the window currently shows, for checks.</summary>
-    internal UserPreferences Current => _current;
+    /// <summary>True once Save has written the draft.</summary>
+    public bool Saved { get; private set; }
 
-    private void Show(UserPreferences p)
+    private void Show(UserPreferences p, bool automaticUpdates)
     {
         _loading = true;
         try
@@ -69,19 +70,54 @@ public partial class SettingsWindow : Window
             FormatTs.IsChecked = p.ExportFormat == ExportFormat.Ts;
             SourceCommentSwitch.IsChecked = p.AddSourceExportComment;
             DeleteSidecarSwitch.IsChecked = p.DeleteSidecarAfterExport;
-            AutomaticUpdatesSwitch.IsChecked = Application.Current is App app && app.AutomaticUpdatesEnabled;
+            AutomaticUpdatesSwitch.IsChecked = automaticUpdates;
             SelectAcceleration(p.ExportAcceleration);
         }
         finally { _loading = false; }
     }
 
-    private async Task<bool> ChangeAsync(Func<UserPreferences, UserPreferences> change)
+    /// <summary>The draft: <paramref name="basis"/> with every setting this window shows.</summary>
+    internal UserPreferences Draft(UserPreferences basis) => basis with
     {
-        if (_loading) return false;
-        var saved = await _change(change);
-        if (saved is null) { Show(_current); return false; }
-        _current = saved;
-        return true;
+        NewFileMarkerSource = StartAdTrim.IsChecked == true ? NewFileMarkerSource.AdTrim
+            : StartNone.IsChecked == true ? NewFileMarkerSource.None : NewFileMarkerSource.Imported,
+        SectionNameTemplate = PartNameBox.Text.Trim(),
+        ShowThumbnails = ThumbnailsSwitch.IsChecked == true,
+        ShowWaveform = WaveformSwitch.IsChecked == true,
+        ShowRulerTicks = RulerSwitch.IsChecked == true,
+        FrameAccurateSeek = FrameAccurateSwitch.IsChecked == true,
+        StartMuted = StartMutedSwitch.IsChecked == true,
+        ExportFolder = FolderFixed.IsChecked == true ? ExportFolderBox.Text.Trim() : null,
+        ExportFilenameTemplate = FilenameBox.Text.Trim(),
+        ExportFormat = FormatTs.IsChecked == true ? ExportFormat.Ts : ExportFormat.Mp4,
+        ExportAcceleration = (AccelerationSelector.SelectedItem as ExportAccelerationOption)?.Id ?? basis.ExportAcceleration,
+        AddSourceExportComment = SourceCommentSwitch.IsChecked == true,
+        DeleteSidecarAfterExport = DeleteSidecarSwitch.IsChecked == true,
+    };
+
+    /// <summary>
+    /// Applies only what this window changed (<paramref name="edited"/> against <paramref name="opened"/>) to the
+    /// latest saved settings, so a setting another window saved meanwhile is not undone.
+    /// </summary>
+    internal static UserPreferences Merge(UserPreferences latest, UserPreferences opened, UserPreferences edited)
+    {
+        static T Pick<T>(T edited, T opened, T latest) => EqualityComparer<T>.Default.Equals(edited, opened) ? latest : edited;
+        return latest with
+        {
+            NewFileMarkerSource = Pick(edited.NewFileMarkerSource, opened.NewFileMarkerSource, latest.NewFileMarkerSource),
+            SectionNameTemplate = Pick(edited.SectionNameTemplate, opened.SectionNameTemplate, latest.SectionNameTemplate),
+            ShowThumbnails = Pick(edited.ShowThumbnails, opened.ShowThumbnails, latest.ShowThumbnails),
+            ShowWaveform = Pick(edited.ShowWaveform, opened.ShowWaveform, latest.ShowWaveform),
+            ShowRulerTicks = Pick(edited.ShowRulerTicks, opened.ShowRulerTicks, latest.ShowRulerTicks),
+            FrameAccurateSeek = Pick(edited.FrameAccurateSeek, opened.FrameAccurateSeek, latest.FrameAccurateSeek),
+            StartMuted = Pick(edited.StartMuted, opened.StartMuted, latest.StartMuted),
+            ExportFolder = Pick(edited.ExportFolder, opened.ExportFolder, latest.ExportFolder),
+            ExportFilenameTemplate = Pick(edited.ExportFilenameTemplate, opened.ExportFilenameTemplate, latest.ExportFilenameTemplate),
+            ExportFormat = Pick(edited.ExportFormat, opened.ExportFormat, latest.ExportFormat),
+            ExportAcceleration = Pick(edited.ExportAcceleration, opened.ExportAcceleration, latest.ExportAcceleration),
+            AddSourceExportComment = Pick(edited.AddSourceExportComment, opened.AddSourceExportComment, latest.AddSourceExportComment),
+            DeleteSidecarAfterExport = Pick(edited.DeleteSidecarAfterExport, opened.DeleteSidecarAfterExport, latest.DeleteSidecarAfterExport),
+        };
     }
 
     // ---- Navigation ----
@@ -93,82 +129,68 @@ public partial class SettingsWindow : Window
         PaneScroll.ScrollToTop();
     }
 
-    // ---- Editing ----
-    private async void OnStartingMarkers(object sender, RoutedEventArgs e)
+    private void ShowPane(RadioButton navigation, Control focus)
     {
-        if (sender is RadioButton { Tag: string tag } && Enum.TryParse<NewFileMarkerSource>(tag, out var source))
-            await ChangeAsync(p => p with { NewFileMarkerSource = source });
+        navigation.IsChecked = true;
+        UpdateLayout();
+        focus.Focus();
     }
 
-    private async void OnPartNameChanged(object sender, TextChangedEventArgs e)
+    // ---- Editing ----
+    private void OnStartingMarkers(object sender, RoutedEventArgs e) { }
+
+    private void OnPartNameChanged(object sender, TextChangedEventArgs e)
     {
-        if (PartNamePreview is null) return;
-        ShowPartNamePreview();
-        if (SectionNames.IsValid(PartNameBox.Text))
-        {
-            string template = PartNameBox.Text.Trim();
-            await ChangeAsync(p => p with { SectionNameTemplate = template });
-        }
+        if (PartNamePreview is not null) ShowPartNamePreview();
     }
 
     private void ShowPartNamePreview()
     {
         bool valid = SectionNames.IsValid(PartNameBox.Text);
         PartNamePreview.Text = valid ? string.Join(", ", Enumerable.Range(1, 3).Select(n => SectionNames.Format(PartNameBox.Text, n))) : "";
-        PartNameError.Text = "Include {n} once, for example: Chapter {n}. Until then, the last valid name is kept.";
+        PartNameError.Text = "Include {n} once, for example: Chapter {n}.";
         PartNameError.Visibility = valid ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void OnPartNameDefault(object sender, RoutedEventArgs e) => PartNameBox.Text = SectionNames.DefaultTemplate;
 
     // ---- Timeline and playback ----
-    private async void OnTimelineSwitch(object sender, RoutedEventArgs e)
-    {
-        bool thumbnails = ThumbnailsSwitch.IsChecked == true, waveform = WaveformSwitch.IsChecked == true,
-            ruler = RulerSwitch.IsChecked == true, accurate = FrameAccurateSwitch.IsChecked == true, muted = StartMutedSwitch.IsChecked == true;
-        await ChangeAsync(p => p with
-        {
-            ShowThumbnails = thumbnails, ShowWaveform = waveform, ShowRulerTicks = ruler, FrameAccurateSeek = accurate, StartMuted = muted,
-        });
-    }
+    private void OnTimelineSwitch(object sender, RoutedEventArgs e) { }
 
     // ---- Export ----
-    private async void OnFolderChoice(object sender, RoutedEventArgs e)
+    private void OnFolderChoice(object sender, RoutedEventArgs e)
     {
         if (ExportFolderBox is null) return;
         ShowFolderState();
-        if (FolderBeside.IsChecked == true) await ChangeAsync(p => p with { ExportFolder = null });
-        else if (Directory.Exists(ExportFolderBox.Text.Trim()))
-        {
-            string folder = ExportFolderBox.Text.Trim();
-            await ChangeAsync(p => p with { ExportFolder = folder });
-        }
-        else if (!_loading) OnBrowseFolder(sender, e);
+        if (!_loading && FolderFixed.IsChecked == true && ExportFolderBox.Text.Trim().Length == 0) OnBrowseFolder(sender, e);
     }
 
-    private async void OnExportFolderEdited(object sender, RoutedEventArgs e)
-    {
-        string folder = ExportFolderBox.Text.Trim();
-        ShowFolderState();
-        if (FolderFixed.IsChecked == true && folder != (_current.ExportFolder ?? "") && Directory.Exists(folder))
-            await ChangeAsync(p => p with { ExportFolder = folder });
-    }
+    private void OnExportFolderEdited(object sender, RoutedEventArgs e) => ShowFolderState();
 
-    private async void OnBrowseFolder(object sender, RoutedEventArgs e)
+    private void OnBrowseFolder(object sender, RoutedEventArgs e)
     {
         var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "Save exports to" };
         if (Directory.Exists(ExportFolderBox.Text.Trim())) dialog.InitialDirectory = ExportFolderBox.Text.Trim();
         if (dialog.ShowDialog(this) != true)
         {
-            // Choosing "This folder" without picking one leaves the setting as it was.
-            if (_current.ExportFolder is null) { _loading = true; FolderBeside.IsChecked = true; _loading = false; ShowFolderState(); }
+            // Choosing "This folder" without picking one goes back to the recording's folder.
+            if (ExportFolderBox.Text.Trim().Length == 0) { _loading = true; FolderBeside.IsChecked = true; _loading = false; ShowFolderState(); }
             return;
         }
         ExportFolderBox.Text = dialog.FolderName;
         _loading = true; FolderFixed.IsChecked = true; _loading = false;
         ShowFolderState();
-        string folder = dialog.FolderName;
-        await ChangeAsync(p => p with { ExportFolder = folder });
+    }
+
+    /// <summary>A newly typed folder must exist. The folder already saved may be unplugged; export setup reports that.</summary>
+    private string? FolderError()
+    {
+        if (FolderFixed.IsChecked != true) return null;
+        string folder = ExportFolderBox.Text.Trim();
+        if (folder.Length == 0) return "Choose a folder, or save exports beside the recording.";
+        if (Directory.Exists(folder)) return null;
+        return string.Equals(folder, _opened.ExportFolder, StringComparison.OrdinalIgnoreCase)
+            ? null : "This folder does not exist. Choose one that does.";
     }
 
     private void ShowFolderState()
@@ -176,20 +198,16 @@ public partial class SettingsWindow : Window
         bool fixedFolder = FolderFixed.IsChecked == true;
         ExportFolderBox.IsEnabled = BrowseFolderButton.IsEnabled = fixedFolder;
         string folder = ExportFolderBox.Text.Trim();
-        bool missing = fixedFolder && folder.Length > 0 && !Directory.Exists(folder);
-        ExportFolderError.Text = missing ? "This folder is not available right now. Exports save beside the recording until it is." : "";
-        ExportFolderError.Visibility = missing ? Visibility.Visible : Visibility.Collapsed;
+        string? error = FolderError();
+        if (error is null && fixedFolder && folder.Length > 0 && !Directory.Exists(folder))
+            error = "This folder is not available right now. Exports save beside the recording until it is.";
+        ExportFolderError.Text = error ?? "";
+        ExportFolderError.Visibility = error is null ? Visibility.Collapsed : Visibility.Visible;
     }
 
-    private async void OnFilenameChanged(object sender, TextChangedEventArgs e)
+    private void OnFilenameChanged(object sender, TextChangedEventArgs e)
     {
-        if (FilenamePreview is null) return;
-        ShowFilenamePreview();
-        if (ExportNaming.TemplateError(FilenameBox.Text) is null)
-        {
-            string template = FilenameBox.Text.Trim();
-            await ChangeAsync(p => p with { ExportFilenameTemplate = template });
-        }
+        if (FilenamePreview is not null) ShowFilenamePreview();
     }
 
     private void ShowFilenamePreview()
@@ -198,18 +216,13 @@ public partial class SettingsWindow : Window
         FilenamePreview.Text = error is null
             ? ExportNaming.ApplyTemplate(FilenameBox.Text, "Sample Show - s02e05 - The Long Weekend", DateOnly.FromDateTime(DateTime.Now)) + ".mp4"
             : "";
-        FilenameError.Text = error is null ? "" : error + " Until then, the last valid pattern is kept.";
+        FilenameError.Text = error ?? "";
         FilenameError.Visibility = error is null ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void OnFilenameDefault(object sender, RoutedEventArgs e) => FilenameBox.Text = ExportNaming.DefaultTemplate;
 
-    private async void OnFormatChoice(object sender, RoutedEventArgs e)
-    {
-        if (FormatTs is null) return;
-        var format = FormatTs.IsChecked == true ? ExportFormat.Ts : ExportFormat.Mp4;
-        await ChangeAsync(p => p with { ExportFormat = format });
-    }
+    private void OnFormatChoice(object sender, RoutedEventArgs e) { }
 
     // Lists adapters without testing them, as export setup does: a benchmark belongs to Evaluate options.
     private async Task LoadAccelerationOptionsAsync()
@@ -221,7 +234,7 @@ public partial class SettingsWindow : Window
         options.AddRange(adapters.Where(a => a.Encoder is not null).Select(a => new ExportAccelerationOption(a.Id, a.Name, a)));
         options.Add(ExportAccelerationOption.Software);
         _loading = true;
-        try { AccelerationSelector.ItemsSource = options; SelectAcceleration(_current.ExportAcceleration); }
+        try { AccelerationSelector.ItemsSource = options; SelectAcceleration(_opened.ExportAcceleration); }
         finally { _loading = false; }
     }
 
@@ -238,29 +251,12 @@ public partial class SettingsWindow : Window
         AccelerationSelector.SelectedItem = option;
     }
 
-    private async void OnAccelerationChoice(object sender, SelectionChangedEventArgs e)
-    {
-        if (AccelerationSelector.SelectedItem is ExportAccelerationOption option)
-            await ChangeAsync(p => p with { ExportAcceleration = option.Id });
-    }
+    private void OnAccelerationChoice(object sender, SelectionChangedEventArgs e) { }
 
-    private async void OnExportSwitch(object sender, RoutedEventArgs e)
-    {
-        bool comment = SourceCommentSwitch.IsChecked == true, deleteSidecar = DeleteSidecarSwitch.IsChecked == true;
-        await ChangeAsync(p => p with { AddSourceExportComment = comment, DeleteSidecarAfterExport = deleteSidecar });
-    }
+    private void OnExportSwitch(object sender, RoutedEventArgs e) { }
 
     // ---- Updates ----
-    private void OnAutomaticUpdates(object sender, RoutedEventArgs e)
-    {
-        if (Application.Current is not App app) return;
-        try { app.SetAutomaticUpdates(AutomaticUpdatesSwitch.IsChecked == true); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            AutomaticUpdatesSwitch.IsChecked = app.AutomaticUpdatesEnabled;
-            MessageBox.Show(this, "The update setting could not be saved. " + ex.Message, "Settings", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
+    private void OnAutomaticUpdates(object sender, RoutedEventArgs e) { }
 
     private async void OnCheckNow(object sender, RoutedEventArgs e)
     {
@@ -322,20 +318,11 @@ public partial class SettingsWindow : Window
         { MessageBox.Show(this, "The folder could not be opened. " + ex.Message, "Settings", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
-    private async void OnResetAll(object sender, RoutedEventArgs e)
+    private void OnResetAll(object sender, RoutedEventArgs e)
     {
-        if (MessageBox.Show(this, "Return every setting in this window to its default? A copy of the current settings file is kept.",
-                "Reset all settings", MessageBoxButton.OKCancel, MessageBoxImage.Question, MessageBoxResult.Cancel) != MessageBoxResult.OK) return;
-        var result = await _resetAll();
-        if (result is not { } reset) return;
-        _current = reset.Saved;
-        if (Application.Current is App app)
-        {
-            try { app.SetAutomaticUpdates(true); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-        }
-        Show(_current);
-        FooterNote.Text = reset.Kept is null ? "Settings were reset." : $"Settings were reset. The old file was kept as {Path.GetFileName(reset.Kept)}.";
+        Show(_opened.WithSettingsFrom(new UserPreferences()), true);
+        _restoreDefaults = true;
+        FooterNote.Text = "Defaults are shown. Save to use them; a copy of the current settings file is kept.";
     }
 
     // ---- Window ----
@@ -344,5 +331,37 @@ public partial class SettingsWindow : Window
         if (e.ChangedButton == System.Windows.Input.MouseButton.Left) DragMove();
     }
 
-    private void OnDone(object sender, RoutedEventArgs e) => Close();
+    private void OnCancel(object sender, RoutedEventArgs e) => Close();
+
+    private async void OnSave(object sender, RoutedEventArgs e)
+    {
+        if (!SectionNames.IsValid(PartNameBox.Text)) { ShowPane(NavEditing, PartNameBox); return; }
+        if (FolderError() is not null) { ShowFolderState(); ShowPane(NavExport, ExportFolderBox); return; }
+        if (ExportNaming.TemplateError(FilenameBox.Text) is not null) { ShowPane(NavExport, FilenameBox); return; }
+        SaveButton.IsEnabled = CancelButton.IsEnabled = false;
+        try
+        {
+            var opened = _opened;
+            if (_restoreDefaults)
+            {
+                if (await _resetAll() is not { } reset) return;
+                opened = reset.Saved;
+            }
+            var edited = Draft(opened);
+            if (edited != opened && await _change(latest => Merge(latest, opened, edited)) is null) return;
+            bool automaticUpdates = AutomaticUpdatesSwitch.IsChecked == true;
+            if (Application.Current is App app && app.AutomaticUpdatesEnabled != automaticUpdates)
+            {
+                try { app.SetAutomaticUpdates(automaticUpdates); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    MessageBox.Show(this, "The update setting could not be saved. " + ex.Message, "Settings", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+            }
+            Saved = true;
+            Close();
+        }
+        finally { SaveButton.IsEnabled = CancelButton.IsEnabled = true; }
+    }
 }
