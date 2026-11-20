@@ -1757,12 +1757,7 @@ public partial class MainWindow : Window
     {
         if (_activeExportDialog is null) return false;
         _activeExportDialog.Focus();
-        vm.Banner = new BannerInfo(StatusKind.Warning,
-            "Export is open.",
-            _activeExportDialog.IsExportInFlight
-                ? "Cancel or finish the export before opening or closing a project."
-                : "Return to editing before opening or closing a project.",
-            Array.Empty<BannerAction>());
+        vm.Banner = ExportHandoff.ExportOpenBanner(_activeExportDialog.IsExportInFlight);
         return true;
     }
 
@@ -1943,7 +1938,7 @@ public partial class MainWindow : Window
         _activeExportDialog = dlg;
         var exportPreferences = await UserPreferences.LoadAsync();
         dlg.Bind(vm, _media, _preferences.ExportAcceleration, exportPreferences.ExportFormat, exportPreferences.DeleteSidecarAfterExport,
-            vm.SourcePath is { } source && CanCommentSource(source) && exportPreferences.AddSourceExportComment
+            vm.SourcePath is { } source && ExportHandoff.CanCommentSource(source) && exportPreferences.AddSourceExportComment
                 ? AfterExportStep.SourceComment : AfterExportStep.RecordExport,
             exportPreferences.ExportFolder, exportPreferences.ExportFilenameTemplate);
         dlg.Closed += async (_, _) =>
@@ -2023,25 +2018,7 @@ public partial class MainWindow : Window
     /// whether the deletion actually happened. Empty string if nothing to do.
     /// </summary>
     private string MaybeDeleteSidecar(string sourcePath, bool shouldDelete)
-    {
-        if (!shouldDelete) return string.Empty;
-        _store ??= new ProjectStore();
-        int present = _store.CandidateSidecarPathsFor(sourcePath).Count(File.Exists);
-        if (present == 0) return " Sidecar already absent.";
-        // Only projects this window could have loaded; anything else was never part of this export.
-        var existing = _sourceFingerprint is null ? Array.Empty<string>() : _store.DeletableSidecarsFor(sourcePath, _sourceFingerprint);
-        string keptNote = present > existing.Count ? " A project that could not be read was kept." : "";
-        if (existing.Count == 0) return keptNote;
-        try
-        {
-            foreach (var sidecar in existing) File.Delete(sidecar);
-            return (existing.Count == 1 ? " Sidecar deleted." : $" {existing.Count} sidecars deleted.") + keptNote;
-        }
-        catch (Exception ex)
-        {
-            return $" Sidecar delete failed: {ex.Message}";
-        }
-    }
+        => ExportHandoff.DeleteSidecars(_store ??= new ProjectStore(), sourcePath, _sourceFingerprint, shouldDelete);
 
     private void OnBannerActionClick(object sender, RoutedEventArgs e)
     {

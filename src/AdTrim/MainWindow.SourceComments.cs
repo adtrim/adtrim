@@ -22,51 +22,15 @@ public partial class MainWindow
     {
         string? commentNote = await AddSourceCommentAsync(vm, view, ct);
         bool commentFailed = view.SourceCommentFailed;
-        bool busy = vm.IsBusy;
-        _saves.StopAutosave();
-        vm.IsBusy = true;
         view.SourceCommentFailed = true;
-        try
-        {
-            if (view.AcceptedPlan is not { } plan || _sourceFingerprint is null || _store is null)
-                throw new IOException("The source project is unavailable.");
-            if (SourceCommentService.HasPendingUpdate(plan.SourcePath))
-                throw new IOException("Source comment recovery must finish before the project can be updated.");
-            // The video is already published. Cancelling the comment step must not lose its record.
-            await _saves.WaitForIdleAsync();
-            if (ProjectStore.FingerprintOf(plan.SourcePath, _sourceFingerprint.DurationUs) != _sourceFingerprint)
-                throw new IOException("The source changed before its export could be recorded.");
-            vm.LastExport = new("AdTrim", AppVersion.Numeric, DateTimeOffset.UtcNow, _sourceFingerprint);
-            if (!await _saves.SaveAsync(vm)) throw new IOException("The project sidecar could not be saved.");
-            view.SourceCommentFailed = commentFailed;
-            return (commentNote is null ? "" : commentNote + " ") + "Export record saved to project sidecar.";
-        }
-        catch (Exception ex)
-        {
-            return (commentNote is null ? "" : commentNote + " ") + "Export record was not saved: " + ex.Message;
-        }
-        finally { vm.IsBusy = busy; }
+        var (note, recorded) = await ExportHandoff.RecordExportAsync(vm, view.AcceptedPlan, _sourceFingerprint, _store, _saves, commentNote);
+        if (recorded) view.SourceCommentFailed = commentFailed;
+        return note;
     }
-
-    /// <summary>Only MP4 recordings get the Windows-visible export comment.</summary>
-    private static bool CanCommentSource(string sourcePath)
-        => Path.GetExtension(sourcePath).Equals(".mp4", StringComparison.OrdinalIgnoreCase);
 
     // Read when the export starts, so its progress list shows the comment step exactly when it will run.
-    private async Task<SourceCommentChoice> ReadSourceCommentChoiceAsync(ExportPlan plan)
-    {
-        if (!CanCommentSource(plan.SourcePath)) return default;
-        UserPreferences preferences;
-        try { preferences = await UserPreferences.ReadAsync(); }
-        // No settings file yet (first launch): the File menu's current choice applies.
-        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { preferences = _preferences; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            if (ex is DamagedPreferencesException) ShowDamagedPreferencesBanner();
-            return new(false, "Source comment was not added because saved preferences could not be read. " + ex.Message);
-        }
-        return new(preferences.AddSourceExportComment);
-    }
+    private Task<SourceCommentChoice> ReadSourceCommentChoiceAsync(ExportPlan plan)
+        => ExportHandoff.ChooseSourceCommentAsync(plan, () => UserPreferences.ReadAsync(), _preferences, ShowDamagedPreferencesBanner);
 
     private async Task<string?> AddSourceCommentAsync(MainViewModel vm, ExportView view, CancellationToken ct)
     {
