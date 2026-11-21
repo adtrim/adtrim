@@ -95,6 +95,9 @@ public sealed class PlaybackController(IPlaybackScreen screen)
         if (screen.Current is not { } vm) return;
         ResetShuttle();
         if (vm.IsBusy && !screen.Analyzing) return;
+        // "Paused." or "Playing 2×" from the shuttle no longer describes what Space just did.
+        if (_shuttleNotice is not null && vm.StatusOverride == _shuttleNotice) vm.ClearStatus();
+        _shuttleNotice = null;
         if (vm.IsCollapsed)
         {
             if (vm.KeptTimeline.DurationUs > 0 && !After.IsLoading) After.PlayPause();
@@ -154,6 +157,13 @@ public sealed class PlaybackController(IPlaybackScreen screen)
     private int _shuttle;
     private DispatcherTimer? _rewindTimer;
     private const int RewindTickMs = 100;
+    private string? _shuttleNotice;
+
+    private void ShuttleNotice(MainViewModel vm, string message)
+    {
+        _shuttleNotice = message;
+        screen.Notice(vm, StatusKind.Info, message);
+    }
 
     /// <summary>Positive: forward playback rate; negative: rewind rate; 0: neither.</summary>
     public int ShuttleRate => _shuttle;
@@ -167,7 +177,7 @@ public sealed class PlaybackController(IPlaybackScreen screen)
             ResetShuttle();
             After.Pause();
             Before.Pause();
-            screen.Notice(vm, StatusKind.Info, "Paused.");
+            ShuttleNotice(vm, "Paused.");
             return;
         }
         if (key == Key.L)
@@ -183,7 +193,7 @@ public sealed class PlaybackController(IPlaybackScreen screen)
             }
             After.SetSpeed(_shuttle);
             Before.SetSpeed(_shuttle);
-            screen.Notice(vm, StatusKind.Info, $"Playing {_shuttle}×. K pauses.");
+            ShuttleNotice(vm, $"Playing {_shuttle}×. K pauses.");
             return;
         }
         // J: rewind by stepping the playhead backward (mpv has no cheap reverse playback).
@@ -194,7 +204,7 @@ public sealed class PlaybackController(IPlaybackScreen screen)
         _rewindTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(RewindTickMs), DispatcherPriority.Input, (_, _) => RewindTick(),
             Dispatcher.CurrentDispatcher);
         _rewindTimer.Start();
-        screen.Notice(vm, StatusKind.Info, $"Rewinding {-_shuttle}×. K stops.");
+        ShuttleNotice(vm, $"Rewinding {-_shuttle}×. K stops.");
     }
 
     public void RewindTick()
@@ -204,7 +214,7 @@ public sealed class PlaybackController(IPlaybackScreen screen)
         { StopRewind(); return; }
         long step = RewindTickMs * 1_000L * -_shuttle;
         long position = vm.IsCollapsed ? vm.TimelinePositionUs : vm.PlayheadUs;
-        if (position <= 0) { ResetShuttle(); screen.Notice(vm, StatusKind.Info, "Reached the start."); return; }
+        if (position <= 0) { ResetShuttle(); ShuttleNotice(vm, "Reached the start."); return; }
         long target = Math.Max(0, position - step);
         SeekTo(vm, vm.IsCollapsed ? vm.KeptTimeline.ToSource(target) : target, exact: false);
     }

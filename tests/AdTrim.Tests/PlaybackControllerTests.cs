@@ -21,7 +21,7 @@ public sealed class PlaybackControllerTests
         public bool Switching { get; set; }
         public bool Analyzing { get; set; }
         public List<string> Notices { get; } = new();
-        public void Notice(MainViewModel vm, StatusKind kind, string message) => Notices.Add(message);
+        public void Notice(MainViewModel vm, StatusKind kind, string message) { Notices.Add(message); vm.StatusOverride = message; }
         public void UpdateNoFrameOverlay(MainViewModel vm) { }
         public void ShowFrameFailure(MainViewModel vm, string status) { }
     }
@@ -134,6 +134,22 @@ public sealed class PlaybackControllerTests
         playback.Shuttle(vm, Key.J);
         Assert.Equal(-1, playback.ShuttleRate);
         playback.StopRewind();
+    }
+
+    // K showed "Paused."; Space then played the video and the status still said "Paused.".
+    [Fact]
+    public void SpaceReplacesAShuttleStatusButNotOtherMessages()
+    {
+        var vm = Recording();
+        var playback = new PlaybackController(_screen);
+        playback.Shuttle(vm, Key.K);
+        Assert.Equal("Paused.", vm.StatusOverride);
+        playback.PlayPauseBoth();
+        Assert.Null(vm.StatusOverride);
+        playback.Shuttle(vm, Key.K);
+        vm.StatusOverride = "Moved marker.";
+        playback.PlayPauseBoth();
+        Assert.Equal("Moved marker.", vm.StatusOverride);
     }
 
     [Fact]
