@@ -26,7 +26,7 @@ public partial class MainWindow
         public MpvPreviewViewModel PreviewBefore => window._playback.Before;
         public MediaInfo? Media => window._media;
         public ProjectStore? Store => window._store;
-        public UserPreferences Preferences => window._preferences;
+        public UserPreferences Preferences => window._prefs.Current;
         public ExportView? ActiveExport => window._activeExportDialog;
         public DispatcherTimer? RewindTimer => window._playback.RewindTimer;
         public AudioLevelPass? AudioPass => window._timelineMedia.AudioPass;

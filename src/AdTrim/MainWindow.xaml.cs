@@ -585,9 +585,8 @@ public partial class MainWindow : Window, IPlaybackScreen
             }
         }
 
-        var latestPreferences = await UserPreferences.LoadAsync(_preferences);
-        _preferences = _preferences with { NewFileMarkerSource = latestPreferences.NewFileMarkerSource };
-        _savedPreferences = _savedPreferences with { NewFileMarkerSource = latestPreferences.NewFileMarkerSource };
+        var latestPreferences = await UserPreferences.LoadAsync(_prefs.Current);
+        _prefs.UseNewFileMarkerSource(latestPreferences.NewFileMarkerSource);
         var previousVm = vm;
         var previousAudioLoudness = vm.AudioLoudness;
         var previousThumbnailTiles = vm.ThumbnailTiles;
@@ -618,7 +617,7 @@ public partial class MainWindow : Window, IPlaybackScreen
         try
         {
             var loadingVm = vm;
-            var loaded = await _loader!.LoadAsync(path, _preferences.NewFileMarkerSource, () =>
+            var loaded = await _loader!.LoadAsync(path, _prefs.Current.NewFileMarkerSource, () =>
             {
                 loadingVm.StatusKind = StatusKind.Info;
                 loadingVm.StatusOverride = "Probing media…";
@@ -717,7 +716,7 @@ public partial class MainWindow : Window, IPlaybackScreen
             vm.CommandStack.Clear();
             vm.IsDirty = false;
             vm.SaveStatus = loaded.HasSavedProject ? "Saved" : "No saved edits";
-            if (_preferences.Positions?.TryGetValue(path, out var position) == true)
+            if (_prefs.Current.Positions?.TryGetValue(path, out var position) == true)
             {
                 position = Math.Clamp(position, 0, vm.DurationUs);
                 _playback.After.Open(path, position);
@@ -1755,14 +1754,14 @@ public partial class MainWindow : Window, IPlaybackScreen
         var dlg = new ExportView();
         _activeExportDialog = dlg;
         var exportPreferences = await UserPreferences.LoadAsync();
-        dlg.Bind(vm, _media, _preferences.ExportAcceleration, exportPreferences.ExportFormat, exportPreferences.DeleteSidecarAfterExport,
+        dlg.Bind(vm, _media, _prefs.Current.ExportAcceleration, exportPreferences.ExportFormat, exportPreferences.DeleteSidecarAfterExport,
             vm.SourcePath is { } source && ExportHandoff.CanCommentSource(source) && exportPreferences.AddSourceExportComment
                 ? AfterExportStep.SourceComment : AfterExportStep.RecordExport,
             exportPreferences.ExportFolder, exportPreferences.ExportFilenameTemplate);
         dlg.Closed += async (_, _) =>
         {
             if (dlg.DataContext is ExportDialogViewModel completed)
-            { _preferences = _preferences with { ExportAcceleration = !completed.CanCheckHardware ? _preferences.ExportAcceleration : completed.SelectedAcceleration.Id }; await SavePreferencesAsync(vm); }
+            { _prefs.Current = _prefs.Current with { ExportAcceleration = !completed.CanCheckHardware ? _prefs.Current.ExportAcceleration : completed.SelectedAcceleration.Id }; await SavePreferencesAsync(vm); }
         };
         dlg.AttachExportRunner(_ffmpeg, statusBarProgress);
         dlg.ChooseSourceCommentAsync = ReadSourceCommentChoiceAsync;

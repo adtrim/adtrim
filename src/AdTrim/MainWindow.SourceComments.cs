@@ -30,7 +30,7 @@ public partial class MainWindow
 
     // Read when the export starts, so its progress list shows the comment step exactly when it will run.
     private Task<SourceCommentChoice> ReadSourceCommentChoiceAsync(ExportPlan plan)
-        => ExportHandoff.ChooseSourceCommentAsync(plan, () => UserPreferences.ReadAsync(), _preferences, ShowDamagedPreferencesBanner);
+        => ExportHandoff.ChooseSourceCommentAsync(plan, () => UserPreferences.ReadAsync(), _prefs.Current, ShowDamagedPreferencesBanner);
 
     private async Task<string?> AddSourceCommentAsync(MainViewModel vm, ExportView view, CancellationToken ct)
     {

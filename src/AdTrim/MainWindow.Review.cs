@@ -11,66 +11,38 @@ namespace AdTrim;
 
 public partial class MainWindow
 {
-    private UserPreferences _preferences = new();
-    private UserPreferences _savedPreferences = new();
+    private readonly WindowPreferences _prefs = new();
+
     private async Task LoadPreferencesAsync(MainViewModel vm)
     {
-        _preferences = await UserPreferences.LoadAsync();
-        _savedPreferences = _preferences;
+        _prefs.Loaded(await UserPreferences.LoadAsync());
         if (await UserPreferences.IsDamagedAsync()) ShowDamagedPreferencesBanner();
         // Start muted applies when the window opens; the mute button then switches it for the session.
-        _playback.Before.SetMuted(_preferences.StartMuted);
-        ShowMuteState(_preferences.StartMuted);
-        vm.ShowWaveform = _preferences.ShowWaveform;
-        vm.ShowThumbnails = _preferences.ShowThumbnails;
-        vm.ShowRulerTicks = _preferences.ShowRulerTicks;
-        vm.SectionNameTemplate = _preferences.SectionNameTemplate;
-        var desired = new Rect(double.IsFinite(_preferences.Left) ? _preferences.Left : 0,
-            double.IsFinite(_preferences.Top) ? _preferences.Top : 0,
-            Math.Max(1, double.IsFinite(_preferences.Width) ? _preferences.Width : 1280),
-            Math.Max(1, double.IsFinite(_preferences.Height) ? _preferences.Height : 720));
-        var area = MonitorBounds.WorkArea(this, desired);
-        // Older builds saved a work-area-sized normal window as fake maximize.
-        bool legacyMaximized = _preferences.IsMaximized is null
-            && Math.Abs(desired.Left - area.Left) <= 2 && Math.Abs(desired.Top - area.Top) <= 2
-            && Math.Abs(desired.Width - area.Width) <= 2 && Math.Abs(desired.Height - area.Height) <= 2;
-        if (legacyMaximized) _preferences = _preferences with { Width = 1280, Height = 720 };
-        Width = Math.Clamp(double.IsFinite(_preferences.Width) ? _preferences.Width : 1280, MinWidth, Math.Max(MinWidth, area.Width));
-        Height = Math.Clamp(double.IsFinite(_preferences.Height) ? _preferences.Height : 720, MinHeight, Math.Max(MinHeight, area.Height));
-        Left = Math.Clamp(double.IsFinite(_preferences.Left) ? _preferences.Left : area.Left, area.Left, Math.Max(area.Left, area.Right - Width));
-        Top = Math.Clamp(double.IsFinite(_preferences.Top) ? _preferences.Top : area.Top, area.Top, Math.Max(area.Top, area.Bottom - Height));
-        if (_preferences.IsMaximized == true || legacyMaximized) { SystemCommands.MaximizeWindow(this); return; }
-        // Every window restores the same saved position; step aside instead of hiding the one already there.
-        const double step = 28;
-        while (Left + step + Width <= area.Right && Top + step + Height <= area.Bottom
-            && Application.Current.Windows.OfType<MainWindow>().Any(w => w != this && w.WindowState == WindowState.Normal
-                && Math.Abs(w.Left - Left) < 1 && Math.Abs(w.Top - Top) < 1))
-        {
-            Left += step;
-            Top += step;
-        }
+        _playback.Before.SetMuted(_prefs.Current.StartMuted);
+        ShowMuteState(_prefs.Current.StartMuted);
+        vm.ShowWaveform = _prefs.Current.ShowWaveform;
+        vm.ShowThumbnails = _prefs.Current.ShowThumbnails;
+        vm.ShowRulerTicks = _prefs.Current.ShowRulerTicks;
+        vm.SectionNameTemplate = _prefs.Current.SectionNameTemplate;
+        var area = MonitorBounds.WorkArea(this, _prefs.Desired);
+        var others = Application.Current.Windows.OfType<MainWindow>().Where(w => w != this && w.WindowState == WindowState.Normal)
+            .Select(w => new Point(w.Left, w.Top)).ToList();
+        var place = _prefs.Place(area, MinWidth, MinHeight, others);
+        Width = place.Width;
+        Height = place.Height;
+        Left = place.Left;
+        Top = place.Top;
+        if (place.Maximize) SystemCommands.MaximizeWindow(this);
     }
     private Task<bool> SavePreferencesAsync(MainViewModel vm) => SavePreferencesSnapshotAsync(vm, false);
 
     private async Task<bool> SavePreferencesSnapshotAsync(MainViewModel vm, bool saveMarkerSource)
     {
-        var positions = new Dictionary<string, long>(_preferences.Positions ?? new(), StringComparer.OrdinalIgnoreCase);
-        if (vm.SourcePath is { } source)
-        {
-            positions.Remove(source);
-            positions[source] = vm.PlayheadUs;
-        }
-        while (positions.Count > 20) positions.Remove(positions.Keys.First());
         var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
-        _preferences = _preferences with { ShowWaveform = vm.ShowWaveform, ShowThumbnails = vm.ShowThumbnails,
-            ShowRulerTicks = vm.ShowRulerTicks,
-            Left = bounds.Left, Top = bounds.Top, Width = bounds.Width, Height = bounds.Height,
-            IsMaximized = _lastNonMinimizedState == WindowState.Maximized, Positions = positions };
+        var snapshot = _prefs.Snapshot(vm, bounds, _lastNonMinimizedState == WindowState.Maximized);
         try
         {
-            var snapshot = _preferences;
-            await snapshot.SaveChangesAsync(_savedPreferences, vm.SourcePath, saveMarkerSource);
-            _savedPreferences = snapshot;
+            await _prefs.SaveAsync(snapshot, vm.SourcePath, saveMarkerSource);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -85,9 +57,7 @@ public partial class MainWindow
     private void ShowDamagedPreferencesBanner()
     {
         if (DataContext is not MainViewModel vm) return;
-        vm.Banner = new BannerInfo(StatusKind.Warning, "Saved settings are damaged.",
-            "Settings changes cannot be saved until they are reset. Reset keeps a copy of the damaged file and saves the settings this window is using now"
-            + (_preferences.AddSourceExportComment ? "." : ", with source export comments off."),
+        vm.Banner = new BannerInfo(StatusKind.Warning, "Saved settings are damaged.", _prefs.DamagedBannerBody,
             new[] { new BannerAction("Reset settings", () => _ = ResetDamagedPreferencesAsync(), IsPrimary: true) });
     }
 
@@ -95,9 +65,7 @@ public partial class MainWindow
     {
         try
         {
-            var snapshot = _preferences;
-            var kept = await UserPreferences.ResetDamagedAsync(snapshot);
-            _savedPreferences = snapshot;
+            var kept = await _prefs.ResetDamagedAsync();
             if (DataContext is MainViewModel vm)
                 vm.Banner = kept is null ? null : new BannerInfo(StatusKind.Success, "Settings were reset.",
                     $"The damaged file was kept as {Path.GetFileName(kept)}.", Array.Empty<BannerAction>());
@@ -115,8 +83,8 @@ public partial class MainWindow
     {
         if (OwnedWindows.OfType<SettingsWindow>().FirstOrDefault() is { } open) { open.Activate(); return; }
         // Another window may have changed a setting since this one loaded them.
-        var latest = await UserPreferences.LoadAsync(_preferences);
-        var settings = new SettingsWindow(_preferences.WithSettingsFrom(latest), ChangeSettingsAsync, ResetSettingsAsync) { Owner = this };
+        var latest = await UserPreferences.LoadAsync(_prefs.Current);
+        var settings = new SettingsWindow(_prefs.Current.WithSettingsFrom(latest), ChangeSettingsAsync, ResetSettingsAsync) { Owner = this };
         settings.ShowDialog();
     }
 
@@ -160,8 +128,7 @@ public partial class MainWindow
     /// <summary>Shows settings another window saved. They are saved already, so this window's later saves must not undo them.</summary>
     private void ApplySharedSettings(UserPreferences saved)
     {
-        _preferences = _preferences.WithSettingsFrom(saved);
-        _savedPreferences = _savedPreferences.WithSettingsFrom(saved);
+        _prefs.ApplyShared(saved);
         if (DataContext is not MainViewModel vm) return;
         vm.ShowWaveform = saved.ShowWaveform;
         vm.ShowThumbnails = saved.ShowThumbnails;
