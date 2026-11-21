@@ -157,16 +157,26 @@ public class EditingRegressionTests
         Assert.Equal(0, vm.KeptTimeline.ToOutput(100));
     }
 
+    // Collapsed preview showed one frame of an excluded scene at a cut: the split time 24:48.310311 was
+    // rounded up from the frame's true start, so the span ended just after that frame began.
+    [Fact]
+    public void Edl_EndsEachKeptSpanBeforeTheNextExcludedFrame()
+    {
+        // 29.97 fps frame 151 starts at 5,038,366.67 µs; its split is stored as 5,038,367.
+        var map = new KeptTimeline(new[] { new Segment { StartUs = 0, EndUs = 5_038_367 }, new Segment { StartUs = 5_372_033, EndUs = 10_000_000 } });
+        Assert.Equal("edl://%5%a.mp4,0,5.038366;%5%a.mp4,5.372033,4.627966", map.ToMpvEdl("a.mp4"));
+    }
+
     [Fact]
     public void Edl_EscapesPathAndUsesExactMicroseconds()
     {
         var map = new KeptTimeline(new[] { new Segment { StartUs = 1_234_567, EndUs = 2_345_678 } });
-        Assert.Equal("edl://%6%a,b.mp,1.234567,1.111111", map.ToMpvEdl("a,b.mp"));
+        Assert.Equal("edl://%6%a,b.mp,1.234567,1.11111", map.ToMpvEdl("a,b.mp"));
         // mpv opens EDL entries itself, so a long entry uses the extended-length form and its byte count.
         string longPath = @"C:\" + string.Join(@"\", Enumerable.Repeat("A folder name long enough", 12)) + @"\é.mp4";
         string native = @"\\?\" + longPath;
-        Assert.Equal($"edl://%{System.Text.Encoding.UTF8.GetByteCount(native)}%{native},1.234567,1.111111", map.ToMpvEdl(longPath));
-        Assert.Equal("edl://%6%a,b.mp,122.634567,1.111111", map.ToMpvEdl("a,b.mp", 121_400_000));
+        Assert.Equal($"edl://%{System.Text.Encoding.UTF8.GetByteCount(native)}%{native},1.234567,1.11111", map.ToMpvEdl(longPath));
+        Assert.Equal("edl://%6%a,b.mp,122.634567,1.11111", map.ToMpvEdl("a,b.mp", 121_400_000));
         Assert.StartsWith("edl://%2%", map.ToMpvEdl("é"));
     }
 

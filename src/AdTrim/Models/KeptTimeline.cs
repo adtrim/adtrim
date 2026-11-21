@@ -50,7 +50,11 @@ public sealed class KeptTimeline
         // EDL offsets use demuxer timestamps, including the TS origin. mpv opens each entry itself.
         sourcePath = AdTrim.Services.NativePath.ForNative(sourcePath);
         var file = $"%{Encoding.UTF8.GetByteCount(sourcePath)}%{sourcePath}";
-        return "edl://" + string.Join(";", Spans.Select(s => file + "," + Seconds(s.StartUs + timelineStartTimeUs) + "," + Seconds(s.DurationUs)));
+        // Split times are frame times rounded to whole microseconds, so a span can end up to half a
+        // microsecond after the next frame starts, and mpv then shows that excluded frame. Ending each
+        // span a microsecond early keeps it out; the preview timeline loses 1 µs per span.
+        return "edl://" + string.Join(";", Spans.Select(s => file + "," + Seconds(s.StartUs + timelineStartTimeUs) + ","
+            + Seconds(Math.Max(1, s.DurationUs - 1))));
     }
     private static string Seconds(long us) => (us / 1_000_000m).ToString("0.######", CultureInfo.InvariantCulture);
 }
