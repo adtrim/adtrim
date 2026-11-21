@@ -587,21 +587,7 @@ public partial class MainWindow : Window, IPlaybackScreen
 
         var latestPreferences = await UserPreferences.LoadAsync(_prefs.Current);
         _prefs.UseNewFileMarkerSource(latestPreferences.NewFileMarkerSource);
-        var previousVm = vm;
-        var previousAudioLoudness = vm.AudioLoudness;
-        var previousThumbnailTiles = vm.ThumbnailTiles;
-        var previousMedia = _media;
-        var previousFingerprint = _sourceFingerprint;
-        var previousImportedMarkers = _markers.Imported;
-        var previousImportedAvailable = _markers.ImportedAvailable;
-        var previousImportedTooltip = UseOriginalImportedMarkersMenuItem.ToolTip;
-        var previousStatus = (vm.StatusKind, vm.StatusOverride, vm.ProgressPercent);
-        var previousPath = vm.SourcePath;
-        var previousPosition = vm.PlayheadUs;
-        var previousScrollOffset = TimelineScroll.HorizontalOffset;
-        var previousPlaying = _playback.After.IsPlaying;
-        var previousMuted = vm.IsCollapsed ? _playback.After.IsMuted : _playback.Before.IsMuted;
-        var previousPlayUntil = _playback.PlayUntilUs;
+        var previous = CaptureForRollback(vm);
         _switching = true;
         _hydrating = true;
         vm.IsBusy = true;
@@ -622,199 +608,14 @@ public partial class MainWindow : Window, IPlaybackScreen
                 loadingVm.StatusKind = StatusKind.Info;
                 loadingVm.StatusOverride = "Probing media…";
             });
-            var probed = loaded.Media;
-            var fingerprint = loaded.Fingerprint;
-            BannerInfo? importWarning = loaded.ImportError is { } importError
-                ? new BannerInfo(StatusKind.Warning, "Imported markers are unavailable.", importError, Array.Empty<BannerAction>())
-                : null;
-            // Keep the previous model, including its undo history, untouched until opening succeeds.
-            vm = new MainViewModel
-            {
-                ShowWaveform = previousVm.ShowWaveform, ShowThumbnails = previousVm.ShowThumbnails,
-                ShowRulerTicks = previousVm.ShowRulerTicks, IsBusy = true, BusyOperation = "Opening", Banner = importWarning,
-            };
-            WireViewModelEvents(vm);
-            _markers.SetImported(loaded.ImportedMarkers, loaded.ImportedMarkersAvailable);
-            AnalyzeAdBreaksButton.Style = (Style)FindResource("Button.Primary");
-            _playback.PlayUntilUs = null;
-            vm.HasAdTrimAnalysis = loaded.CachedSuggestions is not null;
-            UseOriginalImportedMarkersMenuItem.ToolTip = loaded.ImportedMarkersUnavailableReason;
-            RefreshImportedMarkersItem(vm);
-            _media = probed;
-            _sourceFingerprint = fingerprint;
-            vm.SourceFingerprint = fingerprint;
-            vm.LastExport = null;
-            _playback.After.SelectAudioStream(_media.PrimaryAudioIndex);
-            _playback.Before.SelectAudioStream(_media.PrimaryAudioIndex);
-            vm.SourcePath = path;
-            vm.FileName = Path.GetFileName(path);
-            vm.DurationUs = _media.DurationUs;
-            vm.FrameRate = _media.FrameRate;
-            vm.FrameStartPhaseUs = _media.VideoStartTimeUs;
-            vm.ZoomFactor = 1.0;   // start fully zoomed out - whole video visible
-            vm.MediaInfoLine =
-                $"{_media.FrameRate.AsDouble:0.##} fps · {_media.Width}×{_media.Height} · {_media.VideoCodec}";
-            DataContext = vm;
-            SetRecordingPaneLayout(false);
-            UpdateTimelineLayout(forceRecenter: true);
-            _playback.After.SetMuted(true);
-            _playback.Before.SetMuted(previousMuted);
-            _playback.After.Open(path);
-            _playback.Before.Open(path);
-            VideoPlaceholder.Visibility = Visibility.Collapsed;
-            MpvViewAfter.Visibility = Visibility.Visible;
-            MpvViewBefore.Visibility = Visibility.Visible;
-            // The filmstrip goes first: it is the most visible and costs a few seeks, and the
-            // waveform's full read yields to it. Starting here keeps it ahead of any analysis.
-            if (vm.ShowThumbnails) _timelineMedia.StartThumbnailLoad(vm, path, _media);
-
-            if (loaded.Start == RecordingStart.SavedProject)
-            {
-                MarkerSetController.HydrateFromSidecar(vm, loaded.Sidecar.Project!);
-                if (loaded.Sidecar.Message is not null)
-                {
-                    vm.StatusKind = StatusKind.Warning;
-                    vm.StatusOverride = loaded.Sidecar.Message ?? "Source modified time changed; verify project state.";
-                }
-            }
-            else
-            {
-                if (loaded.SidecarNotLoaded)
-                {
-                    var earlier = loaded.EarlierProject;
-                    vm.Banner = new BannerInfo(StatusKind.Warning,
-                        "Project sidecar was not loaded.",
-                        earlier is null ? loaded.Sidecar.Message ?? "Falling back to embedded chapters."
-                            : "The recording's size or duration changed since this project was saved, so its markers were not loaded.",
-                        earlier is null ? Array.Empty<BannerAction>()
-                            : new[] { new BannerAction("Use these markers anyway", () => UseEarlierProject(vm, path, earlier)) });
-                }
-                vm.StatusOverride = "Importing chapters…";
-                if (loaded.Start == RecordingStart.AdTrimSuggestions)
-                {
-                    MarkerSetController.HydrateBlank(vm, MarkerSetSource.AdTrim);
-                    vm.StatusOverride = "Analyzing ad breaks…";
-                    if (loaded.CachedSuggestions is { } cached) ApplyMarkerSet(vm, cached, "Load AdTrim suggested markers", confirm: false);
-                    else
-                    {
-                        var initialKey = _markers.Suggestions.Key(path, fingerprint);
-                        var detected = await AnalyzeCommercialsAsync(vm, initialKey, cancellationToken: CancellationToken.None);
-                        if (detected is not null) ApplyMarkerSet(vm, detected, "Load AdTrim suggested markers", confirm: false);
-                        else
-                        {
-                            MarkerSetController.HydrateBlank(vm, MarkerSetSource.Blank);
-                            vm.StatusOverride = "Analysis did not finish. All video remains included.";
-                        }
-                    }
-                }
-                else if (loaded.Start == RecordingStart.Blank)
-                    MarkerSetController.HydrateBlank(vm, MarkerSetSource.Blank);
-                else
-                    MarkerSetController.HydrateFromChapters(vm, _media, loaded.Chapters);
-            }
-
-            vm.CommandStack.Clear();
-            vm.IsDirty = false;
-            vm.SaveStatus = loaded.HasSavedProject ? "Saved" : "No saved edits";
-            if (_prefs.Current.Positions?.TryGetValue(path, out var position) == true)
-            {
-                position = Math.Clamp(position, 0, vm.DurationUs);
-                _playback.After.Open(path, position);
-                _playback.Before.Open(path, Math.Max(0, position - PlaybackController.FrameDurationUs(vm)));
-                vm.PlayheadUs = position;
-            }
-            else vm.PlayheadUs = 0;
-            // Ensure Pane A starts 1 frame behind Pane B on initial load
-            // (PlayheadUs = 0 means Pane A wants frame −1 → no-frame overlay).
-            UpdateNoFrameOverlay(vm);
-
-            if (vm.ShowWaveform)
-                _timelineMedia.EnsureAudioPass(vm, path, _media);
-            else if (!vm.IsAnalyzingCommercials)
-                _timelineMedia.ReleaseAudioPass(vm);
-
-            if (!vm.ShowThumbnails)
-                _timelineMedia.CancelThumbnailLoad(vm, clearThumbnails: true);
-
-            // Opening replaces the editor's banner; keep offering the settings reset while it is needed.
-            if (vm.Banner is null && await UserPreferences.IsDamagedAsync()) ShowDamagedPreferencesBanner();
-
-            // Clear our transient open-time status only if it's still showing -
-            // a sidecar warning or other update set between the probe and now
-            // takes precedence and must not be wiped.
-            if (vm.StatusOverride is "Probing media…" or "Importing chapters…")
-                vm.StatusOverride = null;
+            vm = ShowNewEditor(path, loaded, previous);
+            await LoadStartingMarkersAsync(vm, path, loaded);
+            await FinishOpeningAsync(vm, path, loaded);
         }
         catch (Exception ex)
         {
-            _timelineMedia.ReleaseAudioPass(vm);
-            _timelineMedia.CancelThumbnailLoad(vm, clearThumbnails: false);
-            _media = previousMedia;
-            _sourceFingerprint = previousFingerprint;
-            _markers.SetImported(previousImportedMarkers, previousImportedAvailable);
-            UseOriginalImportedMarkersMenuItem.ToolTip = previousImportedTooltip;
-            vm = previousVm;
-            DataContext = vm;
-            vm.AudioLoudness = previousAudioLoudness;
-            vm.ThumbnailTiles = previousThumbnailTiles;
-            SetRecordingPaneLayout(vm.IsCollapsed);
-            if (vm.HasAdTrimAnalysis) AnalyzeAdBreaksButton.ClearValue(StyleProperty);
-            else AnalyzeAdBreaksButton.Style = (Style)FindResource("Button.Primary");
-            _playback.PlayUntilUs = previousPlayUntil;
-            vm.PlayheadUs = previousPosition;
-            vm.StatusKind = previousStatus.StatusKind;
-            vm.StatusOverride = previousStatus.StatusOverride;
-            vm.ProgressPercent = previousStatus.ProgressPercent;
-            UpdateTimelineLayout(forceRecenter: false);
-            TimelineScroll.ScrollToHorizontalOffset(previousScrollOffset);
-            string message = ex.Message;
-            try
-            {
-                if (previousPath is not null && previousMedia is not null)
-                {
-                    _playback.After.SetMuted(vm.IsCollapsed ? previousMuted : true);
-                    _playback.Before.SetMuted(previousMuted);
-                    if (vm.IsCollapsed)
-                    {
-                        _playback.Before.Stop();
-                        if (vm.KeptTimeline.DurationUs > 0)
-                            _playback.After.Open(vm.KeptTimeline.ToMpvEdl(previousPath, previousMedia.TimelineStartTimeUs),
-                                vm.KeptTimeline.ToOutput(previousPosition), buffered: true);
-                        else _playback.After.Stop();
-                    }
-                    else
-                    {
-                        _playback.After.Open(previousPath, previousPosition);
-                        _playback.Before.Open(previousPath, Math.Max(0, previousPosition - PlaybackController.FrameDurationUs(vm)));
-                    }
-                    _playback.After.SelectAudioStream(previousMedia.PrimaryAudioIndex);
-                    _playback.Before.SelectAudioStream(previousMedia.PrimaryAudioIndex);
-                    VideoPlaceholder.Visibility = Visibility.Collapsed;
-                    MpvViewAfter.Visibility = Visibility.Visible;
-                    MpvViewBefore.Visibility = Visibility.Visible;
-                    UpdateNoFrameOverlay(vm);
-                    if (vm.ShowWaveform) _timelineMedia.EnsureAudioPass(vm, previousPath, previousMedia);
-                    if (vm.ShowThumbnails) _timelineMedia.StartThumbnailLoad(vm, previousPath, previousMedia);
-                    // The restored preview stays paused behind the error; playback resumes once it is dismissed.
-                    resumeAfterFailure = previousPlaying;
-                }
-                else
-                {
-                    _playback.After.Stop();
-                    _playback.Before.Stop();
-                    VideoPlaceholder.Visibility = Visibility.Visible;
-                    MpvViewAfter.Visibility = Visibility.Collapsed;
-                    MpvViewBefore.Visibility = Visibility.Collapsed;
-                    NoFrameOverlay.Visibility = Visibility.Collapsed;
-                }
-            }
-            catch (Exception restoreError)
-            {
-                _playback.After.Stop();
-                _playback.Before.Stop();
-                message += "\n\nThe previous recording's preview could not be restored: " + restoreError.Message;
-            }
-            MessageBox.Show(this, message, "Failed to open", MessageBoxButton.OK, MessageBoxImage.Error);
+            resumeAfterFailure = RestoreAfterFailedOpen(vm, previous, ex);
+            vm = previous.Vm;
         }
         finally
         {
@@ -824,12 +625,237 @@ public partial class MainWindow : Window, IPlaybackScreen
             vm.BusyOperation = null;
             closeRequested = _saves.TakePendingClose(true);
         }
-        if (resumeAfterFailure && !closeRequested && !_allowClose && !_switching && ReferenceEquals(DataContext, previousVm)
-            && previousVm.SourcePath == previousPath && !_playback.After.IsPlaying)
+        if (resumeAfterFailure && !closeRequested && !_allowClose && !_switching && ReferenceEquals(DataContext, previous.Vm)
+            && previous.Vm.SourcePath == previous.Path && !_playback.After.IsPlaying)
         {
-            if (previousVm.IsCollapsed) { if (previousVm.KeptTimeline.DurationUs > 0) _playback.After.Play(); }
+            if (previous.Vm.IsCollapsed) { if (previous.Vm.KeptTimeline.DurationUs > 0) _playback.After.Play(); }
             else { _playback.After.Play(); _playback.Before.Play(); }
         }
+    }
+
+    /// <summary>Everything a failed open must put back: the previous editor (with its undo history) and the screen around it.</summary>
+    private sealed record OpenRollback(MainViewModel Vm, byte[]? AudioLoudness, ThumbnailStrip ThumbnailTiles, MediaInfo? Media,
+        SourceFingerprint? Fingerprint, MarkerSetState? ImportedMarkers, bool ImportedAvailable, object? ImportedTooltip,
+        StatusKind StatusKind, string? StatusOverride, double? ProgressPercent, string? Path, long Position, double ScrollOffset,
+        bool Playing, bool Muted, long? PlayUntil);
+
+    private OpenRollback CaptureForRollback(MainViewModel vm) => new(vm, vm.AudioLoudness, vm.ThumbnailTiles, _media, _sourceFingerprint,
+        _markers.Imported, _markers.ImportedAvailable, UseOriginalImportedMarkersMenuItem.ToolTip,
+        vm.StatusKind, vm.StatusOverride, vm.ProgressPercent, vm.SourcePath, vm.PlayheadUs, TimelineScroll.HorizontalOffset,
+        _playback.After.IsPlaying, vm.IsCollapsed ? _playback.After.IsMuted : _playback.Before.IsMuted, _playback.PlayUntilUs);
+
+    /// <summary>
+    /// A new editor for the opened recording, shown in the window with both panes opening it. The previous
+    /// editor, including its undo history, is left untouched until opening succeeds.
+    /// </summary>
+    private MainViewModel ShowNewEditor(string path, LoadedRecording loaded, OpenRollback previous)
+    {
+        var probed = loaded.Media;
+        var fingerprint = loaded.Fingerprint;
+        BannerInfo? importWarning = loaded.ImportError is { } importError
+            ? new BannerInfo(StatusKind.Warning, "Imported markers are unavailable.", importError, Array.Empty<BannerAction>())
+            : null;
+        var vm = new MainViewModel
+        {
+            ShowWaveform = previous.Vm.ShowWaveform, ShowThumbnails = previous.Vm.ShowThumbnails,
+            ShowRulerTicks = previous.Vm.ShowRulerTicks, IsBusy = true, BusyOperation = "Opening", Banner = importWarning,
+        };
+        WireViewModelEvents(vm);
+        _markers.SetImported(loaded.ImportedMarkers, loaded.ImportedMarkersAvailable);
+        AnalyzeAdBreaksButton.Style = (Style)FindResource("Button.Primary");
+        _playback.PlayUntilUs = null;
+        vm.HasAdTrimAnalysis = loaded.CachedSuggestions is not null;
+        UseOriginalImportedMarkersMenuItem.ToolTip = loaded.ImportedMarkersUnavailableReason;
+        RefreshImportedMarkersItem(vm);
+        _media = probed;
+        _sourceFingerprint = fingerprint;
+        vm.SourceFingerprint = fingerprint;
+        vm.LastExport = null;
+        _playback.After.SelectAudioStream(_media.PrimaryAudioIndex);
+        _playback.Before.SelectAudioStream(_media.PrimaryAudioIndex);
+        vm.SourcePath = path;
+        vm.FileName = Path.GetFileName(path);
+        vm.DurationUs = _media.DurationUs;
+        vm.FrameRate = _media.FrameRate;
+        vm.FrameStartPhaseUs = _media.VideoStartTimeUs;
+        vm.ZoomFactor = 1.0;   // start fully zoomed out - whole video visible
+        vm.MediaInfoLine =
+            $"{_media.FrameRate.AsDouble:0.##} fps · {_media.Width}×{_media.Height} · {_media.VideoCodec}";
+        DataContext = vm;
+        SetRecordingPaneLayout(false);
+        UpdateTimelineLayout(forceRecenter: true);
+        _playback.After.SetMuted(true);
+        _playback.Before.SetMuted(previous.Muted);
+        _playback.After.Open(path);
+        _playback.Before.Open(path);
+        VideoPlaceholder.Visibility = Visibility.Collapsed;
+        MpvViewAfter.Visibility = Visibility.Visible;
+        MpvViewBefore.Visibility = Visibility.Visible;
+        // The filmstrip goes first: it is the most visible and costs a few seeks, and the
+        // waveform's full read yields to it. Starting here keeps it ahead of any analysis.
+        if (vm.ShowThumbnails) _timelineMedia.StartThumbnailLoad(vm, path, _media);
+        return vm;
+    }
+
+    /// <summary>Fills the new editor with the markers the loader chose: the saved project, chapters, nothing or AdTrim's suggestions.</summary>
+    private async Task LoadStartingMarkersAsync(MainViewModel vm, string path, LoadedRecording loaded)
+    {
+        if (loaded.Start == RecordingStart.SavedProject)
+        {
+            MarkerSetController.HydrateFromSidecar(vm, loaded.Sidecar.Project!);
+            if (loaded.Sidecar.Message is not null)
+            {
+                vm.StatusKind = StatusKind.Warning;
+                vm.StatusOverride = loaded.Sidecar.Message ?? "Source modified time changed; verify project state.";
+            }
+            return;
+        }
+        if (loaded.SidecarNotLoaded)
+        {
+            var earlier = loaded.EarlierProject;
+            vm.Banner = new BannerInfo(StatusKind.Warning,
+                "Project sidecar was not loaded.",
+                earlier is null ? loaded.Sidecar.Message ?? "Falling back to embedded chapters."
+                    : "The recording's size or duration changed since this project was saved, so its markers were not loaded.",
+                earlier is null ? Array.Empty<BannerAction>()
+                    : new[] { new BannerAction("Use these markers anyway", () => UseEarlierProject(vm, path, earlier)) });
+        }
+        vm.StatusOverride = "Importing chapters…";
+        if (loaded.Start == RecordingStart.AdTrimSuggestions)
+        {
+            MarkerSetController.HydrateBlank(vm, MarkerSetSource.AdTrim);
+            vm.StatusOverride = "Analyzing ad breaks…";
+            if (loaded.CachedSuggestions is { } cached) ApplyMarkerSet(vm, cached, "Load AdTrim suggested markers", confirm: false);
+            else
+            {
+                var initialKey = _markers.Suggestions.Key(path, loaded.Fingerprint);
+                var detected = await AnalyzeCommercialsAsync(vm, initialKey, cancellationToken: CancellationToken.None);
+                if (detected is not null) ApplyMarkerSet(vm, detected, "Load AdTrim suggested markers", confirm: false);
+                else
+                {
+                    MarkerSetController.HydrateBlank(vm, MarkerSetSource.Blank);
+                    vm.StatusOverride = "Analysis did not finish. All video remains included.";
+                }
+            }
+        }
+        else if (loaded.Start == RecordingStart.Blank)
+            MarkerSetController.HydrateBlank(vm, MarkerSetSource.Blank);
+        else
+            MarkerSetController.HydrateFromChapters(vm, _media!, loaded.Chapters);
+    }
+
+    /// <summary>A clean undo history, the remembered playback position, the timeline graph and the open-time status cleared.</summary>
+    private async Task FinishOpeningAsync(MainViewModel vm, string path, LoadedRecording loaded)
+    {
+        vm.CommandStack.Clear();
+        vm.IsDirty = false;
+        vm.SaveStatus = loaded.HasSavedProject ? "Saved" : "No saved edits";
+        if (_prefs.Current.Positions?.TryGetValue(path, out var position) == true)
+        {
+            position = Math.Clamp(position, 0, vm.DurationUs);
+            _playback.After.Open(path, position);
+            _playback.Before.Open(path, Math.Max(0, position - PlaybackController.FrameDurationUs(vm)));
+            vm.PlayheadUs = position;
+        }
+        else vm.PlayheadUs = 0;
+        // Ensure Pane A starts 1 frame behind Pane B on initial load
+        // (PlayheadUs = 0 means Pane A wants frame −1 → no-frame overlay).
+        UpdateNoFrameOverlay(vm);
+
+        if (vm.ShowWaveform)
+            _timelineMedia.EnsureAudioPass(vm, path, _media!);
+        else if (!vm.IsAnalyzingCommercials)
+            _timelineMedia.ReleaseAudioPass(vm);
+
+        if (!vm.ShowThumbnails)
+            _timelineMedia.CancelThumbnailLoad(vm, clearThumbnails: true);
+
+        // Opening replaces the editor's banner; keep offering the settings reset while it is needed.
+        if (vm.Banner is null && await UserPreferences.IsDamagedAsync()) ShowDamagedPreferencesBanner();
+
+        // Clear our transient open-time status only if it's still showing -
+        // a sidecar warning or other update set between the probe and now
+        // takes precedence and must not be wiped.
+        if (vm.StatusOverride is "Probing media…" or "Importing chapters…")
+            vm.StatusOverride = null;
+    }
+
+    /// <summary>
+    /// Puts the previous editor and recording back after a failed open and shows the error. The restored
+    /// preview stays paused behind the error; returns true when playback should resume once it is dismissed.
+    /// </summary>
+    /// <param name="opening">The editor current when opening failed: the new one if it was already shown.</param>
+    private bool RestoreAfterFailedOpen(MainViewModel opening, OpenRollback previous, Exception ex)
+    {
+        bool resume = false;
+        _timelineMedia.ReleaseAudioPass(opening);
+        _timelineMedia.CancelThumbnailLoad(opening, clearThumbnails: false);
+        _media = previous.Media;
+        _sourceFingerprint = previous.Fingerprint;
+        _markers.SetImported(previous.ImportedMarkers, previous.ImportedAvailable);
+        UseOriginalImportedMarkersMenuItem.ToolTip = previous.ImportedTooltip;
+        var vm = previous.Vm;
+        DataContext = vm;
+        vm.AudioLoudness = previous.AudioLoudness;
+        vm.ThumbnailTiles = previous.ThumbnailTiles;
+        SetRecordingPaneLayout(vm.IsCollapsed);
+        if (vm.HasAdTrimAnalysis) AnalyzeAdBreaksButton.ClearValue(StyleProperty);
+        else AnalyzeAdBreaksButton.Style = (Style)FindResource("Button.Primary");
+        _playback.PlayUntilUs = previous.PlayUntil;
+        vm.PlayheadUs = previous.Position;
+        vm.StatusKind = previous.StatusKind;
+        vm.StatusOverride = previous.StatusOverride;
+        vm.ProgressPercent = previous.ProgressPercent;
+        UpdateTimelineLayout(forceRecenter: false);
+        TimelineScroll.ScrollToHorizontalOffset(previous.ScrollOffset);
+        string message = ex.Message;
+        try
+        {
+            if (previous.Path is { } previousPath && previous.Media is { } previousMedia)
+            {
+                _playback.After.SetMuted(vm.IsCollapsed ? previous.Muted : true);
+                _playback.Before.SetMuted(previous.Muted);
+                if (vm.IsCollapsed)
+                {
+                    _playback.Before.Stop();
+                    if (vm.KeptTimeline.DurationUs > 0)
+                        _playback.After.Open(vm.KeptTimeline.ToMpvEdl(previousPath, previousMedia.TimelineStartTimeUs),
+                            vm.KeptTimeline.ToOutput(previous.Position), buffered: true);
+                    else _playback.After.Stop();
+                }
+                else
+                {
+                    _playback.After.Open(previousPath, previous.Position);
+                    _playback.Before.Open(previousPath, Math.Max(0, previous.Position - PlaybackController.FrameDurationUs(vm)));
+                }
+                _playback.After.SelectAudioStream(previousMedia.PrimaryAudioIndex);
+                _playback.Before.SelectAudioStream(previousMedia.PrimaryAudioIndex);
+                VideoPlaceholder.Visibility = Visibility.Collapsed;
+                MpvViewAfter.Visibility = Visibility.Visible;
+                MpvViewBefore.Visibility = Visibility.Visible;
+                UpdateNoFrameOverlay(vm);
+                if (vm.ShowWaveform) _timelineMedia.EnsureAudioPass(vm, previousPath, previousMedia);
+                if (vm.ShowThumbnails) _timelineMedia.StartThumbnailLoad(vm, previousPath, previousMedia);
+                resume = previous.Playing;
+            }
+            else
+            {
+                _playback.After.Stop();
+                _playback.Before.Stop();
+                VideoPlaceholder.Visibility = Visibility.Visible;
+                MpvViewAfter.Visibility = Visibility.Collapsed;
+                MpvViewBefore.Visibility = Visibility.Collapsed;
+                NoFrameOverlay.Visibility = Visibility.Collapsed;
+            }
+        }
+        catch (Exception restoreError)
+        {
+            _playback.After.Stop();
+            _playback.Before.Stop();
+            message += "\n\nThe previous recording's preview could not be restored: " + restoreError.Message;
+        }
+        MessageBox.Show(this, message, "Failed to open", MessageBoxButton.OK, MessageBoxImage.Error);
+        return resume;
     }
 
     private async Task<MarkerSetState?> AnalyzeCommercialsAsync(MainViewModel vm, string key,
