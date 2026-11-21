@@ -71,6 +71,21 @@ public sealed class WindowPreferencesTests : IDisposable
         Assert.Equal(new Rect(10, 20, 1300, 800), new Rect(snapshot.Left, snapshot.Top, snapshot.Width, snapshot.Height));
     }
 
+    // A recording reopened from the list must count as the most recent. Dictionary reuses a removed
+    // entry's slot, so re-adding it kept its old place and the next new recording evicted it.
+    [Fact]
+    public void TheOldestPositionIsForgottenNotTheOneJustSaved()
+    {
+        var positions = Enumerable.Range(0, 20).ToDictionary(i => $"C:\\tv\\{i}.mp4", i => (long)i, StringComparer.OrdinalIgnoreCase);
+        var prefs = With(new UserPreferences { Positions = positions });
+        prefs.Snapshot(new MainViewModel { SourcePath = "C:\\tv\\0.mp4", PlayheadUs = 500 }, new Rect(0, 0, 1000, 700), false);
+        var snapshot = prefs.Snapshot(new MainViewModel { SourcePath = "C:\\tv\\new.mp4", PlayheadUs = 7 }, new Rect(0, 0, 1000, 700), false);
+        Assert.Equal(20, snapshot.Positions.Count);
+        Assert.Equal(500, snapshot.Positions["C:\\tv\\0.mp4"]);
+        Assert.False(snapshot.Positions.ContainsKey("C:\\tv\\1.mp4"));
+        Assert.Equal(["C:\\tv\\0.mp4", "C:\\tv\\new.mp4"], snapshot.Positions.Keys.TakeLast(2));
+    }
+
     [Fact]
     public async Task ASaveDoesNotUndoASettingAnotherWindowSaved()
     {

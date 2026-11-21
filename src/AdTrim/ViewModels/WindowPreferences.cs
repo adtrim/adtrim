@@ -64,13 +64,13 @@ public sealed class WindowPreferences
     /// </summary>
     public UserPreferences Snapshot(MainViewModel vm, Rect bounds, bool maximized)
     {
-        var positions = new Dictionary<string, long>(Current.Positions ?? new(), StringComparer.OrdinalIgnoreCase);
-        if (vm.SourcePath is { } source)
-        {
-            positions.Remove(source);
-            positions[source] = vm.PlayheadUs;
-        }
-        while (positions.Count > MaximumPositions) positions.Remove(positions.Keys.First());
+        // Built fresh in order: a Dictionary refills a removed entry's slot, so removing and re-adding
+        // this recording would leave it where it was and a later recording would evict it as the oldest.
+        var positions = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        var kept = (Current.Positions ?? new()).Where(p => !string.Equals(p.Key, vm.SourcePath, StringComparison.OrdinalIgnoreCase));
+        if (vm.SourcePath is not null) kept = kept.Append(new(vm.SourcePath, vm.PlayheadUs));
+        var ordered = kept.ToList();
+        foreach (var (path, position) in ordered.Skip(Math.Max(0, ordered.Count - MaximumPositions))) positions[path] = position;
         Current = Current with { ShowWaveform = vm.ShowWaveform, ShowThumbnails = vm.ShowThumbnails,
             ShowRulerTicks = vm.ShowRulerTicks,
             Left = bounds.Left, Top = bounds.Top, Width = bounds.Width, Height = bounds.Height,
