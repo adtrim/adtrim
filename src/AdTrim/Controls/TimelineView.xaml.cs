@@ -626,6 +626,16 @@ public partial class TimelineView : UserControl
                     _vm.SelectMarker(m);
                     args.Handled = true;
                 };
+                // Selecting on button-down redraws the lane, so the button-up arrives at a new marker.
+                // Open its menu here and handle the event, as segment bands do; otherwise it bubbles to
+                // the background, which opens "Add split here" instead.
+                marker.MouseRightButtonUp += (_, args) =>
+                {
+                    args.Handled = true;
+                    if (!_vm.CanInteract || marker.ContextMenu is not { } menu) return;
+                    menu.PlacementTarget = this;
+                    menu.IsOpen = true;
+                };
                 marker.ContextMenu = BuildMarkerContextMenu(m);
                 marker.ToolTip = BuildMarkerTooltip(m);
                 System.Windows.Controls.ToolTipService.SetInitialShowDelay(marker, 250);

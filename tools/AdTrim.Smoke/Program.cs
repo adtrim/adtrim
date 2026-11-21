@@ -479,6 +479,25 @@ internal static partial class Program
                 vm.CommandStack.Redo();
                 Require(vm.Segments[0].Label == chapterName, "Preview rename supports redo");
                 window.Test.ToggleCollapsed();
+                // Right-click selects the split, which redraws the lane; the button-up must still open the
+                // split's own menu, not the background's "Add split here".
+                vm.ClearSelection();
+                var lane = (Canvas)((TimelineView)timeline!).FindName("MarkerLane");
+                var target = vm.Markers.First(m => !m.IsBookend);
+                lane.Children.OfType<SplitMarker>().Single(x => x.Tag == target).RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(
+                    System.Windows.Input.Mouse.PrimaryDevice, Environment.TickCount, System.Windows.Input.MouseButton.Right)
+                    { RoutedEvent = UIElement.MouseRightButtonDownEvent });
+                window.UpdateLayout();
+                var redrawn = lane.Children.OfType<SplitMarker>().Single(x => x.Tag == target);
+                var rightUp = new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, Environment.TickCount,
+                    System.Windows.Input.MouseButton.Right) { RoutedEvent = UIElement.MouseRightButtonUpEvent };
+                redrawn.RaiseEvent(rightUp);
+                var splitMenu = redrawn.ContextMenu!;
+                Require(target.IsSelected && rightUp.Handled && splitMenu.IsOpen
+                    && splitMenu.Items.OfType<MenuItem>().Any(item => item.Header?.ToString() == "Refine this split"),
+                    "Right-clicking a split selects it and opens its own menu with Refine, not the background menu");
+                splitMenu.IsOpen = false;
+                vm.ClearSelection();
                 vm.CommandStack.Execute(new RenameSegmentCommand(vm, vm.Segments[2], "Final scene"));
                 window.Test.ToggleCollapsed();
                 await Task.Delay(300);
