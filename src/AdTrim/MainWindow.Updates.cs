@@ -8,7 +8,7 @@ namespace AdTrim;
 public partial class MainWindow
 {
     public bool CanAnnounceUpdate => IsLoaded && !_switching && _openingPath is null && !_hydrating
-        && !_previewAfter.IsPlaying && _activeExportDialog is null && OwnedWindows.Count == 0
+        && !_playback.After.IsPlaying && _activeExportDialog is null && OwnedWindows.Count == 0
         && DataContext is MainViewModel { IsBusy: false };
 
     private void InitializeUpdates()

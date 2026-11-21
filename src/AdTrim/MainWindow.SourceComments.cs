@@ -54,8 +54,8 @@ public partial class MainWindow
             if (!await _saves.SaveAsync(vm)) return "Source comment was not added because project edits could not be saved.";
             await _timelineMedia.StopUnfinishedAudioPassAsync();
             _timelineMedia.CancelThumbnailLoad(vm, false);
-            _previewAfter.Stop();
-            _previewBefore.Stop();
+            _playback.After.Stop();
+            _playback.Before.Stop();
             stopped = true;
             vm.StatusOverride = "Adding the source export comment...";
             view.ReportSourceCommentProgress(new(false, "", 0));
@@ -99,40 +99,11 @@ public partial class MainWindow
                 // that for both players at once behind the export screen, so wait for the editor and
                 // open them one at a time.
                 string path = plan.SourcePath;
-                if (vm.IsExportScreen) _reopenPreviewsOnReturn = () => ReopenPreviewsAsync(vm, path, position);
-                else _ = ReopenPreviewsAsync(vm, path, position);
+                if (vm.IsExportScreen) _reopenPreviewsOnReturn = () => _playback.ReopenAsync(vm, path, position);
+                else _ = _playback.ReopenAsync(vm, path, position);
             }
         }
     }
 
     private Func<Task>? _reopenPreviewsOnReturn;
-
-    private async Task ReopenPreviewsAsync(MainViewModel vm, string path, long position)
-    {
-        if (vm.SourcePath != path) return;
-        try
-        {
-            if (vm.IsCollapsed)
-            {
-                if (vm.KeptTimeline.DurationUs > 0)
-                    _previewAfter.Open(vm.KeptTimeline.ToMpvEdl(path, _media?.TimelineStartTimeUs ?? 0), vm.KeptTimeline.ToOutput(position), buffered: true);
-            }
-            else
-            {
-                _previewAfter.Open(path, position);
-                for (int i = 0; i < 200 && _previewAfter.IsLoading; i++) await Task.Delay(25);
-                if (vm.SourcePath != path) return;
-                _previewBefore.Open(path, Math.Max(0, position - FrameDurationUs(vm)));
-            }
-            if (_media is not null)
-            {
-                _previewAfter.SelectAudioStream(_media.PrimaryAudioIndex);
-                _previewBefore.SelectAudioStream(_media.PrimaryAudioIndex);
-            }
-        }
-        catch (InvalidOperationException ex)
-        {
-            vm.Banner = new BannerInfo(StatusKind.Warning, "The preview could not reopen the recording.", ex.Message, Array.Empty<BannerAction>());
-        }
-    }
 }

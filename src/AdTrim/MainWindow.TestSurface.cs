@@ -22,16 +22,16 @@ public partial class MainWindow
     internal sealed class TestSurface(MainWindow window)
     {
         // State
-        public MpvPreviewViewModel PreviewAfter => window._previewAfter;
-        public MpvPreviewViewModel PreviewBefore => window._previewBefore;
+        public MpvPreviewViewModel PreviewAfter => window._playback.After;
+        public MpvPreviewViewModel PreviewBefore => window._playback.Before;
         public MediaInfo? Media => window._media;
         public ProjectStore? Store => window._store;
         public UserPreferences Preferences => window._preferences;
         public ExportView? ActiveExport => window._activeExportDialog;
-        public DispatcherTimer? RewindTimer => window._rewindTimer;
+        public DispatcherTimer? RewindTimer => window._playback.RewindTimer;
         public AudioLevelPass? AudioPass => window._timelineMedia.AudioPass;
         public ThumbnailLoader? ThumbnailLoader => window._timelineMedia.ThumbnailLoader;
-        public bool FrameRecoveryPending => window._frameRecovery is not null;
+        public bool FrameRecoveryPending => window._playback.FrameRecoveryPending;
         public ThumbnailService? Thumbnails { set => window._timelineMedia.Thumbnails = value; }
         public AudioLevelService? AudioLevels { set => window._timelineMedia.AudioLevels = value; }
         public Func<string, string, bool> AskDiscardEdits { get => window._askDiscardEdits; set => window._askDiscardEdits = value; }
@@ -46,12 +46,12 @@ public partial class MainWindow
         public Task<(UserPreferences Saved, string? Kept)?> ResetSettingsAsync() => window.ResetSettingsAsync();
 
         // Playback
-        public void SeekTo(MainViewModel vm, long timeUs, bool exact = true) => window.SeekTo(vm, timeUs, exact);
-        public void PlayPauseBoth() => window.PlayPauseBoth();
-        public void StepFrame(MainViewModel vm, int direction) => window.StepFrame(vm, direction);
-        public void Shuttle(MainViewModel vm, Key key) => window.Shuttle(vm, key);
-        public void RewindTick() => window.RewindTick();
-        public void StopRewind() => window.StopRewind();
+        public void SeekTo(MainViewModel vm, long timeUs, bool exact = true) => window._playback.SeekTo(vm, timeUs, exact);
+        public void PlayPauseBoth() => window._playback.PlayPauseBoth();
+        public void StepFrame(MainViewModel vm, int direction) => window._playback.StepFrame(vm, direction);
+        public void Shuttle(MainViewModel vm, Key key) => window._playback.Shuttle(vm, key);
+        public void RewindTick() => window._playback.RewindTick();
+        public void StopRewind() => window._playback.StopRewind();
         public void SetCollapsed(MainViewModel vm, bool collapsed) => window.SetCollapsed(vm, collapsed);
         public (long From, long To) VisibleTimelineRange(MainViewModel vm) => window.VisibleTimelineRange(vm);
 

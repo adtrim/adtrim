@@ -24,9 +24,9 @@ public partial class MainWindow
     public async Task<bool> SaveForUpdateAsync()
     {
         if (!CanRestartForUpdate || DataContext is not MainViewModel vm) return false;
-        ResetShuttle();
-        _previewAfter.Pause();
-        _previewBefore.Pause();
+        _playback.ResetShuttle();
+        _playback.After.Pause();
+        _playback.Before.Pause();
         _saves.StopAutosave();
         _switching = true;
         vm.IsBusy = true;
@@ -52,7 +52,7 @@ public partial class MainWindow
     public void CloseForUpdate()
     {
         _refines.Cancel();
-        _frameRecovery?.Cancel();
+        _playback.CancelFrameRecovery();
         if (DataContext is MainViewModel vm)
         {
             _timelineMedia.ReleaseAudioPass(vm);

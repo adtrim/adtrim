@@ -19,7 +19,7 @@ public partial class MainWindow
         _savedPreferences = _preferences;
         if (await UserPreferences.IsDamagedAsync()) ShowDamagedPreferencesBanner();
         // Start muted applies when the window opens; the mute button then switches it for the session.
-        _previewBefore.SetMuted(_preferences.StartMuted);
+        _playback.Before.SetMuted(_preferences.StartMuted);
         ShowMuteState(_preferences.StartMuted);
         vm.ShowWaveform = _preferences.ShowWaveform;
         vm.ShowThumbnails = _preferences.ShowThumbnails;
@@ -178,32 +178,32 @@ public partial class MainWindow
     private void SetCollapsed(MainViewModel vm, bool collapsed)
     {
         if (collapsed == vm.IsCollapsed || vm.SourcePath is null) return;
-        _playUntilUs = null;
+        _playback.PlayUntilUs = null;
         var sourceUs = vm.PlayheadUs;
-        var playing = _previewAfter.IsPlaying;
-        var muted = vm.IsCollapsed ? _previewAfter.IsMuted : _previewBefore.IsMuted;
-        _previewAfter.Pause();
-        _previewBefore.Stop();
+        var playing = _playback.After.IsPlaying;
+        var muted = vm.IsCollapsed ? _playback.After.IsMuted : _playback.Before.IsMuted;
+        _playback.After.Pause();
+        _playback.Before.Stop();
         vm.ClearSelection();
         vm.RefreshKeptTimeline();
         vm.IsCollapsed = collapsed;
         SetRecordingPaneLayout(collapsed);
         if (collapsed)
         {
-            _previewAfter.SetMuted(muted);
+            _playback.After.SetMuted(muted);
             var map = vm.KeptTimeline;
             var outputUs = map.ToOutput(sourceUs);
             vm.PlayheadUs = map.ToSource(outputUs);
-            if (map.DurationUs == 0) _previewAfter.Stop();
-            else _previewAfter.Open(map.ToMpvEdl(vm.SourcePath, _media?.TimelineStartTimeUs ?? 0), outputUs, playing, buffered: true);
+            if (map.DurationUs == 0) _playback.After.Stop();
+            else _playback.After.Open(map.ToMpvEdl(vm.SourcePath, _media?.TimelineStartTimeUs ?? 0), outputUs, playing, buffered: true);
             vm.StatusOverride = map.DurationUs == 0 ? "All scenes are excluded." : "Collapsed preview. Click an eye icon to review that cut.";
         }
         else
         {
-            _previewAfter.SetMuted(true);
-            _previewBefore.SetMuted(muted);
-            _previewAfter.Open(vm.SourcePath, sourceUs, playing);
-            _previewBefore.Open(vm.SourcePath, Math.Max(0, sourceUs - FrameDurationUs(vm)), playing);
+            _playback.After.SetMuted(true);
+            _playback.Before.SetMuted(muted);
+            _playback.After.Open(vm.SourcePath, sourceUs, playing);
+            _playback.Before.Open(vm.SourcePath, Math.Max(0, sourceUs - PlaybackController.FrameDurationUs(vm)), playing);
             vm.PlayheadUs = sourceUs;
             MpvViewBefore.Visibility = Visibility.Visible;
             UpdateNoFrameOverlay(vm);

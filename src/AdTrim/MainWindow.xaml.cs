@@ -14,18 +14,17 @@ using AdTrim.Views;
 
 namespace AdTrim;
 
-public partial class MainWindow : Window
+public partial class MainWindow : Window, IPlaybackScreen
 {
-    // Dual-pane preview. `_previewAfter` is the canonical playhead (Pane B,
-    // visible on the right, muted). `_previewBefore` follows at playhead − 1
-    // frame (Pane A, visible on the left, has audio). Only `_previewAfter`
+    // Dual-pane preview. `_playback.After` is the canonical playhead (Pane B,
+    // visible on the right, muted). `_playback.Before` follows at playhead − 1
+    // frame (Pane A, visible on the left, has audio). Only `_playback.After`
     // emits PositionUs back into the VM's PlayheadUs; Pane A is a slave that
     // gets seeked alongside Pane B whenever the playhead moves while paused,
     // and is re-synced at every play-start so they begin playback exactly
     // one frame apart. A few frames of drift during free playback is
     // acceptable per the design discussion.
-    private readonly MpvPreviewViewModel _previewAfter = new();
-    private readonly MpvPreviewViewModel _previewBefore = new();
+    private readonly PlaybackController _playback;
     private FfmpegRunner? _ffmpeg;
     private RecordingLoader? _loader;
     private ProjectStore? _store;
@@ -37,7 +36,6 @@ public partial class MainWindow : Window
     private bool _hydrating;
     private bool _allowClose;
     private bool _switching;
-    private long? _playUntilUs;
 
     private ExportView? _activeExportDialog;
     private bool _closingExport;
@@ -62,6 +60,7 @@ public partial class MainWindow : Window
     public MainWindow() : this(null) { }
     public MainWindow(string? startupPath)
     {
+        _playback = new PlaybackController(this);
         _startupPath = startupPath;
         _openingPath = startupPath;
         InitializeComponent();
@@ -81,7 +80,7 @@ public partial class MainWindow : Window
         _refines = new RefineCoordinator(() => _ffmpeg is null ? null : (_refine ??= new RefineService(_ffmpeg)).RefineOneAsync,
             () => _media?.PrimaryAudioIndex);
         _timelineMedia = new TimelineMediaLoader(() => _ffmpeg,
-            () => _previewAfter.IsSeeking || _previewAfter.IsLoading || _previewBefore.IsSeeking || _previewBefore.IsLoading,
+            () => _playback.After.IsSeeking || _playback.After.IsLoading || _playback.Before.IsSeeking || _playback.Before.IsLoading,
             update => Dispatcher.InvokeAsync(update), () => Timeline.RefreshThumbnails());
         Timeline.ThumbnailsNeeded += times => _timelineMedia.RequestThumbnails(times);
 
@@ -93,11 +92,11 @@ public partial class MainWindow : Window
         Timeline.ReviewJoinRequested += (_, outputUs) =>
         {
             if (DataContext is not MainViewModel vm || !vm.IsCollapsed || vm.IsBusy) return;
-            _playUntilUs = null;
-            SeekTo(vm, vm.KeptTimeline.ToSource(Math.Max(0, outputUs - 2_000_000)));
-            _previewAfter.Play();
+            _playback.PlayUntilUs = null;
+            _playback.SeekTo(vm, vm.KeptTimeline.ToSource(Math.Max(0, outputUs - 2_000_000)));
+            _playback.After.Play();
         };
-        _previewAfter.PlaybackFailed += (_, message) => Dispatcher.BeginInvoke(new Action(() =>
+        _playback.After.PlaybackFailed += (_, message) => Dispatcher.BeginInvoke(new Action(() =>
         {
             if (DataContext is not MainViewModel vm) return;
             if (vm.IsCollapsed) SetCollapsed(vm, false);
@@ -179,10 +178,26 @@ public partial class MainWindow : Window
     /// is anti-flicker so we don't toggle around the boundary on fractional
     /// PTS values.</para>
     /// </summary>
+    MainViewModel? IPlaybackScreen.Current => DataContext as MainViewModel;
+    MediaInfo? IPlaybackScreen.Media => _media;
+    FfmpegRunner? IPlaybackScreen.Ffmpeg => _ffmpeg;
+    bool IPlaybackScreen.Closing => _allowClose;
+    bool IPlaybackScreen.Switching => _switching;
+    bool IPlaybackScreen.Analyzing => _markers.IsAnalyzing;
+    void IPlaybackScreen.Notice(MainViewModel vm, StatusKind kind, string message) => Notice(vm, kind, message);
+    void IPlaybackScreen.UpdateNoFrameOverlay(MainViewModel vm) => UpdateNoFrameOverlay(vm);
+    void IPlaybackScreen.ShowFrameFailure(MainViewModel vm, string status)
+    {
+        NoFrameOverlay.Visibility = Visibility.Visible;
+        NoFrameMessage.Text = "Could not load the preceding frame";
+        MpvViewBefore.Visibility = Visibility.Collapsed;
+        vm.StatusOverride = status;
+    }
+
     private void UpdateNoFrameOverlay(MainViewModel vm)
     {
         if (vm.IsCollapsed) return;
-        var frameUs = FrameDurationUs(vm);
+        var frameUs = PlaybackController.FrameDurationUs(vm);
         var paneATimeUs = vm.PlayheadUs - frameUs;
         var needsOverlay = paneATimeUs < vm.FrameStartPhaseUs - (frameUs / 2);
         NoFrameMessage.Text = "No frame available";
@@ -251,8 +266,8 @@ public partial class MainWindow : Window
         // alongside. Only Pane B updates PlayheadUs (see OnPreviewPropertyChanged),
         // but we subscribe to both so the on-pane timestamp overlays update
         // independently and we can detect Before/After drift for resync.
-        _previewAfter.PropertyChanged += OnPreviewPropertyChanged;
-        _previewBefore.PropertyChanged += OnPreviewPropertyChanged;
+        _playback.After.PropertyChanged += OnPreviewPropertyChanged;
+        _playback.Before.PropertyChanged += OnPreviewPropertyChanged;
 
         // WPF doesn't surface horizontal wheel (WM_MOUSEHWHEEL = 0x020E) -
         // hook the raw window message so side-scroll wheels and trackpad
@@ -314,38 +329,38 @@ public partial class MainWindow : Window
             // fired. Position is the live mpv value; frame index uses the
             // same phase-aware math as FrameSnap (Plex .ts captures start
             // mid-GOP so frame 0 doesn't sit at t=0).
-            if (ReferenceEquals(sender, _previewBefore))
+            if (ReferenceEquals(sender, _playback.Before))
             {
-                TimestampBeforePos.Text = FormatTimestampMs(_previewBefore.PositionUs);
-                TimestampBeforeFrame.Text = FormatFrameIndex(_previewBefore.PositionUs, vm);
+                TimestampBeforePos.Text = FormatTimestampMs(_playback.Before.PositionUs);
+                TimestampBeforeFrame.Text = FormatFrameIndex(_playback.Before.PositionUs, vm);
             }
-            else if (ReferenceEquals(sender, _previewAfter))
+            else if (ReferenceEquals(sender, _playback.After))
             {
-                TimestampAfterPos.Text = FormatTimestampMs(_previewAfter.PositionUs);
-                TimestampAfterFrame.Text = FormatFrameIndex(_previewAfter.PositionUs, vm);
+                TimestampAfterPos.Text = FormatTimestampMs(_playback.After.PositionUs);
+                TimestampAfterFrame.Text = FormatFrameIndex(_playback.After.PositionUs, vm);
             }
 
-            if (_previewAfter.IsLoading) return;
+            if (_playback.After.IsLoading) return;
             // Only Pane B drives PlayheadUs.
-            if (!ReferenceEquals(sender, _previewAfter))
+            if (!ReferenceEquals(sender, _playback.After))
             {
-                MaybeResyncPanes(vm);
+                _playback.MaybeResyncPanes(vm);
                 return;
             }
 
             if (vm.IsCollapsed)
             {
-                vm.PlayheadUs = vm.KeptTimeline.ToSource(_previewAfter.PositionUs);
+                vm.PlayheadUs = vm.KeptTimeline.ToSource(_playback.After.PositionUs);
                 return;
             }
-            vm.PlayheadUs = _previewAfter.PositionUs;
-            MaybeResyncPanes(vm);
+            vm.PlayheadUs = _playback.After.PositionUs;
+            _playback.MaybeResyncPanes(vm);
 
-            if (_playUntilUs is { } stopUs && _previewAfter.PositionUs >= stopUs)
+            if (_playback.PlayUntilUs is { } stopUs && _playback.After.PositionUs >= stopUs)
             {
-                _previewAfter.Pause();
-                _previewBefore.Pause();
-                _playUntilUs = null;
+                _playback.After.Pause();
+                _playback.Before.Pause();
+                _playback.PlayUntilUs = null;
             }
         }
         else if (e.PropertyName == nameof(MpvPreviewViewModel.IsSeeking))
@@ -354,100 +369,18 @@ public partial class MainWindow : Window
             {
                 // A repeated seek can finish at the same native position, so no
                 // PositionUs notification replaces the optimistic scrub position.
-                if (ReferenceEquals(sender, _previewAfter) && !_previewAfter.IsSeeking && !_previewAfter.IsLoading)
+                if (ReferenceEquals(sender, _playback.After) && !_playback.After.IsSeeking && !_playback.After.IsLoading)
                     currentVm.PlayheadUs = currentVm.IsCollapsed
-                        ? currentVm.KeptTimeline.ToSource(_previewAfter.PositionUs) : _previewAfter.PositionUs;
-                MaybeResyncPanes(currentVm);
+                        ? currentVm.KeptTimeline.ToSource(_playback.After.PositionUs) : _playback.After.PositionUs;
+                _playback.MaybeResyncPanes(currentVm);
             }
         }
         else if (e.PropertyName == nameof(MpvPreviewViewModel.IsPlaying))
         {
             // Swap the play/pause icon visibility.
-            PauseGlyph.Visibility = _previewAfter.IsPlaying ? Visibility.Visible : Visibility.Collapsed;
-            PlayGlyph.Visibility = _previewAfter.IsPlaying ? Visibility.Collapsed : Visibility.Visible;
-            if (DataContext is MainViewModel currentVm) MaybeResyncPanes(currentVm);
-        }
-    }
-
-    // ----- Pane drift / timestamp helpers ------------------------------
-
-    // The advertised rate can differ from decoded frame spacing. Let mpv
-    // find the predecessor instead of repeatedly seeking half a real frame back.
-    private CancellationTokenSource? _frameRecovery;
-    private (string? Path, long Time)? _failedFrameRecovery;
-
-    private void MaybeResyncPanes(MainViewModel vm)
-    {
-        if (vm.IsCollapsed || _previewAfter.IsLoading || _previewBefore.IsLoading
-            || _previewAfter.IsSeeking || _previewBefore.IsSeeking) return;
-        if (_previewAfter.IsPlaying || _previewBefore.IsPlaying) return;
-        var target = _previewAfter.PositionUs;
-        if (target <= vm.FrameStartPhaseUs) return;
-        if (_previewBefore.PreviousFrameTargetUs == target)
-        {
-            if (_previewBefore.PositionUs < target - 2)
-            {
-                UpdateNoFrameOverlay(vm);
-                return;
-            }
-            if (_previewBefore.PositionUs >= target - 2 && _frameRecovery is null)
-            {
-                if (_failedFrameRecovery == (vm.SourcePath, target))
-                {
-                    NoFrameOverlay.Visibility = Visibility.Visible;
-                    NoFrameMessage.Text = "Could not load the preceding frame";
-                    MpvViewBefore.Visibility = Visibility.Collapsed;
-                    vm.StatusOverride = "Could not load the preceding frame. Try seeking again.";
-                }
-                else RecoverPreviousFrameAsync(vm, target);
-            }
-            return;
-        }
-        _frameRecovery?.Cancel();
-        _previewBefore.SeekPreviousFrame(target);
-    }
-
-    private async void RecoverPreviousFrameAsync(MainViewModel vm, long target)
-    {
-        if (vm.SourcePath is not { } path || _ffmpeg is null) return;
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        _frameRecovery = cancellation;
-        bool StillCurrent() => !_allowClose && !cancellation.IsCancellationRequested && ReferenceEquals(DataContext, vm)
-            && vm.SourcePath == path && !vm.IsCollapsed
-            && !_previewAfter.IsPlaying && !_previewAfter.IsSeeking && _previewAfter.PositionUs == target;
-        try
-        {
-            var previous = await new RefineService(_ffmpeg).FindPreviousFrameAsync(path, target, cancellation.Token);
-            if (!StillCurrent()) return;
-            if (previous is { } frame)
-            {
-                _failedFrameRecovery = (path, target);
-                _previewBefore.SeekPreviousFrame(target, Math.Max(0, frame - 1));
-            }
-            else
-            {
-                _failedFrameRecovery = (path, target);
-                NoFrameOverlay.Visibility = Visibility.Visible;
-                NoFrameMessage.Text = "Could not load the preceding frame";
-                MpvViewBefore.Visibility = Visibility.Collapsed;
-                vm.StatusOverride = "No preceding frame found within 60 seconds of this position.";
-            }
-        }
-        catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException or IOException or System.Text.Json.JsonException)
-        {
-            if (StillCurrent())
-            {
-                _failedFrameRecovery = (path, target);
-                NoFrameOverlay.Visibility = Visibility.Visible;
-                NoFrameMessage.Text = "Could not load the preceding frame";
-                MpvViewBefore.Visibility = Visibility.Collapsed;
-                vm.StatusOverride = "Could not load the preceding frame. Try seeking again.";
-            }
-        }
-        finally
-        {
-            if (ReferenceEquals(_frameRecovery, cancellation)) _frameRecovery = null;
-            if (!_allowClose && ReferenceEquals(DataContext, vm)) MaybeResyncPanes(vm);
+            PauseGlyph.Visibility = _playback.After.IsPlaying ? Visibility.Visible : Visibility.Collapsed;
+            PlayGlyph.Visibility = _playback.After.IsPlaying ? Visibility.Collapsed : Visibility.Visible;
+            if (DataContext is MainViewModel currentVm) _playback.MaybeResyncPanes(currentVm);
         }
     }
 
@@ -460,9 +393,9 @@ public partial class MainWindow : Window
     private void ApplyAspectFit()
     {
         // Either pane's aspect works - both panes play the same source.
-        var aspect = _previewAfter.VideoAspect > 0
-            ? _previewAfter.VideoAspect
-            : _previewBefore.VideoAspect;
+        var aspect = _playback.After.VideoAspect > 0
+            ? _playback.After.VideoAspect
+            : _playback.Before.VideoAspect;
         if (aspect <= 0) return;
         ApplyAspectFitToPane(MpvViewBefore, PaneAGrid, aspect);
         ApplyAspectFitToPane(MpvViewAfter, PaneBGrid, aspect);
@@ -526,7 +459,7 @@ public partial class MainWindow : Window
         return $"{h:00}:{m:00}:{s:00}.{ms:000}";
     }
 
-    private void OnPlayPauseClicked(object sender, RoutedEventArgs e) => PlayPauseBoth();
+    private void OnPlayPauseClicked(object sender, RoutedEventArgs e) => _playback.PlayPauseBoth();
 
     /// <summary>
     /// Toggle audio on Pane A ("before"). Pane B stays permanently muted -
@@ -537,7 +470,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnToggleMute(object sender, RoutedEventArgs e)
     {
-        var active = DataContext is MainViewModel { IsCollapsed: true } ? _previewAfter : _previewBefore;
+        var active = DataContext is MainViewModel { IsCollapsed: true } ? _playback.After : _playback.Before;
         var newMuted = !active.IsMuted;
         active.SetMuted(newMuted);
         ShowMuteState(newMuted);
@@ -549,43 +482,6 @@ public partial class MainWindow : Window
         SpeakerOffGlyph.Visibility = muted ? Visibility.Visible   : Visibility.Collapsed;
     }
 
-    /// <summary>
-    /// Toggle play/pause for both panes. On play-start, re-seek Pane A to
-    /// exactly Pane B's position − 1 frame so playback begins synchronized;
-    /// a few frames of drift during the playback itself is acceptable per
-    /// the design. On pause, just pause both - the seek-while-paused path
-    /// (<see cref="SeekTo"/>) keeps them aligned during scrubbing.
-    /// </summary>
-    private void PlayPauseBoth()
-    {
-        if (DataContext is not MainViewModel vm) return;
-        ResetShuttle();
-        if (vm.IsBusy && !_markers.IsAnalyzing) return;
-        if (vm.IsCollapsed)
-        {
-            if (vm.KeptTimeline.DurationUs > 0 && !_previewAfter.IsLoading) _previewAfter.PlayPause();
-            return;
-        }
-        if (_previewAfter.IsPlaying)
-        {
-            _previewAfter.Pause();
-            _previewBefore.Pause();
-            _playUntilUs = null;
-        }
-        else
-        {
-            // Re-sync before playback starts: Pane B at playhead, Pane A at
-            // playhead − 1 frame. Both exact so we land on real frames, not
-            // the nearest preceding keyframe.
-            var frameUs = FrameDurationUs(vm);
-            _previewAfter.SeekUsExact(vm.PlayheadUs);
-            _previewBefore.SeekUsExact(Math.Max(0, vm.PlayheadUs - frameUs));
-            _previewAfter.Play();
-            _previewBefore.Play();
-            _playUntilUs = null;
-        }
-    }
-
     private bool _mpvAttachedAfter;
     private bool _mpvAttachedBefore;
     private void AttachMpvHwnd()
@@ -595,12 +491,12 @@ public partial class MainWindow : Window
         {
             try
             {
-                _previewAfter.Wid = MpvViewAfter.Hwnd;
-                _previewAfter.Initialize();
+                _playback.After.Wid = MpvViewAfter.Hwnd;
+                _playback.After.Initialize();
                 // Pane B is muted; we hear audio from Pane A (the "before"
                 // pane). Two mpv instances unmuted on the same file 1 frame
                 // apart would comb-filter horribly.
-                _previewAfter.SetMuted(true);
+                _playback.After.SetMuted(true);
                 _mpvAttachedAfter = true;
             }
             catch (Exception ex)
@@ -619,8 +515,8 @@ public partial class MainWindow : Window
         {
             try
             {
-                _previewBefore.Wid = MpvViewBefore.Hwnd;
-                _previewBefore.Initialize();
+                _playback.Before.Wid = MpvViewBefore.Hwnd;
+                _playback.Before.Initialize();
                 _mpvAttachedBefore = true;
             }
             catch (Exception ex)
@@ -665,7 +561,7 @@ public partial class MainWindow : Window
         if (!File.Exists(path)) return;
         if (DataContext is not MainViewModel vm) return;
         if (BlockProjectSwitchForExport(vm) || _switching || vm.IsBusy) return;
-        ResetShuttle();
+        _playback.ResetShuttle();
         _switching = true;
         bool flushed;
         try { flushed = await FlushBeforeLeavingAsync(vm); }
@@ -704,18 +600,18 @@ public partial class MainWindow : Window
         var previousPath = vm.SourcePath;
         var previousPosition = vm.PlayheadUs;
         var previousScrollOffset = TimelineScroll.HorizontalOffset;
-        var previousPlaying = _previewAfter.IsPlaying;
-        var previousMuted = vm.IsCollapsed ? _previewAfter.IsMuted : _previewBefore.IsMuted;
-        var previousPlayUntil = _playUntilUs;
+        var previousPlaying = _playback.After.IsPlaying;
+        var previousMuted = vm.IsCollapsed ? _playback.After.IsMuted : _playback.Before.IsMuted;
+        var previousPlayUntil = _playback.PlayUntilUs;
         _switching = true;
         _hydrating = true;
         vm.IsBusy = true;
         vm.BusyOperation = "Opening";
-        _previewAfter.Pause();
-        _previewBefore.Pause();
+        _playback.After.Pause();
+        _playback.Before.Pause();
         _timelineMedia.DropAudioPass();
         _timelineMedia.CancelThumbnailLoad(vm, clearThumbnails: false);
-        _frameRecovery?.Cancel();
+        _playback.CancelFrameRecovery();
         _refines.Cancel();
         _saves.StopAutosave();
         bool resumeAfterFailure = false, closeRequested = false;
@@ -741,7 +637,7 @@ public partial class MainWindow : Window
             WireViewModelEvents(vm);
             _markers.SetImported(loaded.ImportedMarkers, loaded.ImportedMarkersAvailable);
             AnalyzeAdBreaksButton.Style = (Style)FindResource("Button.Primary");
-            _playUntilUs = null;
+            _playback.PlayUntilUs = null;
             vm.HasAdTrimAnalysis = loaded.CachedSuggestions is not null;
             UseOriginalImportedMarkersMenuItem.ToolTip = loaded.ImportedMarkersUnavailableReason;
             RefreshImportedMarkersItem(vm);
@@ -749,8 +645,8 @@ public partial class MainWindow : Window
             _sourceFingerprint = fingerprint;
             vm.SourceFingerprint = fingerprint;
             vm.LastExport = null;
-            _previewAfter.SelectAudioStream(_media.PrimaryAudioIndex);
-            _previewBefore.SelectAudioStream(_media.PrimaryAudioIndex);
+            _playback.After.SelectAudioStream(_media.PrimaryAudioIndex);
+            _playback.Before.SelectAudioStream(_media.PrimaryAudioIndex);
             vm.SourcePath = path;
             vm.FileName = Path.GetFileName(path);
             vm.DurationUs = _media.DurationUs;
@@ -762,10 +658,10 @@ public partial class MainWindow : Window
             DataContext = vm;
             SetRecordingPaneLayout(false);
             UpdateTimelineLayout(forceRecenter: true);
-            _previewAfter.SetMuted(true);
-            _previewBefore.SetMuted(previousMuted);
-            _previewAfter.Open(path);
-            _previewBefore.Open(path);
+            _playback.After.SetMuted(true);
+            _playback.Before.SetMuted(previousMuted);
+            _playback.After.Open(path);
+            _playback.Before.Open(path);
             VideoPlaceholder.Visibility = Visibility.Collapsed;
             MpvViewAfter.Visibility = Visibility.Visible;
             MpvViewBefore.Visibility = Visibility.Visible;
@@ -824,8 +720,8 @@ public partial class MainWindow : Window
             if (_preferences.Positions?.TryGetValue(path, out var position) == true)
             {
                 position = Math.Clamp(position, 0, vm.DurationUs);
-                _previewAfter.Open(path, position);
-                _previewBefore.Open(path, Math.Max(0, position - FrameDurationUs(vm)));
+                _playback.After.Open(path, position);
+                _playback.Before.Open(path, Math.Max(0, position - PlaybackController.FrameDurationUs(vm)));
                 vm.PlayheadUs = position;
             }
             else vm.PlayheadUs = 0;
@@ -865,7 +761,7 @@ public partial class MainWindow : Window
             SetRecordingPaneLayout(vm.IsCollapsed);
             if (vm.HasAdTrimAnalysis) AnalyzeAdBreaksButton.ClearValue(StyleProperty);
             else AnalyzeAdBreaksButton.Style = (Style)FindResource("Button.Primary");
-            _playUntilUs = previousPlayUntil;
+            _playback.PlayUntilUs = previousPlayUntil;
             vm.PlayheadUs = previousPosition;
             vm.StatusKind = previousStatus.StatusKind;
             vm.StatusOverride = previousStatus.StatusOverride;
@@ -877,23 +773,23 @@ public partial class MainWindow : Window
             {
                 if (previousPath is not null && previousMedia is not null)
                 {
-                    _previewAfter.SetMuted(vm.IsCollapsed ? previousMuted : true);
-                    _previewBefore.SetMuted(previousMuted);
+                    _playback.After.SetMuted(vm.IsCollapsed ? previousMuted : true);
+                    _playback.Before.SetMuted(previousMuted);
                     if (vm.IsCollapsed)
                     {
-                        _previewBefore.Stop();
+                        _playback.Before.Stop();
                         if (vm.KeptTimeline.DurationUs > 0)
-                            _previewAfter.Open(vm.KeptTimeline.ToMpvEdl(previousPath, previousMedia.TimelineStartTimeUs),
+                            _playback.After.Open(vm.KeptTimeline.ToMpvEdl(previousPath, previousMedia.TimelineStartTimeUs),
                                 vm.KeptTimeline.ToOutput(previousPosition), buffered: true);
-                        else _previewAfter.Stop();
+                        else _playback.After.Stop();
                     }
                     else
                     {
-                        _previewAfter.Open(previousPath, previousPosition);
-                        _previewBefore.Open(previousPath, Math.Max(0, previousPosition - FrameDurationUs(vm)));
+                        _playback.After.Open(previousPath, previousPosition);
+                        _playback.Before.Open(previousPath, Math.Max(0, previousPosition - PlaybackController.FrameDurationUs(vm)));
                     }
-                    _previewAfter.SelectAudioStream(previousMedia.PrimaryAudioIndex);
-                    _previewBefore.SelectAudioStream(previousMedia.PrimaryAudioIndex);
+                    _playback.After.SelectAudioStream(previousMedia.PrimaryAudioIndex);
+                    _playback.Before.SelectAudioStream(previousMedia.PrimaryAudioIndex);
                     VideoPlaceholder.Visibility = Visibility.Collapsed;
                     MpvViewAfter.Visibility = Visibility.Visible;
                     MpvViewBefore.Visibility = Visibility.Visible;
@@ -905,8 +801,8 @@ public partial class MainWindow : Window
                 }
                 else
                 {
-                    _previewAfter.Stop();
-                    _previewBefore.Stop();
+                    _playback.After.Stop();
+                    _playback.Before.Stop();
                     VideoPlaceholder.Visibility = Visibility.Visible;
                     MpvViewAfter.Visibility = Visibility.Collapsed;
                     MpvViewBefore.Visibility = Visibility.Collapsed;
@@ -915,8 +811,8 @@ public partial class MainWindow : Window
             }
             catch (Exception restoreError)
             {
-                _previewAfter.Stop();
-                _previewBefore.Stop();
+                _playback.After.Stop();
+                _playback.Before.Stop();
                 message += "\n\nThe previous recording's preview could not be restored: " + restoreError.Message;
             }
             MessageBox.Show(this, message, "Failed to open", MessageBoxButton.OK, MessageBoxImage.Error);
@@ -930,10 +826,10 @@ public partial class MainWindow : Window
             closeRequested = _saves.TakePendingClose(true);
         }
         if (resumeAfterFailure && !closeRequested && !_allowClose && !_switching && ReferenceEquals(DataContext, previousVm)
-            && previousVm.SourcePath == previousPath && !_previewAfter.IsPlaying)
+            && previousVm.SourcePath == previousPath && !_playback.After.IsPlaying)
         {
-            if (previousVm.IsCollapsed) { if (previousVm.KeptTimeline.DurationUs > 0) _previewAfter.Play(); }
-            else { _previewAfter.Play(); _previewBefore.Play(); }
+            if (previousVm.IsCollapsed) { if (previousVm.KeptTimeline.DurationUs > 0) _playback.After.Play(); }
+            else { _playback.After.Play(); _playback.Before.Play(); }
         }
     }
 
@@ -1164,16 +1060,16 @@ public partial class MainWindow : Window
 
     private async void OnWindowClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        ResetShuttle();
+        _playback.ResetShuttle();
         if (_allowClose)
         {
             _saves.StopAutosave();
             _autosaveTimer.Tick -= OnAutosaveTick;
             // mpv must release its video output before WPF destroys the host HWNDs.
-            _previewAfter.PropertyChanged -= OnPreviewPropertyChanged;
-            _previewBefore.PropertyChanged -= OnPreviewPropertyChanged;
-            _previewAfter.Dispose();
-            _previewBefore.Dispose();
+            _playback.After.PropertyChanged -= OnPreviewPropertyChanged;
+            _playback.Before.PropertyChanged -= OnPreviewPropertyChanged;
+            _playback.After.Dispose();
+            _playback.Before.Dispose();
             return;
         }
         e.Cancel = true;
@@ -1214,50 +1110,6 @@ public partial class MainWindow : Window
     // Keyboard router
     // -------------------------------------------------------------------
 
-    /// <summary>
-    /// Seek both panes to bracket the requested time and immediately update
-    /// vm.PlayheadUs so chained keystrokes accumulate. mpv's TimeChanged
-    /// property events arrive asynchronously (often 50-200 ms after a seek);
-    /// without this helper, pressing `[`, `[`, `[` reads the same stale
-    /// `vm.PlayheadUs` three times and only the last seek "sticks".
-    ///
-    /// <para>Dual-pane: Pane B lands on <paramref name="timeUs"/>; Pane A
-    /// lands on <c>timeUs − 1 frame</c>. Both seeks are issued together so
-    /// the panes stay exactly 1 frame apart while paused. When Pane A's
-    /// target is before frame 0, the "No frame available" overlay is shown
-    /// instead (driven by PlayheadUs → UpdateNoFrameOverlay).</para>
-    /// </summary>
-    /// <param name="exact">When true, uses frame-accurate seek regardless of
-    /// the global hr-seek mode. Keyboard shortcuts pass <c>true</c> so a
-    /// +1s seek can't get rounded to the same keyframe in fast-seek mode.</param>
-    private void SeekTo(MainViewModel vm, long timeUs, bool exact = true)
-    {
-        _frameRecovery?.Cancel();
-        _failedFrameRecovery = null;
-        if (vm.IsCollapsed)
-        {
-            if (vm.KeptTimeline.DurationUs == 0) return;
-            var output = vm.KeptTimeline.ToOutput(timeUs);
-            vm.PlayheadUs = vm.KeptTimeline.ToSource(output);
-            _previewAfter.SeekUsExact(output);
-            return;
-        }
-        timeUs = Math.Max(0, Math.Min(vm.DurationUs, timeUs));
-        vm.PlayheadUs = timeUs;
-        var frameUs = FrameDurationUs(vm);
-        var beforeUs = Math.Max(0, timeUs - frameUs);
-        if (exact)
-        {
-            _previewAfter.SeekUsExact(timeUs);
-            _previewBefore.SeekUsExact(beforeUs);
-        }
-        else
-        {
-            _previewAfter.SeekUs(timeUs);
-            _previewBefore.SeekUs(beforeUs);
-        }
-    }
-
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control)
@@ -1288,7 +1140,7 @@ public partial class MainWindow : Window
         }
 
         if (_markers.IsAnalyzing && e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None)
-        { PlayPauseBoth(); e.Handled = true; return; }
+        { _playback.PlayPauseBoth(); e.Handled = true; return; }
 
         if (vm.IsBusy)
         {
@@ -1306,25 +1158,25 @@ public partial class MainWindow : Window
         if (e.Key is Key.Home or Key.End && Keyboard.Modifiers == ModifierKeys.None && vm.IsFileLoaded)
         {
             var positionUs = e.Key == Key.Home ? 0 : vm.TimelineDurationUs;
-            SeekTo(vm, vm.IsCollapsed ? vm.KeptTimeline.ToSource(positionUs) : positionUs);
+            _playback.SeekTo(vm, vm.IsCollapsed ? vm.KeptTimeline.ToSource(positionUs) : positionUs);
             e.Handled = true;
             return;
         }
         if (Keyboard.Modifiers == ModifierKeys.None && e.Key is Key.J or Key.K or Key.L && vm.IsFileLoaded)
-        { Shuttle(vm, e.Key); e.Handled = true; return; }
+        { _playback.Shuttle(vm, e.Key); e.Handled = true; return; }
         if (ctrl && e.Key == Key.D0) { OnFitTimeline(this, new RoutedEventArgs()); e.Handled = true; return; }
         if (ctrl && (e.Key == Key.OemPlus || e.Key == Key.Add)) { OnZoomIn(this, new RoutedEventArgs()); e.Handled = true; return; }
         if (ctrl && (e.Key == Key.OemMinus || e.Key == Key.Subtract)) { OnZoomOut(this, new RoutedEventArgs()); e.Handled = true; return; }
         if (!ctrl && e.Key == Key.E) { OnExport(this, new RoutedEventArgs()); e.Handled = true; return; }
         if (vm.IsCollapsed)
         {
-            if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None) PlayPauseBoth();
-            else if (e.Key is Key.OemComma or Key.OemPeriod) StepFrame(vm, e.Key == Key.OemComma ? -1 : 1);
+            if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None) _playback.PlayPauseBoth();
+            else if (e.Key is Key.OemComma or Key.OemPeriod) _playback.StepFrame(vm, e.Key == Key.OemComma ? -1 : 1);
             else if (e.Key is Key.Left or Key.Right or Key.OemOpenBrackets or Key.OemCloseBrackets)
             {
                 long step = e.Key is Key.OemOpenBrackets or Key.OemCloseBrackets ? 1_000_000 : ArrowStepUs(vm);
                 long direction = e.Key is Key.Left or Key.OemOpenBrackets ? -1 : 1;
-                SeekTo(vm, vm.KeptTimeline.ToSource(vm.TimelinePositionUs + direction * step));
+                _playback.SeekTo(vm, vm.KeptTimeline.ToSource(vm.TimelinePositionUs + direction * step));
             }
             else if (ctrl && e.Key == Key.S) OnAutosaveTick(null, EventArgs.Empty);
             else if (ctrl && e.Key == Key.O) OnOpenFile(this, new RoutedEventArgs());
@@ -1332,7 +1184,7 @@ public partial class MainWindow : Window
             else if (!ctrl && !shift && (e.Key is >= Key.D0 and <= Key.D9 || e.Key is >= Key.NumPad0 and <= Key.NumPad9))
             {
                 var digit = e.Key >= Key.NumPad0 ? e.Key - Key.NumPad0 : e.Key - Key.D0;
-                SeekTo(vm, vm.KeptTimeline.ToSource(vm.TimelineDurationUs * digit / 10));
+                _playback.SeekTo(vm, vm.KeptTimeline.ToSource(vm.TimelineDurationUs * digit / 10));
             }
             else if (e.Key == Key.Tab) return;
             else vm.StatusOverride = "Return to Edit view with P to change cuts.";
@@ -1369,27 +1221,27 @@ public partial class MainWindow : Window
         // alignment.
         if (e.Key == Key.OemComma)
         {
-            StepFrame(vm, -1);
+            _playback.StepFrame(vm, -1);
             e.Handled = true;
             return;
         }
         if (e.Key == Key.OemPeriod)
         {
-            StepFrame(vm, +1);
+            _playback.StepFrame(vm, +1);
             e.Handled = true;
             return;
         }
 
         // 1-second step
-        if (e.Key == Key.OemOpenBrackets)  { SeekTo(vm, vm.PlayheadUs - 1_000_000); e.Handled = true; return; }
-        if (e.Key == Key.OemCloseBrackets) { SeekTo(vm, vm.PlayheadUs + 1_000_000); e.Handled = true; return; }
+        if (e.Key == Key.OemOpenBrackets)  { _playback.SeekTo(vm, vm.PlayheadUs - 1_000_000); e.Handled = true; return; }
+        if (e.Key == Key.OemCloseBrackets) { _playback.SeekTo(vm, vm.PlayheadUs + 1_000_000); e.Handled = true; return; }
 
         // Arrow seek (zoom-dependent step)
         if (e.Key is Key.Left or Key.Right)
         {
             long step = ArrowStepUs(vm);
             var dir = e.Key == Key.Left ? -1L : 1L;
-            SeekTo(vm, vm.PlayheadUs + dir * step);
+            _playback.SeekTo(vm, vm.PlayheadUs + dir * step);
             e.Handled = true;
             return;
         }
@@ -1415,7 +1267,7 @@ public partial class MainWindow : Window
             };
             if (digit is int d)
             {
-                SeekTo(vm, vm.DurationUs * d / 10);
+                _playback.SeekTo(vm, vm.DurationUs * d / 10);
                 e.Handled = true;
                 return;
             }
@@ -1504,7 +1356,7 @@ public partial class MainWindow : Window
         if (e.Key == Key.N && !ctrl)
         {
             var next = vm.NextUnconfirmedAfter(vm.PlayheadUs);
-            if (next is not null) { vm.SelectMarker(next); SeekTo(vm, next.TimeUs); }
+            if (next is not null) { vm.SelectMarker(next); _playback.SeekTo(vm, next.TimeUs); }
             e.Handled = true;
             return;
         }
@@ -1512,7 +1364,7 @@ public partial class MainWindow : Window
         // Play/pause (Space)
         if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None)
         {
-            PlayPauseBoth();
+            _playback.PlayPauseBoth();
             e.Handled = true;
             return;
         }
@@ -1608,17 +1460,11 @@ public partial class MainWindow : Window
         return IntPtr.Zero;
     }
 
-    private static long FrameDurationUs(MainViewModel vm)
-    {
-        var fps = vm.FrameRate.AsDouble;
-        return fps <= 0 ? 33_366L : (long)Math.Round(1_000_000.0 / fps);
-    }
-
     private static long ArrowStepUs(MainViewModel vm)
     {
         // Zoom-aware: at higher zoom, smaller steps.
         var z = vm.ZoomFactor;
-        if (z >= 8) return FrameDurationUs(vm);   // 1 frame
+        if (z >= 8) return PlaybackController.FrameDurationUs(vm);   // 1 frame
         if (z >= 2) return 1_000_000;             // 1 sec
         if (z >= 0.75) return 5_000_000;          // 5 sec
         return 30_000_000;                        // 30 sec
@@ -1708,7 +1554,7 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainViewModel vm) return;
         if (BlockProjectSwitchForExport(vm) || _switching || vm.IsBusy) return;
-        ResetShuttle();
+        _playback.ResetShuttle();
         _switching = true;
         bool flushed;
         try { flushed = await FlushBeforeLeavingAsync(vm); }
@@ -1719,8 +1565,8 @@ public partial class MainWindow : Window
         _timelineMedia.CancelThumbnailLoad(vm, clearThumbnails: true);
         _refines.Cancel();
         _saves.StopAutosave();
-        _previewAfter.Pause();
-        _previewBefore.Pause();
+        _playback.After.Pause();
+        _playback.Before.Pause();
         vm.ClearSelection();
         vm.Markers.Clear();
         vm.Segments.Clear();
@@ -1735,8 +1581,8 @@ public partial class MainWindow : Window
         vm.ClearStatus();
         vm.IsDirty = false;
         vm.IsCollapsed = false;
-        _previewAfter.Stop();
-        _previewBefore.Stop();
+        _playback.After.Stop();
+        _playback.Before.Stop();
         _media = null;
         _sourceFingerprint = null;
         _markers.SetImported(null, _markers.ImportedAvailable);
@@ -1807,9 +1653,9 @@ public partial class MainWindow : Window
 
     private void AddSplitAtPlayhead(MainViewModel vm)
     {
-        if (_previewAfter.IsSeeking || _previewAfter.IsLoading) return;
-        var timeUs = _previewAfter.PositionUs;
-        var minDelta = FrameDurationUs(vm);
+        if (_playback.After.IsSeeking || _playback.After.IsLoading) return;
+        var timeUs = _playback.After.PositionUs;
+        var minDelta = PlaybackController.FrameDurationUs(vm);
         if (!vm.Markers.Any(m => Math.Abs(m.TimeUs - timeUs) < minDelta))
             vm.CommandStack.Execute(new AddSplitCommand(vm, timeUs, SplitSource.Manual));
     }
@@ -1837,7 +1683,7 @@ public partial class MainWindow : Window
         if (DataContext is not MainViewModel { CanEdit: true }) return;
         if (DataContext is not MainViewModel vm) return;
         var next = vm.NextUnconfirmedAfter(vm.PlayheadUs);
-        if (next is not null) { vm.SelectMarker(next); SeekTo(vm, next.TimeUs); }
+        if (next is not null) { vm.SelectMarker(next); _playback.SeekTo(vm, next.TimeUs); }
     }
 
     private void OnPreviousSplit(object sender, RoutedEventArgs e)
@@ -1846,7 +1692,7 @@ public partial class MainWindow : Window
         long near = NearPlayheadUs(vm);
         var previous = vm.Markers.Select(m => vm.ToDisplayTime(m.TimeUs))
             .Where(t => t < vm.TimelinePositionUs - near).DefaultIfEmpty(0).Max();
-        SeekTo(vm, vm.ToSourceTime(previous));
+        _playback.SeekTo(vm, vm.ToSourceTime(previous));
     }
 
     private void OnNextSplit(object sender, RoutedEventArgs e)
@@ -1855,45 +1701,17 @@ public partial class MainWindow : Window
         long near = NearPlayheadUs(vm);
         var next = vm.Markers.Select(m => vm.ToDisplayTime(m.TimeUs))
             .Where(t => t > vm.TimelinePositionUs + near).DefaultIfEmpty(vm.TimelineDurationUs).Min();
-        SeekTo(vm, vm.ToSourceTime(next));
+        _playback.SeekTo(vm, vm.ToSourceTime(next));
     }
 
     private void OnStepFrameBack(object sender, RoutedEventArgs e)
     {
-        if (DataContext is MainViewModel vm) StepFrame(vm, -1);
+        if (DataContext is MainViewModel vm) _playback.StepFrame(vm, -1);
     }
 
     private void OnStepFrameForward(object sender, RoutedEventArgs e)
     {
-        if (DataContext is MainViewModel vm) StepFrame(vm, +1);
-    }
-
-    private void StepFrame(MainViewModel vm, int direction)
-    {
-        if (vm.IsBusy) return;
-        if (_previewAfter.IsPlaying) { _previewAfter.Pause(); _previewBefore.Pause(); }
-        // Use mpv's native frame-step commands rather than a duration-based
-        // seek. The container's r_frame_rate (used by FrameDurationUs) doesn't
-        // always match mpv's actual displayed frame interval - telecined
-        // 24fps content carried in a 1080i59.94 container is the classic
-        // case. A duration-based step lands between real frames, and mpv's
-        // absolute+exact seek then rounds *forward* to the next real frame,
-        // so backward steps go nowhere.
-        //
-        // Both panes step in parallel: same source, same frame grid, so the
-        // one-frame offset between PreviewBefore and PreviewAfter is preserved.
-        // PlayheadUs updates via the time-pos observer once mpv reports the
-        // new position (usually within one display refresh).
-        if (direction > 0)
-        {
-            _previewAfter.StepFrameForward();
-            if (!vm.IsCollapsed) _previewBefore.StepFrameForward();
-        }
-        else
-        {
-            _previewAfter.StepFrameBack();
-            if (!vm.IsCollapsed) _previewBefore.StepFrameBack();
-        }
+        if (DataContext is MainViewModel vm) _playback.StepFrame(vm, +1);
     }
 
     private async void OnExport(object sender, RoutedEventArgs e)
@@ -1927,9 +1745,9 @@ public partial class MainWindow : Window
 
         vm.Banner = null;
 
-        ResetShuttle();
-        _previewAfter.Pause();
-        _previewBefore.Pause();
+        _playback.ResetShuttle();
+        _playback.After.Pause();
+        _playback.Before.Pause();
         // Export needs the disk. A finished audio pass costs nothing and stays; the graph keeps
         // what a running one measured, and the pass starts over when the editor returns.
         _timelineMedia.DropUnfinishedAudioPass();
@@ -2109,7 +1927,7 @@ public partial class MainWindow : Window
             .OrderByDescending(m => m.TimeUs).FirstOrDefault();
         if (previous is null) { Notice(vm, StatusKind.Info, "No unconfirmed split before the playhead."); return; }
         vm.SelectMarker(previous);
-        SeekTo(vm, previous.TimeUs);
+        _playback.SeekTo(vm, previous.TimeUs);
     }
 
     private void OnPreviousMarker(object sender, RoutedEventArgs e) { if (DataContext is MainViewModel vm) JumpToMarker(vm, -1); }
@@ -2117,7 +1935,7 @@ public partial class MainWindow : Window
 
     // After a seek the playhead shows the frame the player landed on, up to a frame away from a
     // marker that is not on a frame time (imported chapters). That marker is the one we are at.
-    private long NearPlayheadUs(MainViewModel vm) => Math.Max(0, FrameDurationUs(vm) - 1);
+    private long NearPlayheadUs(MainViewModel vm) => Math.Max(0, PlaybackController.FrameDurationUs(vm) - 1);
 
     /// <summary>Alt+Left / Alt+Right: select and go to the previous or next marker.</summary>
     private void JumpToMarker(MainViewModel vm, int direction)
@@ -2129,74 +1947,7 @@ public partial class MainWindow : Window
             : vm.Markers.Where(m => !m.IsBookend && m.TimeUs < vm.PlayheadUs - near).OrderByDescending(m => m.TimeUs).FirstOrDefault();
         if (target is null) { Notice(vm, StatusKind.Info, direction > 0 ? "No marker after the playhead." : "No marker before the playhead."); return; }
         vm.SelectMarker(target);
-        SeekTo(vm, target.TimeUs);
-    }
-
-    // J / K / L shuttle. Positive: forward playback rate; negative: rewind rate.
-    private int _shuttle;
-    private DispatcherTimer? _rewindTimer;
-    private const int RewindTickMs = 100;
-
-    private void Shuttle(MainViewModel vm, Key key)
-    {
-        if (vm.IsBusy && !_markers.IsAnalyzing) return;
-        if (key == Key.K)
-        {
-            ResetShuttle();
-            _previewAfter.Pause();
-            _previewBefore.Pause();
-            Notice(vm, StatusKind.Info, "Paused.");
-            return;
-        }
-        if (key == Key.L)
-        {
-            bool rewinding = _shuttle < 0;
-            StopRewind();
-            if (_previewAfter.IsPlaying && !rewinding)
-                _shuttle = Math.Min(4, Math.Max(1, _shuttle) * 2); // Space playback counts as 1×
-            else
-            {
-                if (!_previewAfter.IsPlaying) PlayPauseBoth();
-                _shuttle = 1;
-            }
-            _previewAfter.SetSpeed(_shuttle);
-            _previewBefore.SetSpeed(_shuttle);
-            Notice(vm, StatusKind.Info, $"Playing {_shuttle}×. K pauses.");
-            return;
-        }
-        // J: rewind by stepping the playhead backward (mpv has no cheap reverse playback).
-        if (_previewAfter.IsPlaying) { _previewAfter.Pause(); _previewBefore.Pause(); }
-        _previewAfter.SetSpeed(1);
-        _previewBefore.SetSpeed(1);
-        _shuttle = _shuttle < 0 ? Math.Max(-4, _shuttle * 2) : -1;
-        _rewindTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(RewindTickMs), DispatcherPriority.Input, (_, _) => RewindTick(), Dispatcher);
-        _rewindTimer.Start();
-        Notice(vm, StatusKind.Info, $"Rewinding {-_shuttle}×. K stops.");
-    }
-
-    private void RewindTick()
-    {
-        if (_allowClose || _switching || DataContext is not MainViewModel { IsFileLoaded: true, IsExportScreen: false } vm
-            || (vm.IsBusy && !_markers.IsAnalyzing) || _shuttle >= 0)
-        { StopRewind(); return; }
-        long step = RewindTickMs * 1_000L * -_shuttle;
-        long position = vm.IsCollapsed ? vm.TimelinePositionUs : vm.PlayheadUs;
-        if (position <= 0) { ResetShuttle(); Notice(vm, StatusKind.Info, "Reached the start."); return; }
-        long target = Math.Max(0, position - step);
-        SeekTo(vm, vm.IsCollapsed ? vm.KeptTimeline.ToSource(target) : target, exact: false);
-    }
-
-    private void StopRewind()
-    {
-        _rewindTimer?.Stop();
-        if (_shuttle < 0) _shuttle = 0;
-    }
-
-    private void ResetShuttle()
-    {
-        StopRewind();
-        if (_shuttle > 1) { _previewAfter.SetSpeed(1); _previewBefore.SetSpeed(1); }
-        _shuttle = 0;
+        _playback.SeekTo(vm, target.TimeUs);
     }
 
     private void OnSelectAllMarkers(object sender, RoutedEventArgs e)
@@ -2272,8 +2023,8 @@ public partial class MainWindow : Window
         if (vm.SelectedMarker is not { } split) return;
         // An arrow key or click may still be seeking the preview: wait briefly for the frame
         // the marker will land on instead of silently ignoring the key.
-        for (int i = 0; i < 75 && (_previewAfter.IsSeeking || _previewAfter.IsLoading); i++) await Task.Delay(20);
-        if (_previewAfter.IsSeeking || _previewAfter.IsLoading)
+        for (int i = 0; i < 75 && (_playback.After.IsSeeking || _playback.After.IsLoading); i++) await Task.Delay(20);
+        if (_playback.After.IsSeeking || _playback.After.IsLoading)
         { Notice(vm, StatusKind.Warning, "The preview is still moving to the playhead. Press M again in a moment."); return; }
         if (!ReferenceEquals(vm.SelectedMarker, split) || vm.IsBusy) return;
         if (split.Confirmed && !ConfirmUnconfirm(split)) return;
@@ -2284,7 +2035,7 @@ public partial class MainWindow : Window
         var idx = sorted.IndexOf(split);
         long minUs = idx > 0 ? sorted[idx - 1].TimeUs + 1 : 0;
         long maxUs = idx < sorted.Count - 1 ? sorted[idx + 1].TimeUs - 1 : vm.DurationUs;
-        var candidate = _previewAfter.PositionUs;
+        var candidate = _playback.After.PositionUs;
         if (candidate < minUs || candidate > maxUs)
         { Notice(vm, StatusKind.Warning, "The playhead is past a neighboring marker; a marker cannot move across another one."); return; }
         if (candidate == split.TimeUs)
@@ -2344,7 +2095,7 @@ public partial class MainWindow : Window
         if (e.split.Confirmed && !ConfirmUnconfirm(e.split)) return;
         if (e.split.Confirmed)
             vm.CommandStack.Execute(new ToggleConfirmedCommand(e.split));
-        var frameUs = FrameDurationUs(vm) * e.direction;
+        var frameUs = PlaybackController.FrameDurationUs(vm) * e.direction;
         var target = vm.Markers.OrderBy(m => m.TimeUs).ToList();
         var idx = target.IndexOf(e.split);
         long minUs = idx > 0 ? target[idx - 1].TimeUs + 1 : 0;
@@ -2357,12 +2108,12 @@ public partial class MainWindow : Window
     private void OnTimelineSeekRequested(object? sender, (long TimeUs, bool StartPlaying, bool Exact, long? StopAtUs) e)
     {
         if (DataContext is not MainViewModel vm) return;
-        SeekTo(vm, e.TimeUs, e.Exact);
+        _playback.SeekTo(vm, e.TimeUs, e.Exact);
         if (e.StartPlaying)
         {
-            _playUntilUs = e.StopAtUs;
-            _previewAfter.Play();
-            _previewBefore.Play();
+            _playback.PlayUntilUs = e.StopAtUs;
+            _playback.After.Play();
+            _playback.Before.Play();
         }
     }
 }
