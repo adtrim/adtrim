@@ -18,6 +18,7 @@ public partial class SettingsWindow : Window
 {
     private readonly Func<Func<UserPreferences, UserPreferences>, Task<UserPreferences?>> _change;
     private readonly Func<Task<(UserPreferences Saved, string? Kept)?>> _resetAll;
+    private readonly Func<Window, Task>? _checkForUpdates;
     private readonly UserPreferences _opened;
     private bool _loading;
     private bool _restoreDefaults;
@@ -25,13 +26,15 @@ public partial class SettingsWindow : Window
     /// <param name="current">The settings as the opening window knows them.</param>
     /// <param name="change">Saves a change and shares it with every window; null when it could not be saved.</param>
     /// <param name="resetAll">Resets every setting, keeping a copy of the old file; null when it could not be done.</param>
+    /// <param name="checkForUpdates">Checks for updates and shows the result in the updates window over the given window.</param>
     public SettingsWindow(UserPreferences current, Func<Func<UserPreferences, UserPreferences>, Task<UserPreferences?>> change,
-        Func<Task<(UserPreferences Saved, string? Kept)?>> resetAll)
+        Func<Task<(UserPreferences Saved, string? Kept)?>> resetAll, Func<Window, Task>? checkForUpdates = null)
     {
         InitializeComponent();
         _opened = current;
         _change = change;
         _resetAll = resetAll;
+        _checkForUpdates = checkForUpdates;
         Show(current, Application.Current is App app && app.AutomaticUpdatesEnabled);
         Loaded += async (_, _) =>
         {
@@ -255,12 +258,13 @@ public partial class SettingsWindow : Window
     // ---- Updates ----
     private void OnAutomaticUpdates(object sender, RoutedEventArgs e) { }
 
+    // The same check and window as Help > Check for updates, so a found update can be installed from here.
     private async void OnCheckNow(object sender, RoutedEventArgs e)
     {
-        if (Application.Current is not App app) return;
+        if (_checkForUpdates is null) return;
         CheckNowButton.IsEnabled = false;
         UpdateStatusText.Text = "Checking…";
-        try { await app.Updates.CheckAsync(); }
+        try { await _checkForUpdates(this); }
         finally { CheckNowButton.IsEnabled = true; ShowUpdateState(); }
     }
 

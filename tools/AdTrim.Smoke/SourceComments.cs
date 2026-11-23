@@ -65,8 +65,8 @@ internal static partial class Program
             suggestions.Save(suggestions.Key(source, vm.SourceFingerprint!), proposal);
             Require(!WindowPreferences(window).AddSourceExportComment, "Source-comment opt-out loads from the isolated preferences");
             var fileMenu = (MenuItem)((Menu)window.FindName("MainMenu")).Items[0];
-            Require(fileMenu.Items.Contains(window.FindName("SettingsMenuItem")) && window.FindName("SourceCommentMenu") is null,
-                "The source-comment choice is in Settings, not a File menu toggle");
+            Require(!fileMenu.Items.Contains(window.FindName("SettingsMenuItem")) && window.FindName("SourceCommentMenu") is null,
+                "The source-comment choice is in Settings (Edit menu), not a File menu toggle");
             var items = fileMenu.Items.OfType<MenuItem>().ToArray();
             int openIndex = Array.FindIndex(items, i => i.Header?.ToString() == "Open…");
             Require(items[openIndex + 1].Header?.ToString() == "View Unexported Files…", "Unexported-file entry is immediately below Open");

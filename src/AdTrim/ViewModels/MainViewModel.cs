@@ -27,7 +27,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string? SourcePath
     {
         get => _sourcePath;
-        set { if (Set(ref _sourcePath, value)) Notify(nameof(WindowTitle), nameof(IsFileLoaded), nameof(CanToggleCollapsed), nameof(CanReplaceMarkers)); }
+        set { if (Set(ref _sourcePath, value)) Notify(nameof(WindowTitle), nameof(IsFileLoaded), nameof(CanToggleCollapsed), nameof(CanReplaceMarkers), nameof(CanReplaceMarkersWhileEditing)); }
     }
 
     public string WindowTitle => string.IsNullOrEmpty(SourcePath) ? "AdTrim" : $"AdTrim - {SourcePath}";
@@ -38,7 +38,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public long DurationUs
     {
         get => _durationUs;
-        set { if (Set(ref _durationUs, value)) Notify(nameof(IsFileLoaded), nameof(CanToggleCollapsed), nameof(CanReplaceMarkers)); }
+        set { if (Set(ref _durationUs, value)) Notify(nameof(IsFileLoaded), nameof(CanToggleCollapsed), nameof(CanReplaceMarkers), nameof(CanReplaceMarkersWhileEditing)); }
     }
 
     /// <summary>True once a media file has been opened (probe complete, splits populated).</summary>
@@ -262,16 +262,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool IsBusy
     {
         get => _isBusy;
-        set { if (Set(ref _isBusy, value)) Notify(nameof(CanEdit), nameof(CanInteract), nameof(CanToggleCollapsed), nameof(CanReplaceMarkers)); }
+        set { if (Set(ref _isBusy, value)) Notify(nameof(CanEdit), nameof(CanInteract), nameof(CanToggleCollapsed), nameof(CanReplaceMarkers), nameof(CanReplaceMarkersWhileEditing)); }
     }
 
     private bool _isExportScreen;
     public bool IsExportScreen
     {
         get => _isExportScreen;
-        set { if (Set(ref _isExportScreen, value)) Notify(nameof(CanEdit), nameof(CanInteract), nameof(CanToggleCollapsed), nameof(CanReplaceMarkers)); }
+        set { if (Set(ref _isExportScreen, value)) Notify(nameof(CanEdit), nameof(CanInteract), nameof(CanToggleCollapsed), nameof(CanReplaceMarkers), nameof(CanReplaceMarkersWhileEditing)); }
     }
     public bool CanReplaceMarkers => IsFileLoaded && CanInteract;
+    /// <summary>Edit > Delete all markings: markers can be replaced and the full view is showing.</summary>
+    public bool CanReplaceMarkersWhileEditing => CanReplaceMarkers && !IsCollapsed;
     public bool CanToggleCollapsed => IsFileLoaded && CanInteract;
     public bool CanInteract => !IsBusy && !IsExportScreen;
     public bool CanEdit => CanInteract && !IsCollapsed;
@@ -279,7 +281,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool IsCollapsed
     {
         get => _isCollapsed;
-        set { if (Set(ref _isCollapsed, value)) Notify(nameof(CanEdit), nameof(TimelineDurationUs), nameof(TimelinePositionUs)); }
+        set { if (Set(ref _isCollapsed, value)) Notify(nameof(CanEdit), nameof(CanReplaceMarkersWhileEditing), nameof(TimelineDurationUs), nameof(TimelinePositionUs)); }
     }
     public KeptTimeline KeptTimeline { get; private set; } = new(Array.Empty<Segment>());
     public long TimelineDurationUs => IsCollapsed ? KeptTimeline.DurationUs : DurationUs;

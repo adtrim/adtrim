@@ -337,7 +337,7 @@
                     <StackPanel><TextBlock Text="Automatically check for updates" Style="{StaticResource Name}"/><TextBlock Text="Includes security updates. Turn off to check only when you ask." Style="{StaticResource Desc}"/></StackPanel>
                   </DockPanel></Border>
                   <Border Style="{StaticResource Row}" BorderThickness="0"><DockPanel>
-                    <Button x:Name="CheckNowButton" DockPanel.Dock="Right" Content="Check now" Margin="16,0,0,0" VerticalAlignment="Center" Click="OnCheckNow"/>
+                    <Button x:Name="CheckNowButton" DockPanel.Dock="Right" Content="Check for updates…" Margin="16,0,0,0" VerticalAlignment="Center" Click="OnCheckNow"/>
                     <StackPanel>
                       <TextBlock x:Name="InstalledVersionText" Style="{StaticResource Name}"/>
                       <TextBlock x:Name="UpdateStatusText" Style="{StaticResource Desc}"/>

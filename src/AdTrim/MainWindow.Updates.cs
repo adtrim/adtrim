@@ -37,7 +37,10 @@ public partial class MainWindow
         CheckUpdatesMenu.Foreground = notice is null ? (Brush)FindResource("Text.Primary") : brush;
     }
 
-    private async void OnCheckUpdates(object sender, RoutedEventArgs e)
+    private async void OnCheckUpdates(object sender, RoutedEventArgs e) => await CheckForUpdatesAsync(this);
+
+    /// <summary>Checks if needed and shows the result in the updates window, opened over <paramref name="owner"/>.</summary>
+    internal async Task CheckForUpdatesAsync(Window owner)
     {
         var app = (App)Application.Current;
         if (app.OpenUpdateDialog is { } open) { BringToFront(open); return; }
@@ -45,16 +48,18 @@ public partial class MainWindow
         // A notice shown from the saved copy after a failed check may be out of date.
         if (app.Updates.Notice is null || app.Updates.Error is not null) await app.Updates.CheckAsync();
         if (!IsLoaded) return;
-        await ShowUpdateAsync();
+        await ShowUpdateAsync(owner);
     }
 
-    public async Task ShowUpdateAsync()
+    public Task ShowUpdateAsync() => ShowUpdateAsync(this);
+
+    private async Task ShowUpdateAsync(Window owner)
     {
         var app = (App)Application.Current;
         if (app.OpenUpdateDialog is { } open) { BringToFront(open); return; }
         var updates = app.Updates;
         var notice = updates.Notice;
-        var dialog = new UpdateDialog(notice, updates.Error, updates.IsReminder) { Owner = this };
+        var dialog = new UpdateDialog(notice, updates.Error, updates.IsReminder) { Owner = owner };
         app.OpenUpdateDialog = dialog;
         try
         {

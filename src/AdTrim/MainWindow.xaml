@@ -151,29 +151,29 @@
             <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem x:Name="ExportMenuItem" IsEnabled="{Binding IsFileLoaded}" Header="Export merged video…" InputGestureText="E"            Style="{StaticResource DropdownMenuItem}" Click="OnExport"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
-            <MenuItem x:Name="SettingsMenuItem" Header="Settings…" InputGestureText="Ctrl+," Style="{StaticResource DropdownMenuItem}" Click="OnSettings"/>
-            <Separator Background="{StaticResource Border.Subtle}"/>
             <MenuItem Header="Close project"     InputGestureText="Ctrl+W"        Style="{StaticResource DropdownMenuItem}" Click="OnCloseProject" IsEnabled="{Binding CanInteract}"/>
             <MenuItem Header="Exit"              InputGestureText="Alt+F4"        Style="{StaticResource DropdownMenuItem}" Click="OnClose"/>
           </MenuItem>
-          <MenuItem Header="_Edit" Style="{StaticResource MenuBarItem}" IsEnabled="{Binding CanEdit}">
-            <MenuItem Header="Undo"                       InputGestureText="Ctrl+Z"        Style="{StaticResource DropdownMenuItem}" Click="OnUndo"/>
-            <MenuItem Header="Redo"                       InputGestureText="Ctrl+Y"        Style="{StaticResource DropdownMenuItem}" Click="OnRedo"/>
+          <MenuItem Header="_Edit" Style="{StaticResource MenuBarItem}">
+            <MenuItem Header="Undo"                       InputGestureText="Ctrl+Z"        Style="{StaticResource DropdownMenuItem}" Click="OnUndo" IsEnabled="{Binding CanEdit}"/>
+            <MenuItem Header="Redo"                       InputGestureText="Ctrl+Y"        Style="{StaticResource DropdownMenuItem}" Click="OnRedo" IsEnabled="{Binding CanEdit}"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
-            <MenuItem Header="Add split at playhead"      InputGestureText="S"             Style="{StaticResource DropdownMenuItem}" Click="OnAddSplitAtPlayhead"/>
-            <MenuItem Header="Select all markers"         InputGestureText="Ctrl+A"        Style="{StaticResource DropdownMenuItem}" Click="OnSelectAllMarkers"/>
-            <MenuItem Header="Select red markers"         InputGestureText="Ctrl+Shift+A"  Style="{StaticResource DropdownMenuItem}" Click="OnSelectRedMarkers"/>
-            <MenuItem Header="Select visible markers"     InputGestureText="Ctrl+Alt+A"    Style="{StaticResource DropdownMenuItem}" Click="OnSelectVisibleMarkers"/>
-            <MenuItem Header="Delete selected markers"    InputGestureText="Del"           Style="{StaticResource DropdownMenuItem}" Click="OnDeleteSelectedSplit"/>
-            <MenuItem Header="Delete all markings"        InputGestureText="Ctrl+Del"      Style="{StaticResource DropdownMenuItem}" Click="OnClearAllMarkings" IsEnabled="{Binding CanReplaceMarkers}"/>
+            <MenuItem Header="Add split at playhead"      InputGestureText="S"             Style="{StaticResource DropdownMenuItem}" Click="OnAddSplitAtPlayhead" IsEnabled="{Binding CanEdit}"/>
+            <MenuItem Header="Select all markers"         InputGestureText="Ctrl+A"        Style="{StaticResource DropdownMenuItem}" Click="OnSelectAllMarkers" IsEnabled="{Binding CanEdit}"/>
+            <MenuItem Header="Select red markers"         InputGestureText="Ctrl+Shift+A"  Style="{StaticResource DropdownMenuItem}" Click="OnSelectRedMarkers" IsEnabled="{Binding CanEdit}"/>
+            <MenuItem Header="Select visible markers"     InputGestureText="Ctrl+Alt+A"    Style="{StaticResource DropdownMenuItem}" Click="OnSelectVisibleMarkers" IsEnabled="{Binding CanEdit}"/>
+            <MenuItem Header="Delete selected markers"    InputGestureText="Del"           Style="{StaticResource DropdownMenuItem}" Click="OnDeleteSelectedSplit" IsEnabled="{Binding CanEdit}"/>
+            <MenuItem Header="Delete all markings"        InputGestureText="Ctrl+Del"      Style="{StaticResource DropdownMenuItem}" Click="OnClearAllMarkings" IsEnabled="{Binding CanReplaceMarkersWhileEditing}"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
-            <MenuItem Header="Confirm split"              InputGestureText="C"             Style="{StaticResource DropdownMenuItem}" Click="OnConfirmSelectedSplit"/>
-            <MenuItem Header="Confirm and next" InputGestureText="Shift+C" Style="{StaticResource DropdownMenuItem}" Click="OnConfirmAndNext"/>
-            <MenuItem Header="Confirm all remaining"      InputGestureText="Ctrl+Shift+C"  Style="{StaticResource DropdownMenuItem}" Click="OnConfirmAllRemaining"/>
+            <MenuItem Header="Confirm split"              InputGestureText="C"             Style="{StaticResource DropdownMenuItem}" Click="OnConfirmSelectedSplit" IsEnabled="{Binding CanEdit}"/>
+            <MenuItem Header="Confirm and next" InputGestureText="Shift+C" Style="{StaticResource DropdownMenuItem}" Click="OnConfirmAndNext" IsEnabled="{Binding CanEdit}"/>
+            <MenuItem Header="Confirm all remaining"      InputGestureText="Ctrl+Shift+C"  Style="{StaticResource DropdownMenuItem}" Click="OnConfirmAllRemaining" IsEnabled="{Binding CanEdit}"/>
             <Separator Background="{StaticResource Border.Subtle}"/>
-            <MenuItem Header="Mark segment as excluded"   InputGestureText="X"             Style="{StaticResource DropdownMenuItem}" Click="OnToggleExcluded"/>
-            <MenuItem Header="Rename segment"             InputGestureText="F2"            Style="{StaticResource DropdownMenuItem}" Click="OnRenameSelectedSegment"/>
-            <MenuItem Header="Reset numbered segment names"                                Style="{StaticResource DropdownMenuItem}" Click="OnResetNumberedSegmentNames"/>
+            <MenuItem Header="Mark segment as excluded"   InputGestureText="X"             Style="{StaticResource DropdownMenuItem}" Click="OnToggleExcluded" IsEnabled="{Binding CanEdit}"/>
+            <MenuItem Header="Rename segment"             InputGestureText="F2"            Style="{StaticResource DropdownMenuItem}" Click="OnRenameSelectedSegment" IsEnabled="{Binding CanEdit}"/>
+            <MenuItem Header="Reset numbered segment names"                                Style="{StaticResource DropdownMenuItem}" Click="OnResetNumberedSegmentNames" IsEnabled="{Binding CanEdit}"/>
+            <Separator Background="{StaticResource Border.Subtle}"/>
+            <MenuItem x:Name="SettingsMenuItem" Header="Settings…" InputGestureText="Ctrl+," Style="{StaticResource DropdownMenuItem}" Click="OnSettings"/>
           </MenuItem>
           <MenuItem Header="_View" Style="{StaticResource MenuBarItem}" IsEnabled="{Binding CanInteract}">
             <MenuItem Header="Zoom in"        InputGestureText="Ctrl+="  Style="{StaticResource DropdownMenuItem}" Click="OnZoomIn"/>
@@ -1003,8 +1003,25 @@
                      Visibility="{Binding IsFileLoaded, Converter={StaticResource Bool2Vis}}"/>
           <Rectangle Width="1" Height="14" Fill="{StaticResource Border.Subtle}" Margin="16,0"
                      Visibility="{Binding IsFileLoaded, Converter={StaticResource Bool2Vis}}"/>
-          <TextBlock Text="{x:Static app:AppVersion.Display}" FontFamily="{StaticResource Font.Mono}"
-                     Foreground="{StaticResource Text.Tertiary}" FontSize="12"/>
+          <Button x:Name="VersionButton" Click="OnCheckUpdates" Cursor="Hand" Focusable="True"
+                  ToolTip="Check for updates" AutomationProperties.Name="AdTrim version, check for updates">
+            <Button.Template>
+              <ControlTemplate TargetType="Button">
+                <TextBlock x:Name="Label" Text="{x:Static app:AppVersion.Display}" FontFamily="{StaticResource Font.Mono}"
+                           Foreground="{StaticResource Text.Tertiary}" FontSize="12" Background="Transparent"/>
+                <ControlTemplate.Triggers>
+                  <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Label" Property="Foreground" Value="{StaticResource Text.Primary}"/>
+                    <Setter TargetName="Label" Property="TextDecorations" Value="Underline"/>
+                  </Trigger>
+                  <Trigger Property="IsKeyboardFocused" Value="True">
+                    <Setter TargetName="Label" Property="Foreground" Value="{StaticResource Text.Primary}"/>
+                    <Setter TargetName="Label" Property="TextDecorations" Value="Underline"/>
+                  </Trigger>
+                </ControlTemplate.Triggers>
+              </ControlTemplate>
+            </Button.Template>
+          </Button>
           <Button x:Name="UpdateStatusButton" Visibility="Collapsed" Click="OnCheckUpdates"
                   Foreground="{StaticResource Accent.Base}" Padding="8,0" Margin="12,0,0,0" FontSize="12"
                   AutomationProperties.Name="View available AdTrim update"/>

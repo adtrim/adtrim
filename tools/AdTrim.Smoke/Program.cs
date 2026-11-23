@@ -108,6 +108,12 @@ internal static partial class Program
                     "Help has an update indicator");
                 Require(((MenuItem)window.FindName("CheckUpdatesMenu")).Header.ToString()!.Contains("1.2.0"),
                     "Help identifies the available version");
+                ((Button)window.FindName("VersionButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                for (int i = 0; i < 100 && !app.Windows.OfType<AdTrim.Views.UpdateDialog>().Any(w => w.IsVisible); i++) await Task.Delay(20);
+                var fromVersion = app.Windows.OfType<AdTrim.Views.UpdateDialog>().SingleOrDefault(w => w.IsVisible);
+                Require(fromVersion is not null, "Clicking the version number opens the AdTrim updates window");
+                fromVersion!.Close();
+                for (int i = 0; i < 100 && app.Windows.OfType<AdTrim.Views.UpdateDialog>().Any(); i++) await Task.Delay(20);
                 var about = new AdTrim.Views.AboutDialog { Owner = window, ShowActivated = false, ShowInTaskbar = false };
                 about.Show();
                 about.UpdateLayout();

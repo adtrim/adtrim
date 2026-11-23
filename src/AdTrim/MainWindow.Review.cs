@@ -84,7 +84,7 @@ public partial class MainWindow
         if (OwnedWindows.OfType<SettingsWindow>().FirstOrDefault() is { } open) { open.Activate(); return; }
         // Another window may have changed a setting since this one loaded them.
         var latest = await UserPreferences.LoadAsync(_prefs.Current);
-        var settings = new SettingsWindow(_prefs.Current.WithSettingsFrom(latest), ChangeSettingsAsync, ResetSettingsAsync) { Owner = this };
+        var settings = new SettingsWindow(_prefs.Current.WithSettingsFrom(latest), ChangeSettingsAsync, ResetSettingsAsync, CheckForUpdatesAsync) { Owner = this };
         settings.ShowDialog();
     }
 

@@ -32,10 +32,19 @@ internal static partial class Program
         // Later checks rely on the smoke settings (source comments off); put them back afterwards.
         var original = await UserPreferences.ReadAsync();
         var mainMenu = (Menu)window.FindName("MainMenu");
-        var fileMenu = (MenuItem)mainMenu.Items[0];
+        var editMenu = mainMenu.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "_Edit");
         var settingsItem = (MenuItem)window.FindName("SettingsMenuItem");
-        Require(fileMenu.Items.Contains(settingsItem) && settingsItem.InputGestureText == "Ctrl+," && settingsItem.IsEnabled,
-            "File menu opens Settings with Ctrl+,");
+        Require(editMenu.Items.OfType<MenuItem>().Last() == settingsItem && settingsItem.InputGestureText == "Ctrl+," && settingsItem.IsEnabled
+            && !((MenuItem)mainMenu.Items[0]).Items.Contains(settingsItem),
+            "Settings is the last Edit item, with Ctrl+, and not in File");
+        // Settings stays reachable when editing is not: in collapsed preview the Edit menu itself stays open.
+        vm.IsCollapsed = true;
+        window.UpdateLayout();
+        Require(editMenu.IsEnabled && settingsItem.IsEnabled
+            && editMenu.Items.OfType<MenuItem>().Where(item => item != settingsItem).All(item => !item.IsEnabled),
+            "In collapsed preview, Settings stays available and the editing items are disabled");
+        vm.IsCollapsed = false;
+        window.UpdateLayout();
         Require(window.FindName("SourceCommentMenu") is null && window.FindName("StartingMarkersMenu") is null
             && window.FindName("AutomaticUpdatesMenu") is null && window.FindName("SegmentNamesMenuItem") is null,
             "Settings that moved to the Settings window are no longer in the menus");
