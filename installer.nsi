@@ -55,6 +55,7 @@ SetCompressor lzma
 !include "MUI2.nsh"
 !include "nsDialogs.nsh"
 !include "LogicLib.nsh"
+!include "FileFunc.nsh"
 Var UpdateCheckbox
 Var AutomaticUpdates
 
@@ -78,7 +79,7 @@ Function UpdateOptionsPage
   ${NSD_CreateCheckbox} 0 8u 100% 14u "Automatically check for updates"
   Pop $UpdateCheckbox
   ${NSD_SetState} $UpdateCheckbox $AutomaticUpdates
-  ${NSD_CreateLabel} 0 32u 100% 62u "Checks GitHub Pages for new releases, including security updates. No recordings or usage analytics are uploaded. GitHub logs IP addresses for security.$\r$\n$\r$\nYou can change this later in AdTrim's Help menu. Manual checks remain available."
+  ${NSD_CreateLabel} 0 32u 100% 62u "Checks GitHub Pages for new releases, including security updates. No recordings or usage analytics are uploaded. GitHub logs IP addresses for security.$\r$\n$\r$\nYou can change this later in Edit > Settings > Updates. Manual checks remain available."
   Pop $0
   nsDialogs::Show
 FunctionEnd
@@ -100,6 +101,7 @@ Page custom UpdateOptionsPage UpdateOptionsLeave
 
 ; Uninstall pages
 !insertmacro MUI_UNPAGE_CONFIRM
+UninstPage custom un.RemoveDataPage un.RemoveDataLeave
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "English"
@@ -180,6 +182,43 @@ Section "Install"
     WriteUninstaller "$LOCALAPPDATA\${APPNAME}\Uninstall.exe"
 SectionEnd
 
+; Uninstall keeps AdTrim's data folder unless the user asks for it to go too: on the page
+; below, or with /REMOVEDATA on a silent uninstall.
+Var RemoveData
+Var RemoveDataCheckbox
+
+Function un.onInit
+  StrCpy $RemoveData "0"
+  ${GetParameters} $0
+  ClearErrors
+  ${GetOptions} $0 "/REMOVEDATA" $1
+  IfErrors +2
+  StrCpy $RemoveData "1"
+FunctionEnd
+
+Function un.RemoveDataPage
+  !insertmacro MUI_HEADER_TEXT "AdTrim data" "Choose whether to delete AdTrim's settings and caches too."
+  nsDialogs::Create 1018
+  Pop $0
+  ${NSD_CreateCheckbox} 0 8u 100% 14u "Also delete AdTrim's settings, caches and saved projects"
+  Pop $RemoveDataCheckbox
+  ${If} $RemoveData == "1"
+    ${NSD_Check} $RemoveDataCheckbox
+  ${EndIf}
+  ${NSD_CreateLabel} 0 32u 100% 70u "These are in $LOCALAPPDATA\${APPNAME}: settings, thumbnail and waveform caches, update state, and projects AdTrim saved there for recordings in read-only folders.$\r$\n$\r$\nProject files saved next to your recordings are not deleted. Leave this unchecked to keep your settings for a later installation."
+  Pop $0
+  nsDialogs::Show
+FunctionEnd
+
+Function un.RemoveDataLeave
+  ${NSD_GetState} $RemoveDataCheckbox $0
+  ${If} $0 == ${BST_CHECKED}
+    StrCpy $RemoveData "1"
+  ${Else}
+    StrCpy $RemoveData "0"
+  ${EndIf}
+FunctionEnd
+
 Section "Uninstall"
   ; Reverse the install in the opposite order: registry first (cheap and
   ; visible), then file tree (slow), then Start Menu folder.
@@ -198,4 +237,14 @@ Section "Uninstall"
   Delete "$INSTDIR\install-files.txt"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
+
+  ; Only the user's own AdTrim data folder, and never through a link to somewhere else.
+  StrCmp $RemoveData "1" 0 keepData
+  StrCmp $LOCALAPPDATA "" keepData
+  IfFileExists "$LOCALAPPDATA\${APPNAME}\*.*" 0 keepData
+  System::Call 'kernel32::GetFileAttributes(t "$LOCALAPPDATA\${APPNAME}") i .r0'
+  IntOp $1 $0 & 0x400
+  IntCmp $1 0 0 keepData keepData
+  RMDir /r "$LOCALAPPDATA\${APPNAME}"
+  keepData:
 SectionEnd
