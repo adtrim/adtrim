@@ -75,7 +75,7 @@ internal static partial class Program
                 await WaitForExportSetupAsync(window);
                 var view = (AdTrim.Views.ExportView)((ContentControl)window.FindName("ExportHost")).Content;
                 var exportVm = (ExportDialogViewModel)view.DataContext;
-                exportVm.OutputFolder = @"C:\Videos\Big Buck Bunny";
+                // The default destination, beside the recording: a made-up folder fails the destination check.
                 for (int i = 0; i < 250 && !exportVm.CanCheckHardware; i++) await Task.Delay(20);
                 Require(exportVm.CanCheckHardware, "Website export setup is ready");
                 exportVm.SelectedFormat = ExportFormat.Mp4;
