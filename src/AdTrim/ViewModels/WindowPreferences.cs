@@ -43,17 +43,34 @@ public sealed class WindowPreferences
             && Math.Abs(desired.Left - area.Left) <= 2 && Math.Abs(desired.Top - area.Top) <= 2
             && Math.Abs(desired.Width - area.Width) <= 2 && Math.Abs(desired.Height - area.Height) <= 2;
         if (legacyMaximized) Current = Current with { Width = 1280, Height = 720 };
-        var width = Math.Clamp(double.IsFinite(Current.Width) ? Current.Width : 1280, minWidth, Math.Max(minWidth, area.Width));
-        var height = Math.Clamp(double.IsFinite(Current.Height) ? Current.Height : 720, minHeight, Math.Max(minHeight, area.Height));
-        var left = Math.Clamp(double.IsFinite(Current.Left) ? Current.Left : area.Left, area.Left, Math.Max(area.Left, area.Right - width));
-        var top = Math.Clamp(double.IsFinite(Current.Top) ? Current.Top : area.Top, area.Top, Math.Max(area.Top, area.Bottom - height));
-        if (Current.IsMaximized == true || legacyMaximized) return new(left, top, width, height, true);
+        var saved = new Rect(double.IsFinite(Current.Left) ? Current.Left : area.Left, double.IsFinite(Current.Top) ? Current.Top : area.Top,
+            double.IsFinite(Current.Width) ? Current.Width : 1280, double.IsFinite(Current.Height) ? Current.Height : 720);
+        return Fit(saved, Current.IsMaximized == true || legacyMaximized, area, minWidth, minHeight, openWindows, CascadeStep);
+    }
+
+    /// <summary>
+    /// The same fitting in physical pixels, for a window saved with <see cref="UserPreferences.WindowPixels"/>.
+    /// <paramref name="area"/> is the work area of the monitor nearest the saved rectangle, in pixels, and
+    /// <paramref name="scale"/> that monitor's scaling (1.5 at 150%), which sizes the minimum and the cascade step.
+    /// Pixels keep their meaning when the monitors use different scaling; WPF units do not.
+    /// </summary>
+    public WindowPlacement PlacePixels(PixelBounds saved, Rect area, double scale, double minWidth, double minHeight, IReadOnlyList<Point> openWindows)
+        => Fit(new Rect(saved.Left, saved.Top, Math.Max(1, saved.Width), Math.Max(1, saved.Height)), Current.IsMaximized == true,
+            area, Math.Ceiling(minWidth * scale), Math.Ceiling(minHeight * scale), openWindows, Math.Round(CascadeStep * scale));
+
+    private static WindowPlacement Fit(Rect saved, bool maximize, Rect area, double minWidth, double minHeight, IReadOnlyList<Point> openWindows, double step)
+    {
+        var width = Math.Clamp(saved.Width, minWidth, Math.Max(minWidth, area.Width));
+        var height = Math.Clamp(saved.Height, minHeight, Math.Max(minHeight, area.Height));
+        var left = Math.Clamp(saved.Left, area.Left, Math.Max(area.Left, area.Right - width));
+        var top = Math.Clamp(saved.Top, area.Top, Math.Max(area.Top, area.Bottom - height));
+        if (maximize) return new(left, top, width, height, true);
         // Every window restores the same saved position; step aside instead of hiding the one already there.
-        while (left + CascadeStep + width <= area.Right && top + CascadeStep + height <= area.Bottom
+        while (left + step + width <= area.Right && top + step + height <= area.Bottom
             && openWindows.Any(w => Math.Abs(w.X - left) < 1 && Math.Abs(w.Y - top) < 1))
         {
-            left += CascadeStep;
-            top += CascadeStep;
+            left += step;
+            top += step;
         }
         return new(left, top, width, height, false);
     }
@@ -62,7 +79,7 @@ public sealed class WindowPreferences
     /// What this window saves: its display choices, its normal (restore) bounds and whether it is maximized,
     /// and the open recording's playhead as the most recent of at most <see cref="MaximumPositions"/> positions.
     /// </summary>
-    public UserPreferences Snapshot(MainViewModel vm, Rect bounds, bool maximized)
+    public UserPreferences Snapshot(MainViewModel vm, Rect bounds, bool maximized, PixelBounds? pixels = null)
     {
         // Built fresh in order: a Dictionary refills a removed entry's slot, so removing and re-adding
         // this recording would leave it where it was and a later recording would evict it as the oldest.
@@ -74,7 +91,7 @@ public sealed class WindowPreferences
         Current = Current with { ShowWaveform = vm.ShowWaveform, ShowThumbnails = vm.ShowThumbnails,
             ShowRulerTicks = vm.ShowRulerTicks,
             Left = bounds.Left, Top = bounds.Top, Width = bounds.Width, Height = bounds.Height,
-            IsMaximized = maximized, Positions = positions };
+            WindowPixels = pixels ?? Current.WindowPixels, IsMaximized = maximized, Positions = positions };
         return Current;
     }
 

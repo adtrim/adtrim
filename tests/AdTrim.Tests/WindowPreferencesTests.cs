@@ -57,6 +57,30 @@ public sealed class WindowPreferencesTests : IDisposable
         Assert.Equal((1280.0, 680.0), (full.Left, full.Top));
     }
 
+    // Review C43: WPF units change meaning between monitors with different scaling, so the window is
+    // restored from physical pixels, fitted to the monitor it was on with its own scaling.
+    [Fact]
+    public void APixelSavedWindowIsFittedInPixelsOnAScaledMonitor()
+    {
+        var area = new Rect(2560, 0, 2560, 1368);
+        var prefs = With(new UserPreferences { Left = 227, Top = 123, Width = 1280, Height = 640, IsMaximized = false,
+            WindowPixels = new(2901, 182, 1920, 960) });
+        Assert.Equal(new WindowPlacement(2901, 182, 1920, 960, false), prefs.PlacePixels(prefs.Current.WindowPixels!, area, 1.5, 900, 600, []));
+        // Off the right edge it is pulled back; the minimum size and cascade step grow with the scaling.
+        var small = prefs.PlacePixels(new(5000, 100, 400, 300), area, 1.5, 900, 600, [new Point(3770, 100)]);
+        Assert.Equal(new WindowPlacement(3770, 100, 1350, 900, false), small);
+        var stepped = prefs.PlacePixels(new(2901, 182, 1920, 960), area, 1.5, 900, 600, [new Point(2901, 182)]);
+        Assert.Equal((2943.0, 224.0), (stepped.Left, stepped.Top));
+    }
+
+    [Fact]
+    public void TheSnapshotKeepsThePixelRectangleWhenNoneIsGiven()
+    {
+        var prefs = With(new UserPreferences { WindowPixels = new(10, 20, 1500, 900) });
+        Assert.Equal(new PixelBounds(10, 20, 1500, 900), prefs.Snapshot(new MainViewModel(), new Rect(0, 0, 1000, 700), true).WindowPixels);
+        Assert.Equal(new PixelBounds(1, 2, 3, 4), prefs.Snapshot(new MainViewModel(), new Rect(0, 0, 1000, 700), false, new(1, 2, 3, 4)).WindowPixels);
+    }
+
     [Fact]
     public void TheSnapshotRecordsThisRecordingsPositionAndTheWindow()
     {

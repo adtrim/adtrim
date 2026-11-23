@@ -224,6 +224,7 @@ public partial class MainWindow : Window, IPlaybackScreen
     private void OnWindowSizeChanged(object sender, SizeChangedEventArgs e)
     {
         UpdateWindowFrame();
+        RememberNormalPixels();
         // Backstop in case the ScrollViewer's own SizeChanged misses a
         // window-driven resize. Same deferred-Render trick so ViewportWidth
         // has updated before UpdateTimelineLayout reads it.
@@ -1562,7 +1563,18 @@ public partial class MainWindow : Window, IPlaybackScreen
             ? MonitorBounds.MaximizedInsets(this) : new Thickness(0);
     }
 
-    private void OnWindowLocationChanged(object? sender, EventArgs e) => UpdateWindowFrame();
+    private void OnWindowLocationChanged(object? sender, EventArgs e)
+    {
+        UpdateWindowFrame();
+        RememberNormalPixels();
+    }
+
+    // The last normal-window rectangle in physical pixels, saved when the window closes maximized or minimized.
+    private PixelBounds? _lastNormalPixels;
+    private void RememberNormalPixels()
+    {
+        if (WindowState == WindowState.Normal && MonitorBounds.NormalPixels(this) is { } pixels) _lastNormalPixels = pixels;
+    }
 
     private void OnClose(object sender, RoutedEventArgs e) => Close();
 

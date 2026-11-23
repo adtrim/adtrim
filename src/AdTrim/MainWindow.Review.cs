@@ -24,14 +24,26 @@ public partial class MainWindow
         vm.ShowThumbnails = _prefs.Current.ShowThumbnails;
         vm.ShowRulerTicks = _prefs.Current.ShowRulerTicks;
         vm.SectionNameTemplate = _prefs.Current.SectionNameTemplate;
-        var area = MonitorBounds.WorkArea(this, _prefs.Desired);
-        var others = Application.Current.Windows.OfType<MainWindow>().Where(w => w != this && w.WindowState == WindowState.Normal)
-            .Select(w => new Point(w.Left, w.Top)).ToList();
-        var place = _prefs.Place(area, MinWidth, MinHeight, others);
-        Width = place.Width;
-        Height = place.Height;
-        Left = place.Left;
-        Top = place.Top;
+        var otherWindows = Application.Current.Windows.OfType<MainWindow>().Where(w => w != this && w.WindowState == WindowState.Normal).ToList();
+        WindowPlacement place;
+        // Pixels when saved: WPF's Left/Top are stale after a move between monitors with different scaling.
+        if (_prefs.Current.WindowPixels is { } pixels && MonitorBounds.PixelWorkArea(pixels) is { } monitor)
+        {
+            var others = otherWindows.Select(MonitorBounds.NormalPixels).OfType<PixelBounds>().Select(p => new Point(p.Left, p.Top)).ToList();
+            place = _prefs.PlacePixels(pixels, monitor.Area, monitor.Scale, MinWidth, MinHeight, others);
+            MonitorBounds.SetPixels(this, new((int)place.Left, (int)place.Top, (int)place.Width, (int)place.Height));
+        }
+        else
+        {
+            var area = MonitorBounds.WorkArea(this, _prefs.Desired);
+            var others = otherWindows.Select(w => new Point(w.Left, w.Top)).ToList();
+            place = _prefs.Place(area, MinWidth, MinHeight, others);
+            Width = place.Width;
+            Height = place.Height;
+            Left = place.Left;
+            Top = place.Top;
+        }
+        RememberNormalPixels();
         if (place.Maximize) SystemCommands.MaximizeWindow(this);
     }
     private Task<bool> SavePreferencesAsync(MainViewModel vm) => SavePreferencesSnapshotAsync(vm, false);
@@ -39,7 +51,8 @@ public partial class MainWindow
     private async Task<bool> SavePreferencesSnapshotAsync(MainViewModel vm, bool saveMarkerSource)
     {
         var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
-        var snapshot = _prefs.Snapshot(vm, bounds, _lastNonMinimizedState == WindowState.Maximized);
+        var snapshot = _prefs.Snapshot(vm, bounds, _lastNonMinimizedState == WindowState.Maximized,
+            MonitorBounds.NormalPixels(this) ?? _lastNormalPixels);
         try
         {
             await _prefs.SaveAsync(snapshot, vm.SourcePath, saveMarkerSource);

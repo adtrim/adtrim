@@ -8,6 +8,8 @@ namespace AdTrim.Services;
 /// append new values, never reorder.</summary>
 public enum NewFileMarkerSource { Imported, AdTrim, None }
 
+public sealed record PixelBounds(int Left, int Top, int Width, int Height);
+
 public sealed record UserPreferences
 {
     private static readonly SemaphoreSlim SaveGate = new(1, 1);
@@ -32,6 +34,9 @@ public sealed record UserPreferences
     public double Top { get; init; }
     public double Width { get; init; } = 1280;
     public double Height { get; init; } = 720;
+    /// <summary>The normal window's screen rectangle in physical pixels. Left/Top above are WPF units, which
+    /// mean different things on monitors with different scaling; older builds read only those.</summary>
+    public PixelBounds? WindowPixels { get; init; }
     public Dictionary<string, long> Positions { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public static string DataDirectory => AppDataDirectory.Path;
 
@@ -194,7 +199,7 @@ public sealed record UserPreferences
             var next = new UserPreferences
             {
                 IsMaximized = latest.IsMaximized, Left = latest.Left, Top = latest.Top, Width = latest.Width, Height = latest.Height,
-                Positions = latest.Positions,
+                WindowPixels = latest.WindowPixels, Positions = latest.Positions,
             };
             string? kept = null;
             if (File.Exists(path))
