@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <AdTrimDisplayVersion>2.1.49</AdTrimDisplayVersion>
-    <AdTrimAssemblyVersion>2.1.49.0</AdTrimAssemblyVersion>
+    <AdTrimDisplayVersion>2.1.50</AdTrimDisplayVersion>
+    <AdTrimAssemblyVersion>2.1.50.0</AdTrimAssemblyVersion>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <RuntimeFrameworkVersion>10.0.15</RuntimeFrameworkVersion>
@@ -12,8 +12,8 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>AdTrim</RootNamespace>
     <AssemblyName>AdTrim</AssemblyName>
-    <Version>2.1.49</Version>
-    <AssemblyVersion>2.1.49.0</AssemblyVersion>
+    <Version>2.1.50</Version>
+    <AssemblyVersion>2.1.50.0</AssemblyVersion>
     <FileVersion>$(AdTrimAssemblyVersion)</FileVersion>
     <ProductVersion>$(AdTrimDisplayVersion)</ProductVersion>
     <InformationalVersion>v$(AdTrimDisplayVersion)</InformationalVersion>
