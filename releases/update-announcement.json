@@ -1,5 +1,5 @@
 {
-  "version": "2.1.11",
-  "summary": "Download and install updates inside AdTrim. If an update fails, AdTrim can restore the previous version and reopen your recordings. Window titles now show each recording's full path.",
+  "version": "2.2.0",
+  "summary": "All settings are now in one window, under Edit > Settings. Export setup lists every part of the export and shows each step's progress. Unnamed kept parts are numbered in order. Uninstall can also remove AdTrim's settings and caches. Fixes for saving, export cleanup, updates, seeking and windows on monitors with different scaling.",
   "advisories": []
 }

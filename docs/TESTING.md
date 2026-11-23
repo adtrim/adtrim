@@ -105,7 +105,9 @@ after seven days, and can be refreshed with Evaluate options. Unknown driver
 versions disable persistent caching. All production paths keep CPU decoding and
 bwdif deinterlacing until accelerated alternatives pass separate validation.
 
-Before a release, manually check actual video/audio transitions, long-recording
-responsiveness, mixed-DPI window restoration, and upgrades/uninstall with disposable
-settings and projects. The installer archive passing an integrity check is not
+Before a release, manually check actual video/audio transitions and long-recording
+responsiveness. The smoke tool's `--mixed-dpi <folder>` mode checks window restoration
+across two monitors with different scaling; it needs both monitors and exits 2
+without them. Also test install, upgrade and uninstall with disposable settings
+and projects. The installer archive passing an integrity check is not
 equivalent to testing an installed upgrade.

@@ -247,15 +247,16 @@ no delegated authorization and needs no periodic key renewal. This is not a full
 # Automatic check preference
 
 Automatic checks default to on. Setup offers a checkbox before installation and
-preserves an existing choice during upgrades. Help > Automatically check for
-updates changes the same setting for every open window. Turning it off cancels
+preserves an existing choice during upgrades. Edit > Settings > Updates
+changes the same setting for every open window. Turning it off cancels
 a pending automatic check and prevents future startup checks, including security
 alerts. Manual checks remain available. Re-enabling takes effect at the next app
 launch; a manual check can be run immediately.
 
 The installer and app share `automatic-updates.txt` in the user's AdTrim settings
 directory: `1` enables checks and `0` disables them. This file is independent of
-window preferences and is retained on uninstall. An unreadable or invalid setting
+window preferences and is retained on uninstall unless the user chooses to delete
+AdTrim's settings and caches. An unreadable or invalid setting
 does not enable network access.
 
 Checks download release information and its signature from GitHub Pages. They do
